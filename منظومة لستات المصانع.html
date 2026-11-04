@@ -1,0 +1,2908 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>منظومة لستات المصانع - لوحة التحكم</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+
+    <script>
+        // if the Tailwind CDN is blocked, skip the config instead of throwing
+        if (window.tailwind) tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#f0f7ff', 100: '#e0effe', 500: '#0284c7', 600: '#0284c7', 700: '#0369a1', 800: '#075985', 900: '#0c4a6e' }
+                    },
+                    fontFamily: { tajawal: ['Tajawal', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* fallback if the Tailwind CDN cannot load: keep hidden sections hidden */
+        .hidden { display: none; }
+        html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+        body { font-family: 'Tajawal', sans-serif; background-color: #f1f5f9; }
+        .truncate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .modal-panel {
+            max-height: calc(100vh - 2rem);
+            max-height: calc(100dvh - 2rem);
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        button, a { -webkit-tap-highlight-color: transparent; }
+        .toast-enter { opacity: 0; transform: translateY(8px); }
+        .nav-link.active { background: rgba(255,255,255,.12); color: #fff; }
+        @media (max-width: 639px) {
+            input, select, textarea { font-size: 16px !important; }
+        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    </style>
+</head>
+<body class="text-slate-800 min-h-screen">
+
+    <!-- ============ AUTH SCREEN (setup / login) ============ -->
+    <div id="authScreen" class="hidden min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-slate-900 via-brand-900 to-slate-900">
+        <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl p-6 sm:p-8">
+            <div class="flex flex-col items-center text-center gap-3 mb-6">
+                <div id="authLogo" class="w-16 h-16 rounded-2xl bg-brand-500 text-white flex items-center justify-center text-2xl shadow-md overflow-hidden">
+                    <i class="fa-solid fa-industry"></i>
+                </div>
+                <h1 id="authSystemName" class="font-bold text-xl text-slate-800">منظومة لستات المصانع</h1>
+                <p id="authTitle" class="text-sm text-slate-500"></p>
+            </div>
+            <form id="authForm" onsubmit="handleAuth(event)" class="space-y-4">
+                <input type="hidden" id="authMode">
+                <div id="authFields" class="space-y-4"></div>
+                <button id="authSubmit" type="submit" class="w-full py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg font-bold shadow-sm"></button>
+            </form>
+            <p id="authHint" class="text-xs text-slate-500 text-center mt-4"></p>
+        </div>
+    </div>
+
+    <!-- ============ APP SHELL ============ -->
+    <div id="appShell" class="hidden lg:flex min-h-screen">
+
+        <div id="drawerBackdrop" class="hidden fixed inset-0 bg-slate-900/50 z-40 lg:hidden" onclick="toggleSidebar(false)"></div>
+
+        <!-- Sidebar (drawer on mobile, fixed column on desktop) -->
+        <aside id="sidebar" class="fixed inset-y-0 start-0 z-50 w-72 max-w-[85vw] bg-slate-900 text-white flex flex-col transform translate-x-full transition-transform duration-200 lg:translate-x-0 lg:inset-auto lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:shrink-0">
+            <div class="p-4 flex items-center gap-3 border-b border-white/10">
+                <div id="sideLogo" class="w-10 h-10 shrink-0 rounded-xl bg-brand-500 flex items-center justify-center overflow-hidden"></div>
+                <div class="min-w-0 flex-1">
+                    <p id="sideName" class="font-bold leading-tight truncate">منظومة لستات المصانع</p>
+                    <p class="text-[11px] text-slate-400">لوحة التحكم</p>
+                </div>
+                <button type="button" onclick="toggleSidebar(false)" class="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-white/10" aria-label="إغلاق القائمة">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <nav id="sideNav" class="flex-1 overflow-y-auto p-3 space-y-1"></nav>
+            <div class="p-3 border-t border-white/10">
+                <div id="sideUser" class="flex items-center gap-3 px-2 py-2"></div>
+                <button type="button" onclick="logout()" class="w-full mt-1 flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-white/10">
+                    <i class="fa-solid fa-right-from-bracket w-5 text-center"></i> تسجيل الخروج
+                </button>
+            </div>
+        </aside>
+
+        <div class="flex-1 min-w-0 flex flex-col">
+            <header class="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
+                <div class="flex items-center gap-2 sm:gap-3 px-3 sm:px-6 h-14 sm:h-16">
+                    <button type="button" onclick="toggleSidebar(true)" class="lg:hidden w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="فتح القائمة">
+                        <i class="fa-solid fa-bars text-lg"></i>
+                    </button>
+                    <h2 id="pageTitle" class="font-bold text-lg truncate flex-1 min-w-0"></h2>
+                    <div id="topActions" class="flex items-center gap-2 shrink-0"></div>
+                    <button type="button" onclick="openAccountModal()" class="shrink-0 flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-100" title="حسابي">
+                        <span id="topAvatar" class="w-8 h-8 rounded-full bg-brand-100 text-brand-700 font-bold flex items-center justify-center text-sm"></span>
+                        <span id="topName" class="hidden md:block text-sm font-semibold max-w-[140px] truncate"></span>
+                    </button>
+                </div>
+            </header>
+
+            <main id="content" class="flex-1 min-w-0 p-3 sm:p-6 space-y-4 sm:space-y-6"></main>
+
+            <footer class="bg-white border-t border-slate-200 py-3 px-4 text-center text-xs text-slate-500">
+                لوحة تحكم لستات وخصومات المصانع © 2026
+            </footer>
+        </div>
+    </div>
+
+    <!-- Shared overlays -->
+    <div id="modalHost" class="hidden"></div>
+    <div id="rowMenu" class="hidden fixed z-[65] w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1"></div>
+    <div id="toastHost" class="fixed bottom-4 inset-x-3 sm:inset-x-auto sm:start-4 sm:w-96 z-[70] flex flex-col gap-2 pointer-events-none" aria-live="polite"></div>
+    <input type="file" id="excelFileInput" class="hidden" accept=".xlsx,.xls,.csv" onchange="handleExcelImport(event)">
+    <input type="file" id="backupFileInput" class="hidden" accept=".json,application/json" onchange="restoreBackup(event)">
+
+
+    <!-- ================= JAVASCRIPT ================= -->
+    <script>
+        // ============ CONSTANTS ============
+        // ============ FIREBASE SETTINGS ============
+        // 1) In the Firebase console: create a project, add a Web app and paste its config below.
+        // 2) Enable Authentication (Email/Password), Firestore Database and Storage, then publish the rules from /firebase.
+        const FIREBASE_CONFIG = {
+            apiKey: 'AIzaSyDspy-JSaVrbQYynpov1_CQkN8Ypm9Y8oU',
+            authDomain: 'braided-keel-437500-e7.firebaseapp.com',
+            projectId: 'braided-keel-437500-e7',
+            storageBucket: 'braided-keel-437500-e7.firebasestorage.app',
+            messagingSenderId: '116896506140',
+            appId: '1:116896506140:web:4552021389f7d578511ad9'
+        };
+        // Local emulators, for testing only. Keep null in production.
+        const FIREBASE_EMULATORS = null;
+        // Keys written by earlier versions in this browser (read once, on first setup, to move the data)
+        const KEY_V4 = 'factoryManagementData_v4';
+        const KEY_V3 = 'factoryManagementData';
+        const UNDO_MS = 6000;
+        const LOG_LIMIT = 500;
+        const INPUT_CLS = 'w-full px-3.5 py-2.5 sm:py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white';
+        const BTN_PRIMARY = 'px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-medium shadow-sm flex items-center justify-center gap-2';
+        const BTN_SECONDARY = 'px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2';
+        const BTN_ICON = 'w-10 h-10 flex items-center justify-center rounded-lg transition-colors';
+
+        // Permission groups (shown in the roles editor)
+        const PERMISSION_GROUPS = [
+            { title: 'لوحة التحكم', items: [['dashboard.view', 'عرض لوحة التحكم']] },
+            { title: 'الشركات / المصانع', items: [
+                ['companies.view', 'عرض الشركات'],
+                ['companies.manage', 'إضافة وتعديل الشركات والشعارات'],
+                ['companies.delete', 'حذف الشركات']
+            ] },
+            { title: 'اللستات والخصومات', items: [
+                ['lists.view', 'عرض اللستات وفتح المرفقات'],
+                ['lists.manage', 'إضافة وتعديل وتكرار اللستات'],
+                ['lists.delete', 'حذف اللستات'],
+                ['lists.import', 'استيراد من إكسيل'],
+                ['lists.export', 'تصدير إكسيل']
+            ] },
+            { title: 'النظام', items: [
+                ['logs.view', 'عرض سجل النشاط'],
+                ['users.manage', 'إدارة المستخدمين والأدوار'],
+                ['settings.manage', 'تعديل الإعدادات وإعادة الضبط'],
+                ['backup.manage', 'النسخ الاحتياطي والاستعادة']
+            ] }
+        ];
+        const ALL_PERMS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i[0]));
+        const PERM_LABELS = Object.fromEntries(PERMISSION_GROUPS.flatMap(g => g.items));
+
+        const ROUTES = {
+            dashboard: { title: 'لوحة التحكم', icon: 'fa-gauge-high', perm: 'dashboard.view' },
+            companies: { title: 'المصانع / الشركات', icon: 'fa-industry', perm: 'companies.view' },
+            lists: { title: 'كل اللستات', icon: 'fa-file-invoice-dollar', perm: 'lists.view' },
+            users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
+            logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
+            settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
+        };
+        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'logs', 'users', 'settings'];
+
+        // ============ STATE ============
+        let appData = null;
+        let sessionUserId = null;
+        let modalSubmit = null;
+        let usersTab = 'users';
+        let editingListId = null;
+        let editingCompanyId = null;
+        let editingUserId = null;
+        let pendingPdfFile = null;
+        let pendingRemovePdf = false;
+        let pendingLogo = undefined;      // company logo: undefined = unchanged, null = removed, string = new
+        let pendingSysLogo = undefined;   // system logo, same meaning
+        let calcListId = null;
+        let pendingUndo = null;
+
+        // ============ GENERAL HELPERS ============
+        const el = id => document.getElementById(id);
+
+        function uid(prefix) {
+            return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7).toUpperCase();
+        }
+
+        function esc(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
+        function pad2(n) { return String(n).padStart(2, '0'); }
+
+        function toISODate(d) {
+            return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        }
+
+        function todayISO() { return toISODate(new Date()); }
+
+        function parseISODate(str, endOfDay) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str || ''));
+            if (!m) return null;
+            const y = +m[1], mo = +m[2] - 1, d = +m[3];
+            return endOfDay ? new Date(y, mo, d, 23, 59, 59, 999) : new Date(y, mo, d, 0, 0, 0, 0);
+        }
+
+        function addDays(isoStr, days) {
+            const d = parseISODate(isoStr, false);
+            if (!d) return null;
+            d.setDate(d.getDate() + days);
+            return toISODate(d);
+        }
+
+        function daysBetween(a, b) {
+            const s = parseISODate(a), e = parseISODate(b);
+            if (!s || !e) return null;
+            return Math.round((e - s) / 864e5);
+        }
+
+        function fmtDateTime(iso) {
+            const d = new Date(iso);
+            if (isNaN(d)) return '-';
+            return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function expiryDays() {
+            return parseInt(appData.settings.expiryDays, 10) || 30;
+        }
+
+        function isListActive(startStr, endStr) {
+            const start = parseISODate(startStr, false);
+            const end = parseISODate(endStr, true);
+            if (!start || !end) return false;
+            const now = new Date();
+            return now >= start && now <= end;
+        }
+
+        function daysUntilEnd(list) {
+            const end = parseISODate(list.endDate, false);
+            const today = parseISODate(todayISO(), false);
+            if (!end || !today) return null;
+            return Math.round((end - today) / 864e5);
+        }
+
+        function listState(list) {
+            const active = isListActive(list.startDate, list.endDate);
+            const days = daysUntilEnd(list);
+            return { active, days, expiring: active && days !== null && days <= expiryDays() };
+        }
+
+        function statusLabel(state) {
+            if (!state.active) return 'منتهية';
+            if (state.expiring) return state.days === 0 ? 'تنتهي اليوم' : `تنتهي خلال ${state.days} يوم`;
+            return 'نشطة';
+        }
+
+        function calculateEffectiveDiscount(d1 = 0, d2 = 0, d3 = 0) {
+            const factor = [d1, d2, d3].reduce((acc, d) => acc * (1 - (parseFloat(d) || 0) / 100), 1);
+            return ((1 - factor) * 100).toFixed(2);
+        }
+
+        function effValue(list) {
+            return parseFloat(calculateEffectiveDiscount(list.discount1, list.discount2, list.discount3));
+        }
+
+        function pct(value) {
+            const n = parseFloat(value);
+            return n ? `${n}%` : '-';
+        }
+
+        function fmtMoney(n) { return `${n.toFixed(2)} ج.م`; }
+
+        function initials(name) {
+            return Array.from(String(name || '?').trim()).slice(0, 2).join('') || '?';
+        }
+
+        const AVATAR_COLORS = ['bg-sky-500', 'bg-emerald-500', 'bg-violet-500', 'bg-amber-500', 'bg-rose-500', 'bg-teal-500', 'bg-indigo-500', 'bg-fuchsia-500'];
+        function colorFor(text) {
+            let h = 0;
+            for (const ch of String(text)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+            return AVATAR_COLORS[h % AVATAR_COLORS.length];
+        }
+
+        // Company logo (image) or coloured initials as fallback
+        function companyLogoHtml(c, cls = 'w-10 h-10 text-sm') {
+            if (c.logo) {
+                return `<img src="${esc(c.logo)}" alt="شعار ${esc(c.name)}" class="${cls} rounded-xl object-contain bg-white border border-slate-100 shrink-0">`;
+            }
+            return `<span class="${cls} rounded-xl shrink-0 flex items-center justify-center font-bold text-white ${colorFor(c.name)}">${esc(initials(c.name))}</span>`;
+        }
+
+        function findCompany(id) {
+            return appData.companies.find(c => c.id === id) || null;
+        }
+
+        function findList(listId) {
+            for (const c of appData.companies) {
+                const l = c.lists.find(x => x.id === listId);
+                if (l) return { c, l };
+            }
+            return null;
+        }
+
+        function field(label, input, hint = '') {
+            return `<label class="block">
+                        <span class="block text-xs font-bold text-slate-700 mb-1">${label}</span>
+                        ${input}
+                        ${hint ? `<span class="block text-[11px] text-slate-400 mt-1">${hint}</span>` : ''}
+                    </label>`;
+        }
+
+        // ============ TOASTS ============
+        function toast(message, type = 'info', action = null, duration = 3500) {
+            const host = el('toastHost');
+            const colors = { info: 'bg-slate-900', success: 'bg-emerald-600', error: 'bg-rose-600' };
+            const node = document.createElement('div');
+            node.className = `${colors[type] || colors.info} text-white text-sm rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 pointer-events-auto transition-all duration-300 toast-enter`;
+            node.setAttribute('role', 'status');
+
+            const text = document.createElement('span');
+            text.className = 'flex-1 whitespace-pre-line leading-relaxed';
+            text.textContent = message;
+            node.appendChild(text);
+
+            const remove = () => {
+                node.style.opacity = '0';
+                node.style.transform = 'translateY(8px)';
+                setTimeout(() => node.remove(), 300);
+            };
+
+            if (action) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'font-bold underline underline-offset-2 shrink-0 px-2 py-1';
+                btn.textContent = action.label;
+                btn.onclick = () => { action.onClick(); remove(); };
+                node.appendChild(btn);
+            }
+
+            host.appendChild(node);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                node.style.opacity = '1';
+                node.style.transform = 'translateY(0)';
+            }));
+            setTimeout(remove, duration);
+        }
+
+        // ============ UNDO (soft delete) ============
+        function scheduleUndo(message, undo, commit) {
+            finalizePendingUndo();
+            const entry = { undo, commit, timer: null };
+            entry.timer = setTimeout(finalizePendingUndo, UNDO_MS);
+            pendingUndo = entry;
+            toast(message, 'info', {
+                label: 'تراجع',
+                onClick: () => {
+                    if (pendingUndo !== entry) return;
+                    clearTimeout(entry.timer);
+                    pendingUndo = null;
+                    entry.undo();
+                }
+            }, UNDO_MS);
+        }
+
+        function finalizePendingUndo() {
+            const entry = pendingUndo;
+            if (!entry) return;
+            pendingUndo = null;
+            clearTimeout(entry.timer);
+            entry.commit();
+        }
+
+        // ============ DATA: defaults, normalize, load, save ============
+        function defaultRoles() {
+            return {
+                admin: { id: 'admin', name: 'مدير النظام', locked: true, permissions: [...ALL_PERMS] },
+                manager: {
+                    id: 'manager', name: 'مدير لستات', locked: false,
+                    permissions: ['dashboard.view', 'companies.view', 'companies.manage', 'lists.view', 'lists.manage', 'lists.import', 'lists.export', 'logs.view']
+                },
+                viewer: {
+                    id: 'viewer', name: 'مشاهد', locked: false,
+                    permissions: ['dashboard.view', 'companies.view', 'lists.view', 'lists.export']
+                }
+            };
+        }
+
+        function sampleCompanies() {
+            return [
+                {
+                    id: "FAC-1", name: "مصنع بريما", agent: "وكالة بريما", notes: "مصنع أدوات كهربائية ومستلزمات إضاءة", logo: "",
+                    lists: [
+                        { id: "LST-101", name: "نوفمبر 01", discount1: 48, discount2: 5, discount3: 0, startDate: "2026-11-01", endDate: "2027-02-01", pdfFile: "", hasPdf: false },
+                        { id: "LST-100", name: "أكتوبر 2026 (سابقة)", discount1: 45, discount2: 5, discount3: 2, startDate: "2026-08-01", endDate: "2026-10-31", pdfFile: "", hasPdf: false }
+                    ]
+                },
+                {
+                    id: "FAC-2", name: "مصنع الفنار", agent: "شركة الخليج للتوزيع", notes: "أسلاك ومفاتيح تجميعية", logo: "",
+                    lists: [
+                        { id: "LST-201", name: "لستة 2026 الشاملة", discount1: 30, discount2: 10, discount3: 0, startDate: "2026-01-01", endDate: "2026-12-31", pdfFile: "", hasPdf: false }
+                    ]
+                },
+                {
+                    id: "FAC-3", name: "مصنع الأمل للبلاستيك", agent: "مؤسسة الأمل التجارية", notes: "خراطيم ومواسير كهربائية", logo: "",
+                    lists: [
+                        { id: "LST-301", name: "خصومات الربع الرابع", discount1: 25, discount2: 5, discount3: 5, startDate: "2026-10-01", endDate: "2026-12-31", pdfFile: "", hasPdf: false }
+                    ]
+                }
+            ];
+        }
+
+        function defaultData() {
+            return {
+                version: 4,
+                settings: { systemName: 'منظومة لستات المصانع', logo: '', expiryDays: 30 },
+                roles: defaultRoles(),
+                users: [],
+                companies: sampleCompanies(),
+                logs: []
+            };
+        }
+
+        function normalizeData(d) {
+            const base = defaultData();
+            d.settings = Object.assign(base.settings, d.settings || {});
+            d.settings.expiryDays = parseInt(d.settings.expiryDays, 10) || 30;
+            d.settings.systemName = String(d.settings.systemName || base.settings.systemName);
+            d.settings.logo = String(d.settings.logo || '');
+
+            // Roles: saved roles are kept as they are (deleted default roles stay deleted).
+            // The admin role is always locked and always has every permission.
+            const roles = (d.roles && typeof d.roles === 'object' && Object.keys(d.roles).length) ? d.roles : defaultRoles();
+            if (!roles.admin) roles.admin = defaultRoles().admin;
+            Object.values(roles).forEach(r => {
+                r.id = r.id || uid('role-');
+                r.name = String(r.name || 'دور بدون اسم');
+                r.permissions = Array.isArray(r.permissions) ? r.permissions.filter(p => ALL_PERMS.includes(p)) : [];
+            });
+            roles.admin.locked = true;
+            roles.admin.permissions = [...ALL_PERMS];
+            d.roles = roles;
+
+            // Users are profiles only. Passwords live in Firebase Authentication.
+            d.users = (Array.isArray(d.users) ? d.users : [])
+                .filter(u => u && typeof u === 'object' && u.id)
+                .map(u => ({
+                    id: String(u.id),
+                    name: String(u.name || ''),
+                    email: String(u.email || '').trim().toLowerCase(),
+                    roleId: roles[u.roleId] ? u.roleId : 'viewer',
+                    active: u.active !== false,
+                    createdAt: u.createdAt || new Date().toISOString(),
+                    lastLoginAt: u.lastLoginAt || null
+                }));
+
+            d.companies = (Array.isArray(d.companies) ? d.companies : []).filter(c => c && typeof c === 'object').map(c => ({
+                id: c.id || uid('FAC-'),
+                name: String(c.name || ''),
+                agent: String(c.agent || ''),
+                notes: String(c.notes || ''),
+                logo: String(c.logo || ''),
+                lists: (Array.isArray(c.lists) ? c.lists : []).filter(l => l && typeof l === 'object').map(l => ({
+                    id: l.id || uid('LST-'),
+                    name: String(l.name || ''),
+                    discount1: parseFloat(l.discount1) || 0,
+                    discount2: parseFloat(l.discount2) || 0,
+                    discount3: parseFloat(l.discount3) || 0,
+                    startDate: String(l.startDate || ''),
+                    endDate: String(l.endDate || ''),
+                    pdfFile: String(l.pdfFile || ''),
+                    hasPdf: !!l.hasPdf
+                }))
+            }));
+
+            d.logs = (Array.isArray(d.logs) ? d.logs : []).slice(0, LOG_LIMIT);
+            return d;
+        }
+
+        // ============ FIREBASE SYNC ============
+        // appData is the in-memory copy the whole UI works on. It is kept in sync with Firestore:
+        //  - incoming: real-time listeners rebuild appData whenever the server data changes
+        //  - outgoing: saveState() writes only the documents that changed (batched)
+        let fbApp = null, fbAuth = null, fbDb = null, fbStorage = null;
+        let fbUser = null;                 // signed-in Firebase user (null when signed out)
+        let fbSynced = false;              // true once every collection delivered its first snapshot
+        let fbBaseline = new Map();        // key -> { data, sig }: what the server is known to hold
+        let fbCache = null;                // raw snapshot data per collection
+        let fbLoaded = {};
+        let fbUnsubs = [];
+        let fbLogsUnsub = null;
+        let fbBusy = false;                // login/setup in progress: the auth-state handler waits
+        let appEntered = false;
+        let pendingLoginLog = false;
+        let signingOut = false;
+        let initExists = null;             // does system/init exist? (null = unknown)
+        let serverChecked = false;         // true once the public server check has finished (or timed out)
+        const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        function firebaseReady() {
+            return typeof firebase !== 'undefined' && !String(FIREBASE_CONFIG.apiKey).startsWith('PASTE_');
+        }
+
+        // stable JSON (sorted keys) so two equal documents always produce the same signature
+        function canon(v) {
+            if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+            if (v && typeof v === 'object') {
+                return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort()
+                    .map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
+            }
+            return v === undefined ? 'null' : JSON.stringify(v);
+        }
+
+        // Documents that should exist on the server for the given state. Key = "collection/id".
+        // Lists are stored in their own collection (with companyId), so a single list can change without rewriting its company.
+        function desiredDocs(d) {
+            const out = new Map();
+            d.companies.forEach((c, ci) => {
+                const { lists, ...rest } = c;
+                out.set('companies/' + c.id, { ...rest, pos: ci });
+                lists.forEach((l, li) => out.set('lists/' + l.id, { ...l, companyId: c.id, pos: li }));
+            });
+            d.users.forEach(u => out.set('users/' + u.id, {
+                name: u.name, email: u.email, roleId: u.roleId, active: u.active,
+                createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null
+            }));
+            Object.values(d.roles).forEach(r => out.set('roles/' + r.id, {
+                name: r.name, permissions: r.permissions, locked: !!r.locked
+            }));
+            out.set('settings/main', {
+                systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays
+            });
+            return out;
+        }
+
+        function refFor(key) {
+            const [coll, id] = key.split('/');
+            return fbDb.collection(coll).doc(id);
+        }
+
+        async function commitChunks(ops) {
+            for (let i = 0; i < ops.length; i += 400) {
+                const batch = fbDb.batch();
+                ops.slice(i, i + 400).forEach(op => {
+                    const ref = refFor(op.key);
+                    if (op.del) batch.delete(ref);
+                    else batch.set(ref, JSON.parse(JSON.stringify(op.data)));
+                });
+                await batch.commit();
+            }
+        }
+
+        // Write only what changed since the last known server state.
+        function saveState() {
+            if (!fbDb || !fbSynced || !appData) return;
+            const desired = desiredDocs(appData);
+            const ops = [];
+            desired.forEach((data, key) => {
+                const sig = canon(data);
+                const prev = fbBaseline.get(key);
+                if (!prev || prev.sig !== sig) ops.push({ key, data, sig });
+            });
+            fbBaseline.forEach((_, key) => { if (!desired.has(key)) ops.push({ key, del: true }); });
+            if (!ops.length) return;
+            ops.forEach(op => {
+                if (op.del) fbBaseline.delete(op.key);
+                else fbBaseline.set(op.key, { data: op.data, sig: op.sig });
+            });
+            commitChunks(ops).catch(err => {
+                console.error(err);
+                const denied = err && err.code === 'permission-denied';
+                toast(denied ? 'ليس لديك صلاحية لهذا التعديل. تم التراجع عنه' : 'تعذر حفظ التعديل على السيرفر', 'error', null, 6000);
+                rebuildFromCache();
+                render();
+            });
+        }
+
+        function log(action, detail = '') {
+            const entry = { id: uid('LOG-'), t: new Date().toISOString(), user: currentUser()?.name || 'النظام', action, detail };
+            appData.logs.unshift(entry);
+            if (appData.logs.length > LOG_LIMIT) appData.logs.length = LOG_LIMIT;
+            if (fbDb && fbUser) {
+                fbDb.collection('logs').doc(entry.id).set(entry).catch(err => console.warn('log not saved:', err && err.code));
+            }
+            saveState();
+        }
+
+        function mapDocs(snap) {
+            const out = {};
+            snap.forEach(d => { out[d.id] = { id: d.id, ...d.data() }; });
+            return out;
+        }
+
+        // Rebuild appData from the raw collections and remember what the server holds.
+        function buildFromCache() {
+            const c = fbCache;
+            const byPos = (a, b) => (a.pos || 0) - (b.pos || 0);
+            const listsByCompany = {};
+            Object.values(c.lists).sort(byPos).forEach(({ companyId, pos, ...l }) => {
+                (listsByCompany[companyId] = listsByCompany[companyId] || []).push(l);
+            });
+            const companies = Object.values(c.companies).sort(byPos)
+                .map(({ pos, ...co }) => ({ ...co, lists: listsByCompany[co.id] || [] }));
+            const roles = {};
+            Object.values(c.roles).forEach(r => { roles[r.id] = r; });
+            appData = normalizeData({
+                settings: c.settings || {},
+                roles,
+                users: Object.values(c.users),
+                companies,
+                logs: c.logs || []
+            });
+            fbBaseline = new Map();
+            desiredDocs(appData).forEach((data, key) => fbBaseline.set(key, { data, sig: canon(data) }));
+        }
+
+        function rebuildFromCache() {
+            if (fbCache) buildFromCache();
+        }
+
+        function startSync(uid) {
+            stopSync();
+            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, settings: null, logs: [] };
+            fbLoaded = {};
+            fbSynced = false;
+            const listen = (name, ref, apply) => {
+                fbUnsubs.push(ref.onSnapshot(snap => {
+                    if (!fbCache) return;
+                    apply(snap);
+                    fbLoaded[name] = true;
+                    onCacheChanged();
+                }, err => onListenError(name, err)));
+            };
+            listen('users', fbDb.collection('users'), s => { fbCache.users = mapDocs(s); });
+            listen('roles', fbDb.collection('roles'), s => { fbCache.roles = mapDocs(s); });
+            listen('companies', fbDb.collection('companies'), s => { fbCache.companies = mapDocs(s); });
+            listen('lists', fbDb.collection('lists'), s => { fbCache.lists = mapDocs(s); });
+            listen('settings', fbDb.collection('settings').doc('main'), s => { fbCache.settings = s.exists ? s.data() : null; });
+        }
+
+        function stopSync() {
+            fbUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            fbUnsubs = [];
+            if (fbLogsUnsub) { try { fbLogsUnsub(); } catch (e) { /* already closed */ } }
+            fbLogsUnsub = null;
+            fbCache = null;
+            fbLoaded = {};
+            fbSynced = false;
+        }
+
+        // the activity log is only readable by users with logs.view, so listen only for them
+        function syncLogsListener() {
+            const canSee = can('logs.view');
+            if (canSee && !fbLogsUnsub) {
+                fbLogsUnsub = fbDb.collection('logs').orderBy('t', 'desc').limit(LOG_LIMIT).onSnapshot(snap => {
+                    if (!fbCache) return;
+                    fbCache.logs = snap.docs.map(d => d.data());
+                    onCacheChanged();
+                }, err => console.error('logs listener', err));
+            } else if (!canSee && fbLogsUnsub) {
+                fbLogsUnsub();
+                fbLogsUnsub = null;
+                if (fbCache) fbCache.logs = [];
+            }
+        }
+
+        function onListenError(name, err) {
+            // a listener from a session that already ended can still report an error
+            if (!fbUser || !fbCache) return;
+            console.error('listener ' + name, err);
+            if (err && err.code === 'permission-denied') {
+                handleAccessLost('حسابك غير مفعّل أو ليس لديك صلاحية الوصول. تواصل مع مدير النظام');
+            } else {
+                toast('تعذر تحميل البيانات من السيرفر', 'error', null, 5000);
+            }
+        }
+
+        async function handleAccessLost(message) {
+            if (signingOut) return;
+            signingOut = true;
+            stopSync();
+            toast(message, 'error', null, 6000);
+            try { await fbAuth.signOut(); } catch (err) { console.error(err); }
+            signingOut = false;
+        }
+
+        function onCacheChanged() {
+            if (!fbUser || !fbCache) return;
+            if (!['users', 'roles', 'companies', 'lists', 'settings'].every(k => fbLoaded[k])) return;
+            const sigOf = () => canon([...desiredDocs(appData).entries(), appData.logs.map(l => l.id)]);
+            const before = appData ? sigOf() : '';
+            buildFromCache();
+            fbSynced = true;
+            const me = appData.users.find(u => u.id === fbUser.uid);
+            if (!me) return handleAccessLost('حسابك غير مفعّل داخل النظام. تواصل مع مدير النظام');
+            if (!me.active) return handleAccessLost('هذا الحساب موقوف. تواصل مع مدير النظام');
+            sessionUserId = me.id;
+            syncLogsListener();
+            if (!appEntered) {
+                appEntered = true;
+                if (pendingLoginLog) {
+                    pendingLoginLog = false;
+                    me.lastLoginAt = new Date().toISOString();
+                    log('تسجيل دخول');
+                }
+                enterApp();
+                return;
+            }
+            if (sigOf() !== before) render();
+        }
+
+        async function handleFbUser(user) {
+            if (!user) {
+                stopSync();
+                fbUser = null;
+                sessionUserId = null;
+                appEntered = false;
+                closeModal();
+                closeRowMenu();
+                // the server check is still running: its result decides the screen (spinner until then)
+                if (!serverChecked) return;
+                showAuth(initExists === false ? 'setup' : 'login');
+                return;
+            }
+            if (fbBusy) return;   // login/setup code starts the sync itself
+            fbUser = user;
+            setAuthLoading('جاري تحميل البيانات...');
+            startSync(user.uid);
+        }
+
+        function enterApp() {
+            el('authScreen').classList.add('hidden');
+            el('appShell').classList.remove('hidden');
+            if (!location.hash || !canAccessRoute(parseRoute().name)) {
+                location.hash = '#/' + (firstAllowedRoute() || 'dashboard');
+            }
+            render();
+        }
+
+        async function deleteAllLogs() {
+            const snap = await fbDb.collection('logs').get();
+            await commitChunks(snap.docs.map(d => ({ key: 'logs/' + d.id, del: true })));
+        }
+
+        // Local data saved in this browser by earlier versions (v4 or v3). Used once, on first setup.
+        function readLocalSeed() {
+            let raw = null;
+            try { raw = localStorage.getItem(KEY_V4) || localStorage.getItem(KEY_V3); } catch (err) { return null; }
+            if (!raw) return null;
+            let src = null;
+            try { src = JSON.parse(raw); } catch (err) { return null; }
+            if (!src || typeof src !== 'object') return null;
+            const companies = Array.isArray(src.companies) ? src.companies : (Array.isArray(src.factories) ? src.factories : null);
+            if (!companies) return null;
+            const localPdfIds = [];
+            companies.forEach(c => (c.lists || []).forEach(l => {
+                if (l && l.id && (l.hasLocalPdf || l.hasPdf)) localPdfIds.push(l.id);
+            }));
+            const seed = normalizeData({ settings: src.settings, roles: src.roles, users: [], companies, logs: [] });
+            seed.localPdfIds = localPdfIds;
+            return seed;
+        }
+
+        // PDF blobs saved in this browser's IndexedDB (v4 local storage). Read-only, used once during setup.
+        function readLocalPdf(listId) {
+            return new Promise(resolve => {
+                if (!window.indexedDB) return resolve(null);
+                const req = indexedDB.open('factoryListsPdfs');
+                req.onsuccess = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains('pdfs')) { db.close(); return resolve(null); }
+                    const get = db.transaction('pdfs').objectStore('pdfs').get(listId);
+                    get.onsuccess = () => { db.close(); resolve(get.result || null); };
+                    get.onerror = () => { db.close(); resolve(null); };
+                };
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        // ============ PDF FILES (Firebase Storage: pdfs/{listId}) ============
+        const pdfRef = listId => fbStorage.ref('pdfs/' + listId);
+
+        async function pdfUpload(listId, file) {
+            await pdfRef(listId).put(file, { contentType: 'application/pdf' });
+        }
+
+        async function pdfRemove(listId) {
+            try { await pdfRef(listId).delete(); } catch (err) {
+                if (!err || err.code !== 'storage/object-not-found') console.error(err);
+            }
+        }
+
+        // ============ AUTH HELPERS ============
+        function userError(message) {
+            const e = new Error(message);
+            e.userMessage = message;
+            return e;
+        }
+
+        function authErrorMessage(err) {
+            if (err && err.userMessage) return err.userMessage;
+            const map = {
+                'auth/invalid-email': 'البريد الإلكتروني غير صحيح',
+                'auth/user-not-found': 'البريد أو كلمة المرور غير صحيحة',
+                'auth/wrong-password': 'البريد أو كلمة المرور غير صحيحة',
+                'auth/invalid-credential': 'البريد أو كلمة المرور غير صحيحة',
+                'auth/invalid-login-credentials': 'البريد أو كلمة المرور غير صحيحة',
+                'auth/email-already-in-use': 'البريد ده مسجل قبل كده',
+                'auth/weak-password': 'كلمة المرور ضعيفة (6 أحرف على الأقل)',
+                'auth/too-many-requests': 'محاولات كتير. استنى شوية وجرب تاني',
+                'auth/network-request-failed': 'مفيش اتصال بالإنترنت',
+                'auth/requires-recent-login': 'سجّل الدخول من جديد ثم جرّب',
+                'auth/operation-not-allowed': 'تسجيل الدخول بالبريد وكلمة المرور مش مفعّل في Firebase',
+                'permission-denied': 'ليس لديك صلاحية لهذا الإجراء'
+            };
+            return map[err && err.code] || ('حدث خطأ: ' + (err && err.message ? err.message : err));
+        }
+
+        // Creates a login for another user without signing the admin out (uses a second Firebase app)
+        async function createAuthAccount(email, password) {
+            const app2 = firebase.initializeApp(FIREBASE_CONFIG, 'create-user-' + Date.now());
+            try {
+                const a2 = app2.auth();
+                if (FIREBASE_EMULATORS) a2.useEmulator(FIREBASE_EMULATORS.auth);
+                const cred = await a2.createUserWithEmailAndPassword(email, password);
+                await a2.signOut();
+                return cred.user.uid;
+            } finally {
+                await app2.delete();
+            }
+        }
+
+        async function sendUserReset(userId) {
+            if (!can('users.manage')) return;
+            const u = appData.users.find(x => x.id === userId);
+            if (!u) return;
+            try {
+                await fbAuth.sendPasswordResetEmail(u.email);
+                toast('تم إرسال رابط تغيير كلمة المرور إلى ' + u.email, 'success', null, 5000);
+            } catch (err) { toast(authErrorMessage(err), 'error', null, 5000); }
+        }
+
+        async function forgotPassword() {
+            const email = String(new FormData(el('authForm')).get('email') || '').trim();
+            if (!EMAIL_RE.test(email)) return toast('اكتب بريدك الإلكتروني في الخانة أولاً', 'error');
+            try {
+                await fbAuth.sendPasswordResetEmail(email);
+                toast('لو البريد مسجل، هيوصلك رابط تغيير كلمة المرور', 'success', null, 6000);
+            } catch (err) { toast(authErrorMessage(err), 'error'); }
+        }
+
+        function setAuthLoading(message) {
+            el('authScreen').classList.remove('hidden');
+            el('appShell').classList.add('hidden');
+            el('authFields').innerHTML = `<p class="text-sm text-slate-500 flex items-center gap-2 py-4"><i class="fa-solid fa-circle-notch fa-spin"></i>${esc(message)}</p>`;
+            el('authSubmit').disabled = true;
+            el('authHint').textContent = '';
+        }
+
+        // ============ IMAGES (logos) ============
+        // Resizes an image to max `max` px and returns a PNG data URL (keeps logos small for storage)
+        function processImage(file, max = 256) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const longest = Math.max(img.naturalWidth || max, img.naturalHeight || max);
+                        const scale = Math.min(1, max / longest);
+                        const w = Math.max(1, Math.round((img.naturalWidth || max) * scale));
+                        const h = Math.max(1, Math.round((img.naturalHeight || max) * scale));
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w;
+                        canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        resolve(canvas.toDataURL('image/png'));
+                    };
+                    img.onerror = () => reject(new Error('تعذر قراءة الصورة'));
+                    img.src = reader.result;
+                };
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function onImagePicked(input, target) {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            if (!file.type.startsWith('image/')) {
+                toast('من فضلك اختر ملف صورة (PNG أو JPG)', 'error');
+                input.value = '';
+                return;
+            }
+            try {
+                const dataUrl = await processImage(file, 256);
+                if (target === 'company') pendingLogo = dataUrl;
+                if (target === 'system') pendingSysLogo = dataUrl;
+                const preview = el(target === 'company' ? 'logoPreview' : 'sysLogoPreview');
+                preview.src = dataUrl;
+                preview.classList.remove('hidden');
+                el(target === 'company' ? 'logoEmpty' : 'sysLogoEmpty')?.classList.add('hidden');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+            input.value = '';
+        }
+
+        function removeLogo(target) {
+            if (target === 'company') pendingLogo = null;
+            if (target === 'system') pendingSysLogo = null;
+            el(target === 'company' ? 'logoPreview' : 'sysLogoPreview').classList.add('hidden');
+            el(target === 'company' ? 'logoEmpty' : 'sysLogoEmpty')?.classList.remove('hidden');
+        }
+
+        // ============ AUTH & PERMISSIONS ============
+        function currentUser() {
+            return appData.users.find(u => u.id === sessionUserId) || null;
+        }
+
+        function roleHas(roleId, perm) {
+            const r = appData.roles[roleId];
+            return !!r && (r.locked || r.permissions.includes(perm));
+        }
+
+        function can(perm) {
+            const u = currentUser();
+            return !!u && u.active && roleHas(u.roleId, perm);
+        }
+
+        function countUsersWithPerm(users, roles, perm) {
+            return users.filter(u => u.active && roles[u.roleId] && (roles[u.roleId].locked || roles[u.roleId].permissions.includes(perm))).length;
+        }
+
+        function canAccessRoute(name) {
+            if (name === 'settings') return can('settings.manage') || can('backup.manage');
+            const r = ROUTES[name];
+            return !!r && can(r.perm);
+        }
+
+        function firstAllowedRoute() {
+            return ROUTE_ORDER.find(canAccessRoute) || null;
+        }
+
+        function showAuth(mode) {
+            el('appShell').classList.add('hidden');
+            el('authScreen').classList.remove('hidden');
+            el('authSystemName').textContent = appData.settings.systemName;
+            const logo = el('authLogo');
+            logo.innerHTML = appData.settings.logo
+                ? `<img src="${esc(appData.settings.logo)}" alt="" class="w-full h-full object-contain">`
+                : '<i class="fa-solid fa-industry"></i>';
+
+            const setup = mode === 'setup';
+            el('authMode').value = mode;
+            el('authTitle').textContent = setup ? 'إعداد النظام: إنشاء حساب مدير النظام' : 'تسجيل الدخول إلى لوحة التحكم';
+            el('authSubmit').textContent = setup ? 'إنشاء الحساب والدخول' : 'دخول';
+            el('authSubmit').disabled = false;
+            el('authFields').innerHTML = setup
+                ? field('الاسم الكامل *', `<input name="name" required class="${INPUT_CLS}" placeholder="مثال: أحمد محمد">`)
+                  + field('البريد الإلكتروني *', `<input name="email" type="email" required dir="ltr" autocomplete="email" class="${INPUT_CLS}" placeholder="name@company.com">`)
+                  + field('كلمة المرور *', `<input name="password" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`, '6 أحرف على الأقل')
+                  + field('تأكيد كلمة المرور *', `<input name="password2" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`)
+                : field('البريد الإلكتروني', `<input name="email" type="email" required dir="ltr" autocomplete="username" class="${INPUT_CLS}">`)
+                  + field('كلمة المرور', `<input name="password" type="password" required autocomplete="current-password" class="${INPUT_CLS}">`);
+            if (setup) {
+                const hasLocal = !!readLocalSeed();
+                el('authHint').textContent = hasLocal
+                    ? 'هذا الحساب هيكون مدير النظام. البيانات المحفوظة في هذا المتصفح هتتنقل تلقائياً لـ Firebase.'
+                    : 'هذا الحساب هيكون مدير النظام ويملك كل الصلاحيات.';
+            } else {
+                el('authHint').innerHTML = '<button type="button" onclick="forgotPassword()" class="text-brand-700 font-medium hover:underline">نسيت كلمة المرور؟</button>';
+            }
+        }
+
+        async function handleAuth(e) {
+            e.preventDefault();
+            if (!fbAuth) return toast('Firebase غير مُعد بعد', 'error');
+            const btn = el('authSubmit');
+            const mode = el('authMode').value;
+            const fd = new FormData(el('authForm'));
+            const email = String(fd.get('email') || '').trim().toLowerCase();
+            const password = String(fd.get('password') || '');
+            btn.disabled = true;
+            try {
+                if (mode === 'setup') {
+                    await runSetup(fd, email, password);
+                } else {
+                    if (!EMAIL_RE.test(email)) throw userError('اكتب بريد إلكتروني صحيح');
+                    await runLogin(email, password);
+                }
+            } catch (err) {
+                console.error(err);
+                toast(authErrorMessage(err), 'error', null, 5000);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function runLogin(email, password) {
+            fbBusy = true;
+            try {
+                const cred = await fbAuth.signInWithEmailAndPassword(email, password);
+                const snap = await fbDb.collection('users').doc(cred.user.uid).get();
+                if (!snap.exists) {
+                    await fbAuth.signOut();
+                    throw userError('حسابك غير مفعّل داخل النظام. تواصل مع مدير النظام');
+                }
+                if (snap.data().active === false) {
+                    await fbAuth.signOut();
+                    throw userError('هذا الحساب موقوف. تواصل مع مدير النظام');
+                }
+                fbUser = cred.user;
+                pendingLoginLog = true;
+            } finally {
+                fbBusy = false;
+            }
+            startSync(fbUser.uid);
+        }
+
+        // First run: creates the admin account, the roles and settings, then uploads the local data (if any)
+        async function runSetup(fd, email, password) {
+            const name = String(fd.get('name') || '').trim();
+            if (!name) throw userError('اكتب الاسم الكامل');
+            if (!EMAIL_RE.test(email)) throw userError('اكتب بريد إلكتروني صحيح');
+            if (password.length < 6) throw userError('كلمة المرور لازم تكون 6 أحرف على الأقل');
+            if (password !== String(fd.get('password2') || '')) throw userError('كلمتا المرور غير متطابقتين');
+
+            fbBusy = true;
+            let cred = null;
+            try {
+                cred = await fbAuth.createUserWithEmailAndPassword(email, password);
+                fbUser = cred.user;
+                const uid = cred.user.uid;
+                const now = new Date().toISOString();
+
+                const local = readLocalSeed();
+                const seed = local || normalizeData(defaultData());
+                const docs = [...desiredDocs(seed).entries()].map(([key, data]) => ({ key, data }));
+
+                // step 1: the marker, the admin profile, roles and settings (allowed only while bootstrapping)
+                await commitChunks([
+                    { key: 'system/init', data: { createdAt: now, createdBy: uid } },
+                    { key: 'users/' + uid, data: { name, email, roleId: 'admin', active: true, createdAt: now, lastLoginAt: now } },
+                    ...docs.filter(o => o.key.startsWith('roles/') || o.key === 'settings/main')
+                ]);
+                initExists = true;
+
+                // step 2: local PDFs go to Storage, then the companies and lists
+                for (const id of seed.localPdfIds || []) {
+                    const blob = await readLocalPdf(id);
+                    if (!blob) continue;
+                    try {
+                        await pdfUpload(id, blob);
+                        seed.companies.forEach(c => c.lists.forEach(l => { if (l.id === id) l.hasPdf = true; }));
+                    } catch (err) { console.error('pdf upload', id, err); }
+                }
+                await commitChunks([...desiredDocs(seed).entries()]
+                    .filter(([key]) => key.startsWith('companies/') || key.startsWith('lists/'))
+                    .map(([key, data]) => ({ key, data })));
+
+                const logId = 'LOG-' + Date.now().toString(36);
+                await fbDb.collection('logs').doc(logId).set({
+                    id: logId, t: now, user: name, action: 'إنشاء حساب مدير النظام',
+                    detail: local ? 'مع نقل البيانات من المتصفح' : ''
+                });
+
+                fbBusy = false;
+                startSync(uid);
+                toast(local ? 'تم إنشاء الحساب ونقل البيانات إلى Firebase' : 'تم إنشاء حساب مدير النظام', 'success', null, 5000);
+            } catch (err) {
+                // roll back a half-created account so setup can be retried
+                if (cred && cred.user) { try { await cred.user.delete(); } catch (e) { console.error(e); } }
+                if (fbAuth.currentUser) { try { await fbAuth.signOut(); } catch (e) { console.error(e); } }
+                throw err;
+            } finally {
+                fbBusy = false;
+            }
+        }
+
+        async function logout(silent = false) {
+            if (!silent && currentUser()) log('تسجيل خروج');
+            // stop listeners first: signing out makes them fail with permission-denied,
+            // which must not be reported as "account not activated"
+            fbUser = null;
+            stopSync();
+            try { await fbAuth.signOut(); } catch (err) { console.error(err); }
+            if (silent) toast('انتهت الجلسة. سجّل الدخول من جديد', 'info');
+        }
+
+        function openAccountModal() {
+            const u = currentUser();
+            if (!u) return;
+            openModal({
+                title: 'حسابي وتغيير كلمة المرور',
+                submitText: 'تغيير كلمة المرور',
+                body: `
+                    <div class="flex items-center gap-3 bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        ${avatarHtml(u.name, 'w-11 h-11')}
+                        <div class="min-w-0">
+                            <p class="font-bold truncate">${esc(u.name)}</p>
+                            <p class="text-xs text-slate-500 truncate" dir="ltr">${esc(u.email)} · ${esc(roleName(u.roleId))}</p>
+                        </div>
+                    </div>
+                    ${field('كلمة المرور الحالية', `<input name="current" type="password" required autocomplete="current-password" class="${INPUT_CLS}">`)}
+                    ${field('كلمة المرور الجديدة', `<input name="new" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`, '6 أحرف على الأقل')}
+                    ${field('تأكيد الجديدة', `<input name="new2" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`)}`,
+                onSubmit: async fd => {
+                    const current = String(fd.get('current') || '');
+                    const next = String(fd.get('new') || '');
+                    if (next.length < 6) return toast('كلمة المرور الجديدة قصيرة', 'error'), false;
+                    if (next !== String(fd.get('new2') || '')) return toast('كلمتا المرور غير متطابقتين', 'error'), false;
+                    try {
+                        const fu = fbAuth.currentUser;
+                        await fu.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(fu.email, current));
+                        await fu.updatePassword(next);
+                    } catch (err) {
+                        console.error(err);
+                        toast(err && err.code === 'auth/wrong-password' || err && err.code === 'auth/invalid-credential'
+                            ? 'كلمة المرور الحالية غير صحيحة' : authErrorMessage(err), 'error', null, 5000);
+                        return false;
+                    }
+                    log('تغيير كلمة المرور');
+                    toast('تم تغيير كلمة المرور', 'success');
+                }
+            });
+        }
+
+        function roleName(roleId) {
+            return appData.roles[roleId]?.name || 'غير محدد';
+        }
+
+        function avatarHtml(name, cls = 'w-9 h-9') {
+            return `<span class="${cls} shrink-0 rounded-full flex items-center justify-center font-bold text-white text-sm ${colorFor(name)}">${esc(initials(name))}</span>`;
+        }
+
+        // ============ MODAL SYSTEM ============
+        function openModal({ title, body, submitText = 'حفظ', onSubmit = null, danger = false, size = 'md', onOpen = null }) {
+            const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl' };
+            modalSubmit = onSubmit;
+            el('modalHost').innerHTML = `
+                <div id="modalBackdrop" class="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+                     onclick="if (event.target === this) closeModal()">
+                    <form id="modalForm" class="modal-panel bg-white rounded-2xl w-full ${sizes[size]} shadow-2xl border border-slate-100 flex flex-col"
+                          ${onSubmit ? 'onsubmit="submitModal(event)"' : 'onsubmit="event.preventDefault()"'}>
+                        <div class="flex justify-between items-center px-5 sm:px-6 py-4 border-b border-slate-100">
+                            <h3 class="text-lg font-bold text-slate-800">${title}</h3>
+                            <button type="button" onclick="closeModal()" aria-label="إغلاق" class="${BTN_ICON} text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                        <div class="px-5 sm:px-6 py-4 space-y-4">${body}</div>
+                        <div class="px-5 sm:px-6 py-4 border-t border-slate-100 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+                            <button type="button" onclick="closeModal()" class="${BTN_SECONDARY} w-full sm:w-auto">إغلاق</button>
+                            ${onSubmit ? `<button type="submit" class="${BTN_PRIMARY} w-full sm:w-auto ${danger ? '!bg-rose-600 hover:!bg-rose-700' : ''}">${submitText}</button>` : ''}
+                        </div>
+                    </form>
+                </div>`;
+            el('modalHost').classList.remove('hidden');
+            if (onOpen) onOpen();
+            setTimeout(() => el('modalForm')?.querySelector('input:not([type=hidden]):not([type=file]):not([disabled]), select, textarea')?.focus(), 30);
+        }
+
+        function closeModal() {
+            el('modalHost').innerHTML = '';
+            el('modalHost').classList.add('hidden');
+            modalSubmit = null;
+        }
+
+        async function submitModal(e) {
+            e.preventDefault();
+            const form = e.target;
+            const btn = form.querySelector('button[type=submit]');
+            if (btn) btn.disabled = true;
+            try {
+                const result = await modalSubmit(new FormData(form), form);
+                if (result !== false) closeModal();
+            } catch (err) {
+                console.error(err);
+                toast('حدث خطأ غير متوقع: ' + err.message, 'error', null, 5000);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // ============ ROUTER & SHELL ============
+        function parseRoute() {
+            const h = location.hash.replace(/^#\/?/, '');
+            const [name, ...rest] = h.split('/');
+            return { name: name || 'dashboard', param: rest.join('/') || null };
+        }
+
+        function navigate(route) {
+            const target = '#/' + route;
+            if (location.hash === target) render();
+            else location.hash = target;
+        }
+
+        function render() {
+            if (!sessionUserId) return;
+            const user = currentUser();
+            if (!user || !user.active) {
+                logout(true);
+                return;
+            }
+            let { name, param } = parseRoute();
+
+            if (!ROUTES[name]) name = 'dashboard';
+            if (!canAccessRoute(name)) {
+                const first = firstAllowedRoute();
+                if (first) return navigate(first);
+                renderNoAccess();
+                return;
+            }
+            if (name === 'companies' && param && !findCompany(param)) return navigate('companies');
+
+            const view = VIEWS[name](param);
+            el('pageTitle').textContent = view.title;
+            el('topActions').innerHTML = view.actions || '';
+            el('content').innerHTML = view.html;
+            renderChrome(name);
+            if (view.after) view.after();
+            closeRowMenu();
+            toggleSidebar(false);
+        }
+
+        function renderNoAccess() {
+            el('pageTitle').textContent = 'لا توجد صلاحيات';
+            el('topActions').innerHTML = '';
+            el('content').innerHTML = `<div class="bg-white rounded-2xl border p-8 text-center"><i class="fa-solid fa-lock text-4xl text-slate-300 mb-3"></i><p class="text-slate-600">حسابك لا يملك صلاحية لعرض أي قسم. تواصل مع مدير النظام.</p></div>`;
+            renderChrome(null);
+        }
+
+        function renderChrome(activeName) {
+            const u = currentUser();
+            const sys = appData.settings;
+            el('sideName').textContent = sys.systemName;
+            el('sideLogo').innerHTML = sys.logo
+                ? `<img src="${esc(sys.logo)}" alt="" class="w-full h-full object-contain">`
+                : '<i class="fa-solid fa-industry text-white"></i>';
+
+            const links = ROUTE_ORDER.filter(canAccessRoute).map(name => {
+                const r = ROUTES[name];
+                return `<a href="#/${name}" onclick="toggleSidebar(false)"
+                           class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${activeName === name ? 'active' : ''}">
+                            <i class="fa-solid ${r.icon} w-5 text-center"></i> ${r.title}
+                        </a>`;
+            });
+            el('sideNav').innerHTML = links.join('') || '<p class="text-sm text-slate-400 p-3">لا توجد أقسام متاحة</p>';
+
+            if (u) {
+                el('sideUser').innerHTML = `${avatarHtml(u.name)}
+                    <div class="min-w-0"><p class="text-sm font-semibold truncate">${esc(u.name)}</p>
+                    <p class="text-[11px] text-slate-400 truncate">${esc(roleName(u.roleId))}</p></div>`;
+                el('topAvatar').textContent = initials(u.name);
+                el('topName').textContent = u.name;
+            }
+        }
+
+        function toggleSidebar(open) {
+            const sb = el('sidebar');
+            const bd = el('drawerBackdrop');
+            if (open === undefined) open = sb.classList.contains('translate-x-full');
+            sb.classList.toggle('translate-x-full', !open);
+            bd.classList.toggle('hidden', !open);
+        }
+
+        // ============ VIEWS ============
+        const VIEWS = {
+            dashboard: () => viewDashboard(),
+            companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
+            lists: () => viewLists(),
+            users: () => viewUsers(),
+            logs: () => viewLogs(),
+            settings: () => viewSettings()
+        };
+
+        function btn(onclick, label, icon, cls = BTN_PRIMARY) {
+            return `<button type="button" onclick="${onclick}" class="${cls} whitespace-nowrap"><i class="fa-solid ${icon}"></i><span>${label}</span></button>`;
+        }
+
+        function computeStats() {
+            const s = { companies: appData.companies.length, totalLists: 0, active: 0, activeOnly: 0, expiring: 0, expired: 0, avgEff: 0, expItems: [], perCompany: [] };
+            let effSum = 0, effCount = 0;
+            appData.companies.forEach(c => c.lists.forEach(l => {
+                s.totalLists++;
+                const st = listState(l);
+                if (!st.active) s.expired++;
+                else {
+                    s.active++;
+                    effSum += effValue(l);
+                    effCount++;
+                    if (st.expiring) { s.expiring++; s.expItems.push({ c, l, days: st.days }); }
+                    else s.activeOnly++;
+                }
+            }));
+            s.avgEff = effCount ? effSum / effCount : 0;
+            s.expItems.sort((a, b) => a.days - b.days);
+            s.perCompany = appData.companies.map(c => {
+                const total = c.lists.length;
+                const active = c.lists.filter(l => listState(l).active).length;
+                const eff = total ? c.lists.reduce((a, l) => a + effValue(l), 0) / total : 0;
+                return { c, total, active, eff };
+            }).sort((a, b) => b.total - a.total || a.c.name.localeCompare(b.c.name, 'ar'));
+            return s;
+        }
+
+        function viewDashboard() {
+            const s = computeStats();
+            const u = currentUser();
+            const tot = s.totalLists || 1;
+            const p1 = (s.activeOnly / tot) * 100;
+            const p2 = (s.expiring / tot) * 100;
+            const donut = s.totalLists
+                ? `conic-gradient(#10b981 0 ${p1}%, #f59e0b ${p1}% ${p1 + p2}%, #f43f5e ${p1 + p2}% 100%)`
+                : 'conic-gradient(#e2e8f0 0 100%)';
+
+            const kpi = (label, value, icon, color, sub = '') => `
+                <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                    <div class="flex items-start justify-between gap-2">
+                        <p class="text-xs text-slate-500 leading-snug">${label}</p>
+                        <span class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${color}"><i class="fa-solid ${icon}"></i></span>
+                    </div>
+                    <p class="text-2xl sm:text-3xl font-extrabold mt-2">${value}</p>
+                    ${sub ? `<p class="text-[11px] text-slate-400 mt-1">${sub}</p>` : ''}
+                </div>`;
+
+            const maxTotal = Math.max(1, ...s.perCompany.map(x => x.total));
+            const companyBars = s.perCompany.slice(0, 8).map(x => `
+                <div class="flex items-center gap-3">
+                    ${companyLogoHtml(x.c, 'w-9 h-9 text-xs')}
+                    <div class="flex-1 min-w-0">
+                        <div class="flex justify-between text-xs mb-1 gap-2">
+                            <span class="font-semibold truncate">${esc(x.c.name)}</span>
+                            <span class="text-slate-500 whitespace-nowrap">${x.total} لستة · ${x.active} نشطة</span>
+                        </div>
+                        <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div class="h-full bg-brand-500 rounded-full" style="width:${(x.total / maxTotal) * 100}%"></div>
+                        </div>
+                    </div>
+                </div>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا توجد شركات بعد</p>';
+
+            const effCompanies = s.perCompany.filter(x => x.total > 0).sort((a, b) => b.eff - a.eff).slice(0, 8);
+            const effBars = effCompanies.map(x => `
+                <div class="flex items-center gap-3">
+                    ${companyLogoHtml(x.c, 'w-9 h-9 text-xs')}
+                    <div class="flex-1 min-w-0">
+                        <div class="flex justify-between text-xs mb-1 gap-2">
+                            <span class="font-semibold truncate">${esc(x.c.name)}</span>
+                            <span class="font-bold text-emerald-600 whitespace-nowrap">${x.eff.toFixed(2)}%</span>
+                        </div>
+                        <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div class="h-full bg-emerald-500 rounded-full" style="width:${Math.min(100, x.eff)}%"></div>
+                        </div>
+                    </div>
+                </div>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا توجد بيانات خصومات بعد</p>';
+
+            const expRows = s.expItems.slice(0, 8).map(({ c, l, days }) => `
+                <button type="button" onclick="navigate('companies/${esc(c.id)}')" class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg hover:bg-amber-50 text-start">
+                    <span class="min-w-0 flex items-center gap-3">
+                        ${companyLogoHtml(c, 'w-8 h-8 text-xs')}
+                        <span class="min-w-0">
+                            <span class="block text-sm font-bold truncate">${esc(l.name)}</span>
+                            <span class="block text-xs text-slate-500 truncate">${esc(c.name)}</span>
+                        </span>
+                    </span>
+                    <span class="text-xs font-semibold text-amber-700 whitespace-nowrap">${days === 0 ? 'تنتهي اليوم' : `خلال ${days} يوم`}</span>
+                </button>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا توجد لستات قريبة الانتهاء</p>';
+
+            const logRows = appData.logs.slice(0, 8).map(lg => `
+                <li class="flex gap-3 py-2 border-b border-slate-100 last:border-0">
+                    <span class="w-2 h-2 rounded-full bg-brand-500 mt-2 shrink-0"></span>
+                    <div class="min-w-0">
+                        <p class="text-sm"><span class="font-semibold">${esc(lg.user)}</span> · ${esc(lg.action)}${lg.detail ? ` <span class="text-slate-500">(${esc(lg.detail)})</span>` : ''}</p>
+                        <p class="text-[11px] text-slate-400">${fmtDateTime(lg.t)}</p>
+                    </div>
+                </li>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا يوجد نشاط بعد</p>';
+
+            const quick = [
+                can('companies.manage') ? btn("openCompanyModal()", 'إضافة شركة', 'fa-plus') : '',
+                can('lists.manage') ? btn("openListModal({})", 'إضافة لستة', 'fa-file-circle-plus', BTN_SECONDARY) : '',
+                can('lists.import') ? btn("el('excelFileInput').click()", 'استيراد إكسيل', 'fa-file-import', BTN_SECONDARY) : '',
+                can('lists.export') ? btn("exportAll()", 'تصدير الكل', 'fa-file-excel', BTN_SECONDARY) : '',
+                can('users.manage') ? btn("navigate('users')", 'المستخدمون', 'fa-users-gear', BTN_SECONDARY) : ''
+            ].filter(Boolean).join('');
+
+            return {
+                title: 'لوحة التحكم',
+                actions: '',
+                html: `
+                    <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+                        <div>
+                            <h1 class="text-xl sm:text-2xl font-extrabold">مرحباً، ${esc(u?.name || '')}</h1>
+                            <p class="text-sm text-slate-500">نظرة سريعة على الشركات واللستات والخصومات · ${new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 xl:grid-cols-6 gap-3 sm:gap-4">
+                        ${kpi('الشركات / المصانع', s.companies, 'fa-industry', 'bg-blue-50 text-blue-600')}
+                        ${kpi('إجمالي اللستات', s.totalLists, 'fa-file-invoice-dollar', 'bg-brand-50 text-brand-600')}
+                        ${kpi('اللستات النشطة', s.active, 'fa-circle-check', 'bg-emerald-50 text-emerald-600')}
+                        ${kpi(`تنتهي خلال ${expiryDays()} يوم`, s.expiring, 'fa-hourglass-half', 'bg-amber-50 text-amber-600')}
+                        ${kpi('اللستات المنتهية', s.expired, 'fa-circle-xmark', 'bg-rose-50 text-rose-600')}
+                        ${kpi('متوسط الخصم الفعلي', `${s.avgEff.toFixed(1)}%`, 'fa-percent', 'bg-violet-50 text-violet-600', 'للستات النشطة')}
+                    </div>
+
+                    ${quick ? `<div class="flex flex-wrap gap-2">${quick}</div>` : ''}
+
+                    <div class="grid gap-4 lg:grid-cols-3">
+                        <section class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                            <h3 class="font-bold mb-4">حالة اللستات</h3>
+                            <div class="flex items-center gap-5">
+                                <div class="w-32 h-32 shrink-0 rounded-full relative" style="background:${donut}">
+                                    <div class="absolute inset-4 bg-white rounded-full flex flex-col items-center justify-center">
+                                        <span class="text-2xl font-extrabold">${s.totalLists}</span>
+                                        <span class="text-[11px] text-slate-500">لستة</span>
+                                    </div>
+                                </div>
+                                <ul class="space-y-2 text-sm min-w-0">
+                                    <li class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm bg-emerald-500"></span> نشطة: <b>${s.activeOnly}</b></li>
+                                    <li class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm bg-amber-500"></span> قريبة الانتهاء: <b>${s.expiring}</b></li>
+                                    <li class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm bg-rose-500"></span> منتهية: <b>${s.expired}</b></li>
+                                </ul>
+                            </div>
+                        </section>
+
+                        <section class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm lg:col-span-2">
+                            <h3 class="font-bold mb-4">اللستات لكل شركة</h3>
+                            <div class="space-y-3">${companyBars}</div>
+                        </section>
+                    </div>
+
+                    <div class="grid gap-4 lg:grid-cols-2">
+                        <section class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="font-bold">لستات قريبة الانتهاء</h3>
+                                <span class="text-xs text-slate-500">${s.expItems.length} لستة</span>
+                            </div>
+                            <div class="divide-y divide-slate-100">${expRows}</div>
+                        </section>
+
+                        <section class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                            <h3 class="font-bold mb-4">متوسط الخصم الفعلي لكل شركة</h3>
+                            <div class="space-y-3">${effBars}</div>
+                        </section>
+                    </div>
+
+                    ${can('logs.view') ? `
+                    <section class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="font-bold">آخر النشاطات</h3>
+                            <a href="#/logs" class="text-xs text-brand-600 font-semibold">عرض الكل</a>
+                        </div>
+                        <ul>${logRows}</ul>
+                    </section>` : ''}
+                `
+            };
+        }
+
+        // ---------- Companies ----------
+        function viewCompanyList() {
+            return {
+                title: 'المصانع / الشركات',
+                actions: can('companies.manage') ? btn('openCompanyModal()', 'إضافة شركة', 'fa-plus', BTN_PRIMARY) : '',
+                html: `
+                    <div class="bg-white p-3 sm:p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-3 sm:items-center">
+                        <div class="relative w-full sm:w-96">
+                            <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                            <input type="search" id="compSearch" oninput="renderCompanyGrid()" placeholder="ابحث باسم الشركة أو الوكيل..." class="${INPUT_CLS} pr-9">
+                        </div>
+                        <p id="compCount" class="text-xs text-slate-500 sm:ms-auto"></p>
+                    </div>
+                    <div id="companyGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4"></div>
+                    <div id="companyEmpty" class="hidden text-center py-12 bg-white rounded-2xl border border-dashed border-slate-300">
+                        <i class="fa-solid fa-industry text-4xl text-slate-300 mb-3"></i>
+                        <p class="text-slate-500">لا توجد شركات تطابق البحث</p>
+                    </div>`,
+                after: renderCompanyGrid
+            };
+        }
+
+        function renderCompanyGrid() {
+            const grid = el('companyGrid');
+            if (!grid) return;
+            const q = (el('compSearch')?.value || '').trim().toLowerCase();
+            const list = appData.companies.filter(c => c.name.toLowerCase().includes(q) || c.agent.toLowerCase().includes(q));
+            el('compCount').textContent = `${list.length} من ${appData.companies.length} شركة`;
+            el('companyEmpty').classList.toggle('hidden', list.length > 0);
+
+            grid.innerHTML = list.map(c => {
+                const active = c.lists.filter(l => listState(l).active).length;
+                const expiring = c.lists.filter(l => listState(l).expiring).length;
+                return `
+                <article onclick="navigate('companies/${esc(c.id)}')" role="button" tabindex="0"
+                         class="group bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm hover:shadow-md hover:border-brand-200 cursor-pointer transition-all flex flex-col gap-4">
+                    <div class="flex items-start gap-3">
+                        ${companyLogoHtml(c, 'w-14 h-14 text-lg')}
+                        <div class="min-w-0 flex-1">
+                            <h3 class="font-bold text-lg leading-snug break-words group-hover:text-brand-600">${esc(c.name)}</h3>
+                            <p class="text-xs text-slate-500 truncate"><i class="fa-solid fa-briefcase text-slate-400 me-1"></i>${esc(c.agent) || '-'}</p>
+                        </div>
+                        <div class="flex shrink-0">
+                            ${can('companies.manage') ? `<button type="button" onclick="event.stopPropagation(); openCompanyModal('${esc(c.id)}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-400 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                            ${can('companies.delete') ? `<button type="button" onclick="event.stopPropagation(); deleteCompany('${esc(c.id)}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-400 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                        </div>
+                    </div>
+                    ${c.notes ? `<p class="text-xs text-slate-500 line-clamp-2 bg-slate-50 p-2 rounded-lg border border-slate-100">${esc(c.notes)}</p>` : ''}
+                    <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2 text-xs">
+                        <span class="text-slate-500">اللستات: <b class="text-slate-800">${c.lists.length}</b></span>
+                        <span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold">${active} نشطة</span>
+                        ${expiring ? `<span class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-semibold">${expiring} تنتهي قريباً</span>` : ''}
+                    </div>
+                </article>`;
+            }).join('');
+        }
+
+        function viewCompanyDetail(id) {
+            const c = findCompany(id);
+            const active = c.lists.filter(l => listState(l).active).length;
+            const expiring = c.lists.filter(l => listState(l).expiring).length;
+            return {
+                title: c.name,
+                actions: '',
+                html: `
+                    <a href="#/companies" class="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-brand-600 font-medium">
+                        <i class="fa-solid fa-arrow-right"></i> العودة للشركات
+                    </a>
+
+                    <section class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm flex flex-col md:flex-row gap-4 md:items-center">
+                        ${companyLogoHtml(c, 'w-20 h-20 text-2xl')}
+                        <div class="flex-1 min-w-0">
+                            <h1 class="text-xl sm:text-2xl font-extrabold break-words">${esc(c.name)}</h1>
+                            <p class="text-sm text-slate-500">الوكيل / التاجر: <b class="text-slate-700">${esc(c.agent) || '-'}</b></p>
+                            ${c.notes ? `<p class="text-sm text-slate-500 mt-1">${esc(c.notes)}</p>` : ''}
+                        </div>
+                        <div class="flex gap-2 shrink-0">
+                            ${can('companies.manage') ? btn(`openCompanyModal('${esc(c.id)}')`, 'تعديل البيانات والشعار', 'fa-pen-to-square', BTN_SECONDARY) : ''}
+                            ${can('companies.delete') ? btn(`deleteCompany('${esc(c.id)}')`, 'حذف', 'fa-trash-can', 'px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-sm font-medium flex items-center gap-2') : ''}
+                        </div>
+                    </section>
+
+                    <div class="grid grid-cols-3 gap-2 sm:gap-4">
+                        <div class="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 text-center"><p class="text-xs text-slate-500">إجمالي اللستات</p><p class="text-xl sm:text-2xl font-extrabold">${c.lists.length}</p></div>
+                        <div class="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 text-center"><p class="text-xs text-slate-500">نشطة</p><p class="text-xl sm:text-2xl font-extrabold text-emerald-600">${active}</p></div>
+                        <div class="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 text-center"><p class="text-xs text-slate-500">تنتهي قريباً</p><p class="text-xl sm:text-2xl font-extrabold text-amber-600">${expiring}</p></div>
+                    </div>
+
+                    ${listToolbar('cd', { companyFilter: false, addAction: can('lists.manage') ? 'openListModal({ companyId: currentCompanyId() })' : null })}
+                    ${listContainers('cd', false)}`,
+                after: () => renderListsFor('cd')
+            };
+        }
+
+        function currentCompanyId() {
+            const p = parseRoute();
+            return p.name === 'companies' ? p.param : null;
+        }
+
+        // ---------- Lists (shared by company page and all-lists page) ----------
+        function listToolbar(scope, { companyFilter = false, addAction = null, extra = '' } = {}) {
+            const companyOpts = companyFilter
+                ? `<select id="${scope}Company" onchange="renderListsFor('${scope}')" aria-label="فلترة حسب الشركة" class="text-sm border border-slate-200 rounded-lg px-3 py-2.5 sm:py-2 bg-white">
+                       <option value="">كل الشركات</option>
+                       ${appData.companies.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+                   </select>` : '';
+            return `
+                <div class="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between bg-white p-3 sm:p-4 rounded-xl border border-slate-200">
+                    <div class="flex flex-col sm:flex-row gap-2 flex-1 min-w-0">
+                        <div class="relative w-full lg:max-w-sm">
+                            <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                            <input type="search" id="${scope}Search" oninput="renderListsFor('${scope}')" placeholder="بحث باسم اللستة أو رقمها..." class="${INPUT_CLS} pr-9">
+                        </div>
+                        ${companyOpts}
+                    </div>
+                    <div class="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
+                        <select id="${scope}Status" onchange="renderListsFor('${scope}')" aria-label="الحالة" class="text-sm border border-slate-200 rounded-lg px-3 py-2.5 sm:py-2 bg-white">
+                            <option value="ALL">كل الحالات</option>
+                            <option value="ACTIVE">النشطة</option>
+                            <option value="EXPIRING">تنتهي قريباً</option>
+                            <option value="EXPIRED">المنتهية</option>
+                        </select>
+                        <select id="${scope}Sort" onchange="renderListsFor('${scope}')" aria-label="ترتيب" class="text-sm border border-slate-200 rounded-lg px-3 py-2.5 sm:py-2 bg-white">
+                            <option value="default">ترتيب: الأحدث إضافةً</option>
+                            <option value="startDesc">الأحدث بداية</option>
+                            <option value="startAsc">الأقدم بداية</option>
+                            <option value="endAsc">الأقرب انتهاءً</option>
+                            <option value="discountDesc">أعلى صافي خصم</option>
+                            <option value="nameAsc">الاسم (أ - ي)</option>
+                        </select>
+                        ${can('lists.export') ? `<button type="button" onclick="exportScope('${scope}')" class="text-sm bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 whitespace-nowrap"><i class="fa-solid fa-file-excel"></i> تصدير</button>` : ''}
+                        ${extra}
+                        ${addAction ? `<button type="button" onclick="${addAction}" class="${BTN_PRIMARY} col-span-2 sm:col-span-1 whitespace-nowrap"><i class="fa-solid fa-plus"></i> إضافة لستة</button>` : ''}
+                    </div>
+                </div>`;
+        }
+
+        function listContainers(scope, showCompany) {
+            return `
+                <div id="${scope}Wrap">
+                    <div class="hidden lg:block bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-right border-collapse">
+                                <thead id="${scope}Thead" class="bg-slate-50 text-slate-600 text-xs font-bold border-b border-slate-200"></thead>
+                                <tbody id="${scope}Tbody" class="divide-y divide-slate-100 text-sm"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div id="${scope}Cards" class="lg:hidden space-y-3"></div>
+                </div>
+                <div id="${scope}Empty" class="hidden text-center py-10 px-4 bg-white rounded-2xl border border-dashed border-slate-300">
+                    <i class="fa-solid fa-folder-open text-3xl text-slate-300 mb-2"></i>
+                    <p class="text-slate-500 text-sm">لا توجد لستات مطابقة</p>
+                </div>`;
+        }
+
+        function viewLists() {
+            return {
+                title: 'كل اللستات',
+                actions: '',
+                html: listToolbar('ls', {
+                    companyFilter: true,
+                    addAction: can('lists.manage') ? 'openListModal({})' : null,
+                    extra: can('lists.import') ? `<button type="button" onclick="el('excelFileInput').click()" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 whitespace-nowrap"><i class="fa-solid fa-file-import"></i> استيراد</button>` : ''
+                }) + listContainers('ls', true),
+                after: () => renderListsFor('ls')
+            };
+        }
+
+        function filteredItems(scope) {
+            const isAll = scope === 'ls';
+            const pool = isAll ? appData.companies : [findCompany(currentCompanyId())].filter(Boolean);
+            let items = [];
+            pool.forEach(c => c.lists.forEach(l => items.push({ c, l })));
+
+            const companySel = isAll ? el('lsCompany')?.value : '';
+            if (companySel) items = items.filter(x => x.c.id === companySel);
+
+            const q = (el(scope + 'Search')?.value || '').trim().toLowerCase();
+            if (q) {
+                items = items.filter(({ c, l }) => l.name.toLowerCase().includes(q)
+                    || l.id.toLowerCase().includes(q)
+                    || (isAll && c.name.toLowerCase().includes(q)));
+            }
+
+            const status = el(scope + 'Status')?.value || 'ALL';
+            items = items.filter(({ l }) => {
+                const s = listState(l);
+                return status === 'ALL'
+                    || (status === 'ACTIVE' && s.active)
+                    || (status === 'EXPIRING' && s.expiring)
+                    || (status === 'EXPIRED' && !s.active);
+            });
+
+            const sorter = SORTERS[el(scope + 'Sort')?.value || 'default'];
+            if (sorter) items.sort((a, b) => sorter(a.l, b.l));
+            return items;
+        }
+
+        const SORTERS = {
+            default: null,
+            startDesc: (a, b) => String(b.startDate).localeCompare(String(a.startDate)),
+            startAsc: (a, b) => String(a.startDate).localeCompare(String(b.startDate)),
+            endAsc: (a, b) => String(a.endDate).localeCompare(String(b.endDate)),
+            discountDesc: (a, b) => effValue(b) - effValue(a),
+            nameAsc: (a, b) => a.name.localeCompare(b.name, 'ar')
+        };
+
+        function listActionsHtml(listId) {
+            const id = esc(listId);
+            return `<div class="flex items-center justify-center gap-1 shrink-0">
+                ${can('lists.manage') ? `<button type="button" onclick="openListModal({ listId: '${id}' })" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                <button type="button" data-menu-btn onclick="openRowMenu(this, '${id}')" title="المزيد" aria-label="المزيد" class="${BTN_ICON} text-slate-500 hover:text-slate-800 hover:bg-slate-100"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+            </div>`;
+        }
+
+        function pdfButtonHtml(l, block) {
+            if (!l.pdfFile && !l.hasPdf) return `<span class="text-xs text-slate-300">لا يوجد</span>`;
+            const label = esc(l.pdfFile || 'ملف مرفق');
+            return `<button type="button" onclick="openPdfFile('${esc(l.id)}')" title="${label}"
+                        class="text-xs bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-600 border border-slate-200 px-2.5 py-2 rounded-lg inline-flex items-center gap-1.5 transition-colors min-w-0 max-w-full ${block ? 'w-full' : ''}">
+                        <i class="fa-solid fa-file-pdf text-rose-500 shrink-0"></i>
+                        <span class="truncate-name ${block ? 'flex-1 text-start' : 'max-w-[130px]'}">${label}</span>
+                    </button>`;
+        }
+
+        function statusBadgeHtml(state) {
+            if (!state.active) return `<span class="inline-flex items-center text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-700 font-medium whitespace-nowrap">منتهية</span>`;
+            if (state.expiring) return `<span class="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-semibold whitespace-nowrap"><i class="fa-solid fa-hourglass-half text-[10px]"></i> ${statusLabel(state)}</span>`;
+            return `<span class="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> نشطة</span>`;
+        }
+
+        function renderListsFor(scope) {
+            const items = filteredItems(scope);
+            const showCompany = scope === 'ls';
+
+            el(scope + 'Thead').innerHTML = `<tr>
+                <th class="py-3.5 px-4">م</th>
+                ${showCompany ? '<th class="py-3.5 px-4">الشركة</th>' : ''}
+                <th class="py-3.5 px-4">اسم اللستة</th>
+                <th class="py-3.5 px-4 text-center">خصم 1</th>
+                <th class="py-3.5 px-4 text-center">خصم 2</th>
+                <th class="py-3.5 px-4 text-center">خصم 3</th>
+                <th class="py-3.5 px-4 text-center bg-slate-100/70">الصافي الفعلي</th>
+                <th class="py-3.5 px-4 whitespace-nowrap">البداية</th>
+                <th class="py-3.5 px-4 whitespace-nowrap">النهاية</th>
+                <th class="py-3.5 px-4 text-center">الحالة</th>
+                <th class="py-3.5 px-4 text-center">المرفق</th>
+                <th class="py-3.5 px-4 text-center">إجراءات</th></tr>`;
+
+            el(scope + 'Tbody').innerHTML = items.map(({ c, l }, i) => {
+                const st = listState(l);
+                return `<tr class="hover:bg-slate-50 transition-colors">
+                    <td class="py-3.5 px-4 text-xs text-slate-400 font-mono">${i + 1}</td>
+                    ${showCompany ? `<td class="py-3.5 px-4"><button type="button" onclick="navigate('companies/${esc(c.id)}')" class="flex items-center gap-2 text-start">${companyLogoHtml(c, 'w-7 h-7 text-[10px]')}<span class="font-semibold hover:text-brand-600 whitespace-nowrap">${esc(c.name)}</span></button></td>` : ''}
+                    <td class="py-3.5 px-4 font-bold text-slate-800">${esc(l.name)}</td>
+                    <td class="py-3.5 px-4 text-center">${pct(l.discount1)}</td>
+                    <td class="py-3.5 px-4 text-center">${pct(l.discount2)}</td>
+                    <td class="py-3.5 px-4 text-center">${pct(l.discount3)}</td>
+                    <td class="py-3.5 px-4 text-center font-bold text-emerald-600 bg-emerald-50/50 whitespace-nowrap">${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%</td>
+                    <td class="py-3.5 px-4 text-xs font-mono text-slate-600 whitespace-nowrap">${esc(l.startDate)}</td>
+                    <td class="py-3.5 px-4 text-xs font-mono text-slate-600 whitespace-nowrap">${esc(l.endDate)}</td>
+                    <td class="py-3.5 px-4 text-center">${statusBadgeHtml(st)}</td>
+                    <td class="py-3.5 px-4 text-center">${pdfButtonHtml(l, false)}</td>
+                    <td class="py-3.5 px-4 text-center">${listActionsHtml(l.id)}</td>
+                </tr>`;
+            }).join('');
+
+            el(scope + 'Cards').innerHTML = items.map(({ c, l }, i) => {
+                const st = listState(l);
+                return `<article class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0 flex items-center gap-3">
+                            ${showCompany ? companyLogoHtml(c, 'w-10 h-10 text-xs') : ''}
+                            <div class="min-w-0">
+                                ${showCompany ? `<p class="text-[11px] text-brand-600 font-semibold truncate">${esc(c.name)}</p>` : ''}
+                                <h4 class="font-bold text-slate-800 break-words">${esc(l.name)}</h4>
+                                <p class="text-[11px] text-slate-400 font-mono">#${i + 1}</p>
+                            </div>
+                        </div>
+                        <div class="shrink-0">${statusBadgeHtml(st)}</div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 text-center">
+                        ${[l.discount1, l.discount2, l.discount3].map((d, k) => `<div class="bg-slate-50 rounded-lg py-2 border border-slate-100"><p class="text-[11px] text-slate-500">خصم ${k + 1}</p><p class="font-bold text-slate-700">${pct(d)}</p></div>`).join('')}
+                    </div>
+                    <div class="flex items-center justify-between gap-2 bg-emerald-50 rounded-lg px-3 py-2">
+                        <span class="text-xs text-slate-600">صافي الخصم الفعلي</span>
+                        <span class="font-bold text-emerald-600">${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                        <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-[11px] text-slate-400">البداية</span><span class="font-mono">${esc(l.startDate)}</span></div>
+                        <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-[11px] text-slate-400">النهاية</span><span class="font-mono">${esc(l.endDate)}</span></div>
+                    </div>
+                    <div class="flex items-center gap-2 pt-3 border-t border-slate-100">
+                        <div class="flex-1 min-w-0">${pdfButtonHtml(l, true)}</div>
+                        ${listActionsHtml(l.id)}
+                    </div>
+                </article>`;
+            }).join('');
+
+            el(scope + 'Empty').classList.toggle('hidden', items.length > 0);
+            el(scope + 'Wrap').classList.toggle('hidden', items.length === 0);
+        }
+
+        // ---------- Users & roles ----------
+        function viewUsers() {
+            const tabs = `
+                <div class="inline-flex bg-white p-1 rounded-xl border border-slate-200">
+                    <button type="button" onclick="setUsersTab('users')" class="px-4 py-2 rounded-lg text-sm font-semibold ${usersTab === 'users' ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100'}">
+                        <i class="fa-solid fa-users me-1"></i> المستخدمون (${appData.users.length})
+                    </button>
+                    <button type="button" onclick="setUsersTab('roles')" class="px-4 py-2 rounded-lg text-sm font-semibold ${usersTab === 'roles' ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100'}">
+                        <i class="fa-solid fa-shield-halved me-1"></i> الأدوار والصلاحيات (${Object.keys(appData.roles).length})
+                    </button>
+                </div>`;
+
+            const body = usersTab === 'users' ? usersTableHtml() : rolesHtml();
+            const action = usersTab === 'users'
+                ? (can('users.manage') ? btn('openUserModal()', 'إضافة مستخدم', 'fa-user-plus') : '')
+                : (can('users.manage') ? btn('openRoleModal()', 'إضافة دور', 'fa-plus') : '');
+
+            return {
+                title: 'المستخدمون والصلاحيات',
+                actions: '',
+                html: `<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">${tabs}${action}</div>${body}`
+            };
+        }
+
+        function setUsersTab(tab) {
+            usersTab = tab;
+            render();
+        }
+
+        function usersTableHtml() {
+            const me = currentUser();
+            const rows = appData.users.map(u => `
+                <tr class="hover:bg-slate-50">
+                    <td class="py-3 px-4"><div class="flex items-center gap-3">${avatarHtml(u.name, 'w-9 h-9')}<div class="min-w-0"><p class="font-bold truncate">${esc(u.name)}${u.id === me?.id ? ' <span class="text-[10px] bg-brand-100 text-brand-700 px-1.5 py-0.5 rounded-full">أنت</span>' : ''}</p></div></div></td>
+                    <td class="py-3 px-4 font-mono text-xs" dir="ltr">${esc(u.email)}</td>
+                    <td class="py-3 px-4"><span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold">${esc(roleName(u.roleId))}</span></td>
+                    <td class="py-3 px-4">${u.active ? '<span class="text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold">فعّال</span>' : '<span class="text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-700 font-semibold">موقوف</span>'}</td>
+                    <td class="py-3 px-4 text-xs text-slate-500 whitespace-nowrap">${u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : 'لم يسجل دخول'}</td>
+                    <td class="py-3 px-4"><div class="flex justify-center gap-1">
+                        <button type="button" onclick="openUserModal('${esc(u.id)}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>
+                        ${u.id !== me?.id ? `<button type="button" onclick="toggleUser('${esc(u.id)}')" title="${u.active ? 'إيقاف' : 'تفعيل'}" aria-label="${u.active ? 'إيقاف' : 'تفعيل'}" class="${BTN_ICON} text-slate-500 hover:text-amber-600 hover:bg-amber-50"><i class="fa-solid ${u.active ? 'fa-user-lock' : 'fa-user-check'}"></i></button>
+                        <button type="button" onclick="deleteUser('${esc(u.id)}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                    </div></td>
+                </tr>`).join('');
+            return `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="overflow-x-auto"><table class="w-full text-right text-sm">
+                    <thead class="bg-slate-50 text-slate-600 text-xs font-bold border-b border-slate-200">
+                        <tr><th class="py-3 px-4">المستخدم</th><th class="py-3 px-4">اسم الدخول</th><th class="py-3 px-4">الدور</th><th class="py-3 px-4">الحالة</th><th class="py-3 px-4">آخر دخول</th><th class="py-3 px-4 text-center">إجراءات</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">${rows || '<tr><td colspan="6" class="py-8 text-center text-slate-400">لا يوجد مستخدمون</td></tr>'}</tbody>
+                </table></div></div>`;
+        }
+
+        function rolesHtml() {
+            const cards = Object.values(appData.roles).map(r => {
+                const users = appData.users.filter(u => u.roleId === r.id).length;
+                return `<article class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col gap-3">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <h3 class="font-bold text-lg truncate">${esc(r.name)}</h3>
+                            <p class="text-xs text-slate-500">${users} مستخدم · ${r.permissions.length} صلاحية</p>
+                        </div>
+                        ${r.locked ? '<span class="text-[11px] px-2 py-1 rounded-full bg-violet-100 text-violet-700 font-semibold shrink-0"><i class="fa-solid fa-lock"></i> أساسي</span>' : ''}
+                    </div>
+                    <div class="flex flex-wrap gap-1.5">
+                        ${r.permissions.slice(0, 6).map(p => `<span class="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">${esc(PERM_LABELS[p] || p)}</span>`).join('')}
+                        ${r.permissions.length > 6 ? `<span class="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-500">+${r.permissions.length - 6}</span>` : ''}
+                    </div>
+                    ${can('users.manage') ? `<div class="mt-auto pt-3 border-t border-slate-100 flex gap-2">
+                        ${btnSmall(`openRoleModal('${esc(r.id)}')`, r.locked ? 'عرض الصلاحيات' : 'تعديل الصلاحيات', 'fa-shield-halved', BTN_SECONDARY)}
+                        ${!r.locked ? btnSmall(`deleteRole('${esc(r.id)}')`, 'حذف', 'fa-trash-can', 'px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-sm font-medium flex items-center gap-2') : ''}
+                    </div>` : ''}
+                </article>`;
+            }).join('');
+            return `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">${cards}</div>`;
+        }
+
+        function btnSmall(onclick, label, icon, cls) {
+            return `<button type="button" onclick="${onclick}" class="${cls} text-sm"><i class="fa-solid ${icon}"></i> ${label}</button>`;
+        }
+
+        function permCheckboxes(selected, disabled) {
+            return PERMISSION_GROUPS.map(g => `
+                <fieldset class="border border-slate-200 rounded-xl p-3">
+                    <legend class="px-1 text-xs font-bold text-slate-700">${g.title}</legend>
+                    <div class="grid sm:grid-cols-2 gap-2 mt-1">
+                        ${g.items.map(([k, label]) => `
+                            <label class="flex items-center gap-2 text-sm cursor-pointer">
+                                <input type="checkbox" name="perm" value="${k}" ${selected.includes(k) ? 'checked' : ''} ${disabled ? 'disabled' : ''} class="w-4 h-4 accent-brand-600">
+                                ${label}
+                            </label>`).join('')}
+                    </div>
+                </fieldset>`).join('');
+        }
+
+        function openRoleModal(roleId = null) {
+            if (!can('users.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const role = roleId ? appData.roles[roleId] : null;
+            if (roleId && !role) return;
+            const locked = !!(role && role.locked);
+            openModal({
+                title: role ? (locked ? 'صلاحيات مدير النظام' : 'تعديل الدور') : 'إضافة دور جديد',
+                size: 'lg',
+                submitText: 'حفظ الدور',
+                onSubmit: locked ? null : (fd) => {
+                    const name = String(fd.get('name') || '').trim();
+                    if (!name) return toast('اكتب اسم الدور', 'error'), false;
+                    const perms = fd.getAll('perm').filter(p => ALL_PERMS.includes(p));
+                    const roles = JSON.parse(JSON.stringify(appData.roles));
+                    if (role) roles[role.id].permissions = perms;
+                    const nextRoles = { ...roles };
+                    if (role) {
+                        nextRoles[role.id] = { ...nextRoles[role.id], name, permissions: perms };
+                        if (countUsersWithPerm(appData.users, nextRoles, 'users.manage') === 0) {
+                            return toast('لازم يفضل مستخدم واحد على الأقل يقدر يدير المستخدمين', 'error'), false;
+                        }
+                        appData.roles[role.id].name = name;
+                        appData.roles[role.id].permissions = perms;
+                        log('تعديل دور', name);
+                    } else {
+                        const id = uid('role-');
+                        appData.roles[id] = { id, name, locked: false, permissions: perms };
+                        log('إضافة دور', name);
+                    }
+                    saveState();
+                    toast('تم حفظ الدور', 'success');
+                    render();
+                },
+                body: `
+                    ${field('اسم الدور *', `<input name="name" required value="${esc(role ? role.name : '')}" ${locked ? 'disabled' : ''} class="${INPUT_CLS}">`)}
+                    ${locked ? '<p class="text-xs text-violet-700 bg-violet-50 rounded-lg p-3">هذا الدور أساسي ويملك كل الصلاحيات دائماً ولا يمكن تعديله.</p>' : ''}
+                    <div class="space-y-3">${permCheckboxes(role ? role.permissions : ['dashboard.view'], locked)}</div>`
+            });
+            if (locked) el('modalForm').querySelectorAll('input').forEach(i => i.disabled = true);
+        }
+
+        function deleteRole(roleId) {
+            if (!can('users.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const role = appData.roles[roleId];
+            if (!role || role.locked) return;
+            if (appData.users.some(u => u.roleId === roleId)) {
+                return toast('لا يمكن حذف دور مرتبط بمستخدمين. انقل المستخدمين لدور آخر أولاً', 'error', null, 5000);
+            }
+            if (!confirm(`حذف الدور "${role.name}"؟`)) return;
+            delete appData.roles[roleId];
+            log('حذف دور', role.name);
+            toast('تم حذف الدور', 'success');
+            render();
+        }
+
+        function openUserModal(userId = null) {
+            if (!can('users.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const user = userId ? appData.users.find(u => u.id === userId) : null;
+            if (userId && !user) return;
+            editingUserId = userId;
+            const me = currentUser();
+            const isSelf = !!user && user.id === me?.id;
+            const roleOpts = Object.values(appData.roles).map(r =>
+                `<option value="${esc(r.id)}" ${user && user.roleId === r.id ? 'selected' : (!user && r.id === 'viewer' ? 'selected' : '')}>${esc(r.name)}</option>`).join('');
+
+            openModal({
+                title: user ? 'تعديل مستخدم' : 'إضافة مستخدم جديد',
+                submitText: user ? 'حفظ التعديلات' : 'إضافة المستخدم',
+                body: `
+                    ${field('الاسم الكامل *', `<input name="name" required value="${esc(user?.name)}" class="${INPUT_CLS}">`)}
+                    ${user
+                        ? field('البريد الإلكتروني', `<input value="${esc(user.email)}" disabled dir="ltr" class="${INPUT_CLS} bg-slate-50">`)
+                        : field('البريد الإلكتروني *', `<input name="email" type="email" required dir="ltr" class="${INPUT_CLS}">`, 'يُستخدم لتسجيل الدخول')}
+                    ${field('الدور *', `<select name="roleId" required ${isSelf ? 'disabled' : ''} class="${INPUT_CLS}">${roleOpts}</select>`)}
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="active" ${!user || user.active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} class="w-4 h-4 accent-brand-600"> الحساب فعّال
+                    </label>
+                    ${user ? `
+                        <button type="button" onclick="sendUserReset('${esc(user.id)}')" class="${BTN_SECONDARY} w-full">
+                            <i class="fa-solid fa-envelope"></i> إرسال رابط تغيير كلمة المرور للمستخدم
+                        </button>` : `
+                        ${field('كلمة المرور المؤقتة *', `<input name="password" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`, '6 أحرف على الأقل. المستخدم يغيّرها من "حسابي"')}
+                        ${field('تأكيد كلمة المرور *', `<input name="password2" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`)}`}
+                    ${isSelf ? '<p class="text-xs text-slate-500">لا يمكنك تعطيل حسابك أو تغيير دورك بنفسك.</p>' : ''}`,
+                onSubmit: async fd => {
+                    const name = String(fd.get('name') || '').trim();
+                    const email = user ? user.email : String(fd.get('email') || '').trim().toLowerCase();
+                    const roleId = isSelf ? user.roleId : String(fd.get('roleId') || '');
+                    const active = isSelf ? true : fd.get('active') === 'on';
+                    const pw = String(fd.get('password') || '');
+                    const pw2 = String(fd.get('password2') || '');
+
+                    if (!name) return toast('اكتب الاسم الكامل', 'error'), false;
+                    if (!user && !EMAIL_RE.test(email)) return toast('اكتب بريد إلكتروني صحيح', 'error'), false;
+                    if (!user && appData.users.some(u => u.email === email)) return toast('البريد ده مستخدم قبل كده', 'error'), false;
+                    if (!appData.roles[roleId]) return toast('اختر دوراً صحيحاً', 'error'), false;
+                    if (!user && pw.length < 6) return toast('كلمة المرور لازم تكون 6 أحرف على الأقل', 'error'), false;
+                    if (!user && pw !== pw2) return toast('كلمتا المرور غير متطابقتين', 'error'), false;
+
+                    // at least one active user must keep users.manage
+                    const hypothetical = appData.users.map(u => u.id === userId ? { ...u, roleId, active } : u);
+                    if (countUsersWithPerm(hypothetical, appData.roles, 'users.manage') === 0) {
+                        return toast('لازم يفضل مستخدم فعّال واحد على الأقل يقدر يدير المستخدمين', 'error'), false;
+                    }
+
+                    if (user) {
+                        Object.assign(user, { name, roleId, active });
+                        log('تعديل مستخدم', name);
+                    } else {
+                        let uid;
+                        try {
+                            uid = await createAuthAccount(email, pw);
+                        } catch (err) {
+                            console.error(err);
+                            return toast(authErrorMessage(err), 'error', null, 5000), false;
+                        }
+                        appData.users.push({ id: uid, name, email, roleId, active, createdAt: new Date().toISOString(), lastLoginAt: null });
+                        log('إضافة مستخدم', `${name} (${roleName(roleId)})`);
+                    }
+                    saveState();
+                    toast(user ? 'تم حفظ التعديلات' : 'تمت إضافة المستخدم', 'success');
+                    render();
+                }
+            });
+        }
+
+        function toggleUser(userId) {
+            if (!can('users.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const u = appData.users.find(x => x.id === userId);
+            if (!u || u.id === currentUser()?.id) return;
+            const hypothetical = appData.users.map(x => x.id === userId ? { ...x, active: !x.active } : x);
+            if (countUsersWithPerm(hypothetical, appData.roles, 'users.manage') === 0) {
+                return toast('لازم يفضل مستخدم فعّال واحد على الأقل يقدر يدير المستخدمين', 'error');
+            }
+            u.active = !u.active;
+            log(u.active ? 'تفعيل مستخدم' : 'إيقاف مستخدم', u.name);
+            saveState();
+            toast(u.active ? 'تم تفعيل الحساب' : 'تم إيقاف الحساب', 'success');
+            render();
+        }
+
+        function deleteUser(userId) {
+            if (!can('users.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const idx = appData.users.findIndex(u => u.id === userId);
+            if (idx < 0 || userId === currentUser()?.id) return;
+            const u = appData.users[idx];
+            const hypothetical = appData.users.filter(x => x.id !== userId);
+            if (countUsersWithPerm(hypothetical, appData.roles, 'users.manage') === 0) {
+                return toast('لازم يفضل مستخدم فعّال واحد على الأقل يقدر يدير المستخدمين', 'error');
+            }
+            finalizePendingUndo();
+            appData.users.splice(idx, 1);
+            saveState();
+            render();
+            scheduleUndo(`تم حذف المستخدم "${u.name}"`,
+                () => { appData.users.splice(Math.min(idx, appData.users.length), 0, u); saveState(); render(); },
+                () => log('حذف مستخدم', u.name));
+        }
+
+        // ---------- Logs ----------
+        function viewLogs() {
+            return {
+                title: 'سجل النشاط',
+                actions: '',
+                html: `
+                    <div class="bg-white p-3 sm:p-4 rounded-xl border border-slate-200">
+                        <div class="relative w-full sm:w-96">
+                            <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                            <input type="search" id="logSearch" oninput="renderLogs()" placeholder="بحث بالمستخدم أو الإجراء..." class="${INPUT_CLS} pr-9">
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div class="overflow-x-auto"><table class="w-full text-right text-sm">
+                            <thead class="bg-slate-50 text-slate-600 text-xs font-bold border-b border-slate-200">
+                                <tr><th class="py-3 px-4 whitespace-nowrap">الوقت</th><th class="py-3 px-4">المستخدم</th><th class="py-3 px-4">الإجراء</th><th class="py-3 px-4">التفاصيل</th></tr>
+                            </thead>
+                            <tbody id="logBody" class="divide-y divide-slate-100"></tbody>
+                        </table></div>
+                    </div>`,
+                after: renderLogs
+            };
+        }
+
+        function renderLogs() {
+            const body = el('logBody');
+            if (!body) return;
+            const q = (el('logSearch')?.value || '').trim().toLowerCase();
+            const list = appData.logs.filter(l => !q || `${l.user} ${l.action} ${l.detail}`.toLowerCase().includes(q)).slice(0, 300);
+            body.innerHTML = list.map(l => `<tr class="hover:bg-slate-50">
+                <td class="py-3 px-4 text-xs text-slate-500 whitespace-nowrap">${fmtDateTime(l.t)}</td>
+                <td class="py-3 px-4 font-semibold whitespace-nowrap">${esc(l.user)}</td>
+                <td class="py-3 px-4">${esc(l.action)}</td>
+                <td class="py-3 px-4 text-slate-500">${esc(l.detail)}</td></tr>`).join('')
+                || '<tr><td colspan="4" class="py-8 text-center text-slate-400">لا توجد نتائج</td></tr>';
+        }
+
+        // ---------- Settings ----------
+        function viewSettings() {
+            const s = appData.settings;
+            const canSys = can('settings.manage');
+            const canBackup = can('backup.manage');
+            const logo = s.logo
+                ? `<img id="sysLogoPreview" src="${esc(s.logo)}" class="w-20 h-20 rounded-xl object-contain bg-white border border-slate-200">`
+                : `<img id="sysLogoPreview" class="hidden w-20 h-20 rounded-xl object-contain bg-white border border-slate-200">`;
+
+            const identity = canSys ? `
+                <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                    <h3 class="font-bold text-lg mb-1">هوية النظام</h3>
+                    <p class="text-xs text-slate-500 mb-4">الاسم والشعار اللي بيظهروا في الشريط الجانبي وشاشة الدخول.</p>
+                    <form onsubmit="saveSettings(event)" class="space-y-4">
+                        ${field('اسم النظام', `<input name="systemName" required value="${esc(s.systemName)}" class="${INPUT_CLS}">`)}
+                        <div>
+                            <span class="block text-xs font-bold text-slate-700 mb-1">شعار النظام</span>
+                            <div class="flex items-center gap-3">
+                                ${logo}
+                                <div class="flex flex-wrap gap-2">
+                                    <label class="${BTN_SECONDARY} cursor-pointer"><i class="fa-solid fa-image"></i> اختيار صورة<input type="file" accept="image/*" class="hidden" onchange="onImagePicked(this, 'system')"></label>
+                                    <button type="button" onclick="removeLogo('system')" class="${BTN_SECONDARY}"><i class="fa-solid fa-trash-can"></i> إزالة</button>
+                                </div>
+                            </div>
+                        </div>
+                        ${field('مدة تنبيه انتهاء اللستات (بالأيام)', `<input name="expiryDays" type="number" min="1" max="365" required value="${s.expiryDays}" class="${INPUT_CLS} max-w-[12rem]">`)}
+                        <div class="flex justify-end"><button type="submit" class="${BTN_PRIMARY}"><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>
+                    </form>
+                </section>` : '';
+
+            const backup = canBackup ? `
+                <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                    <h3 class="font-bold text-lg mb-1">النسخ الاحتياطي</h3>
+                    <p class="text-xs text-slate-500 mb-4">النسخة بتشمل الشركات واللستات والمستخدمين والأدوار وسجل النشاط. ملفات PDF المرفوعة لا تدخل فيها. احفظ الملف في مكان آمن لأنه بيحتوي على بيانات الدخول (مشفّرة).</p>
+                    <div class="flex flex-wrap gap-2">
+                        ${btn('exportBackup()', 'تنزيل نسخة احتياطية', 'fa-download', BTN_PRIMARY)}
+                        ${btn("el('backupFileInput').click()", 'استعادة من ملف', 'fa-upload', BTN_SECONDARY)}
+                    </div>
+                </section>` : '';
+
+            const account = `
+                <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                    <h3 class="font-bold text-lg mb-1">حسابي</h3>
+                    <p class="text-xs text-slate-500 mb-4">تغيير كلمة المرور الخاصة بك.</p>
+                    ${btn('openAccountModal()', 'تغيير كلمة المرور', 'fa-key', BTN_SECONDARY)}
+                </section>`;
+
+            const logs = can('settings.manage') ? `
+                <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                    <h3 class="font-bold text-lg mb-1">سجل النشاط</h3>
+                    <p class="text-xs text-slate-500 mb-4">عدد السجلات الحالية: ${appData.logs.length}</p>
+                    ${btn('clearLogs()', 'مسح السجل', 'fa-eraser', 'px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium flex items-center gap-2')}
+                </section>` : '';
+
+            const danger = canSys ? `
+                <section class="bg-white rounded-2xl border border-rose-200 p-5 sm:p-6 shadow-sm">
+                    <h3 class="font-bold text-lg text-rose-700 mb-1">منطقة الخطر</h3>
+                    <p class="text-xs text-slate-500 mb-4">إعادة ضبط كاملة للنظام: بتمسح كل الشركات واللستات والمستخدمين وملفات PDF. لا يمكن التراجع.</p>
+                    ${btn('resetAllData()', 'إعادة ضبط النظام بالكامل', 'fa-triangle-exclamation', 'px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium flex items-center gap-2')}
+                </section>` : '';
+
+            return {
+                title: 'الإعدادات',
+                actions: '',
+                html: `<div class="grid gap-4 lg:grid-cols-2 items-start">${identity}${backup}${account}${logs}${danger}</div>`
+            };
+        }
+
+        function saveSettings(e) {
+            e.preventDefault();
+            if (!can('settings.manage')) return;
+            const fd = new FormData(e.target);
+            const name = String(fd.get('systemName') || '').trim();
+            const days = parseInt(fd.get('expiryDays'), 10);
+            if (!name) return toast('اكتب اسم النظام', 'error');
+            if (!(days >= 1 && days <= 365)) return toast('مدة التنبيه لازم تكون بين 1 و 365 يوم', 'error');
+
+            appData.settings.systemName = name;
+            appData.settings.expiryDays = days;
+            if (pendingSysLogo !== undefined) appData.settings.logo = pendingSysLogo || '';
+            pendingSysLogo = undefined;
+            log('تعديل الإعدادات');
+            toast('تم حفظ الإعدادات', 'success');
+            render();
+        }
+
+
+
+        async function clearLogs() {
+            if (!can('settings.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            if (!confirm('مسح كل سجل النشاط؟')) return;
+            try {
+                await deleteAllLogs();
+            } catch (err) {
+                console.error(err);
+                toast('تعذر مسح السجل من السيرفر', 'error');
+                return;
+            }
+            appData.logs = [];
+            log('مسح سجل النشاط');
+            render();
+        }
+
+        async function resetAllData() {
+            if (!can('settings.manage')) return;
+            const typed = prompt('تحذير: هيتم مسح كل الشركات واللستات وسجل النشاط نهائياً.\nالمستخدمين والصلاحيات والإعدادات لا تتأثر.\nاكتب "حذف الكل" للتأكيد:');
+            if (typed !== 'حذف الكل') return;
+            finalizePendingUndo();
+            const pdfIds = appData.companies.flatMap(c => c.lists.filter(l => l.hasPdf).map(l => l.id));
+            appData.companies = sampleCompanies();
+            appData.logs = [];
+            saveState();
+            pdfIds.forEach(id => pdfRemove(id));
+            try { await deleteAllLogs(); } catch (err) { console.error(err); }
+            log('إعادة ضبط البيانات');
+            toast('تمت إعادة الضبط إلى البيانات الأولية', 'success');
+            render();
+        }
+
+        async function openPdfFile(listId) {
+            const found = findList(listId);
+            if (!found) return;
+            const { l } = found;
+
+            if (l.hasPdf) {
+                const win = window.open('', '_blank');
+                try {
+                    const url = await pdfRef(l.id).getDownloadURL();
+                    if (win) win.location.href = url; else window.open(url, '_blank', 'noopener');
+                } catch (err) {
+                    console.error(err);
+                    if (win) win.close();
+                    toast('تعذر فتح الملف المرفق. اضغط تعديل وارفع الملف مرة أخرى', 'error', null, 5000);
+                }
+                return;
+            }
+            if (/^https?:\/\//i.test(l.pdfFile || '')) {
+                window.open(l.pdfFile, '_blank', 'noopener');
+                return;
+            }
+            toast('لم يتم رفع ملف PDF لهذه اللستة بعد. اضغط تعديل ثم "اختيار ملف PDF"', 'info', null, 5000);
+        }
+
+        function exportBackup() {
+            if (!can('backup.manage')) return;
+            const payload = {
+                app: 'factory-lists', version: 5, exportedAt: new Date().toISOString(),
+                note: 'الشركات واللستات والإعدادات فقط. ملفات PDF والمستخدمين والصلاحيات لا تدخل النسخة.',
+                data: { settings: appData.settings, companies: appData.companies }
+            };
+            downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `نسخة-احتياطية-${todayISO()}.json`);
+            log('نسخ احتياطي');
+            toast('تم تنزيل النسخة الاحتياطية. ملفات PDF لا تدخل فيها', 'success', null, 6000);
+        }
+
+        function restoreBackup(event) {
+            const file = event.target.files[0];
+            event.target.value = '';
+            if (!file || !can('backup.manage')) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                let companies;
+                let settings;
+                try {
+                    const parsed = JSON.parse(reader.result);
+                    const src = parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+                    companies = src && (Array.isArray(src.companies) ? src.companies : (Array.isArray(src.factories) ? src.factories : null));
+                    if (!companies) throw new Error('invalid');
+                    settings = src.settings || {};
+                } catch (err) {
+                    return toast('ملف النسخة الاحتياطية غير صالح', 'error');
+                }
+                const count = companies.reduce((n, c) => n + (Array.isArray(c.lists) ? c.lists.length : 0), 0);
+                if (!confirm(`سيتم استبدال كل الشركات واللستات والإعدادات بالنسخة المختارة (${companies.length} شركة، ${count} لستة).\nالمستخدمين والصلاحيات وسجل النشاط لا يتغيروا.\nهل تريد المتابعة؟`)) return;
+
+                finalizePendingUndo();
+                const restored = normalizeData({ settings, companies, roles: {}, users: [], logs: [] });
+                appData.companies = restored.companies;
+                appData.settings = restored.settings;
+                saveState();
+                log('استعادة نسخة احتياطية', `${companies.length} شركة، ${count} لستة`);
+                toast('تمت استعادة البيانات بنجاح', 'success');
+                render();
+            };
+            reader.readAsText(file);
+        }
+
+        function onPdfPicked(event) {
+            const file = event.target.files && event.target.files[0];
+            event.target.value = '';
+            if (!file) return;
+            if (!(file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) return toast('من فضلك اختر ملف PDF فقط', 'error');
+            if (file.size > 15 * 1024 * 1024) return toast('الملف أكبر من 15 ميجا. صغّره أو استخدم رابطاً', 'error', null, 5000);
+            pendingPdfFile = file;
+            pendingRemovePdf = false;
+            refreshPdfPreview();
+        }
+
+        async function saveListFromForm(fd) {
+            if (!can('lists.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const target = findCompany(String(fd.get('companyId') || ''));
+            if (!target) return toast('اختر شركة صحيحة', 'error'), false;
+
+            const name = String(fd.get('name') || '').trim();
+            const discounts = [1, 2, 3].map(n => parseFloat(fd.get('d' + n)) || 0);
+            const startDate = String(fd.get('start') || '');
+            const endDate = String(fd.get('end') || '');
+            const urlValue = String(fd.get('pdfUrl') || '').trim();
+
+            if (!name) return toast('اكتب اسم اللستة', 'error'), false;
+            if (discounts.some(d => d < 0 || d > 100)) return toast('نسب الخصم لازم تكون بين 0 و 100', 'error'), false;
+            if (!startDate || !endDate) return toast('حدد تاريخ البداية والنهاية', 'error'), false;
+            if (endDate < startDate) return toast('تاريخ النهاية لازم يكون بعد تاريخ البداية أو نفس اليوم', 'error'), false;
+
+            const found = editingListId ? findList(editingListId) : null;
+            const listId = found ? found.l.id : uid('LST-');
+
+            let pdfState;
+            try {
+                if (pendingPdfFile) {
+                    toast('جارٍ رفع ملف PDF...', 'info', null, 2500);
+                    await pdfUpload(listId, pendingPdfFile);
+                    pdfState = { hasPdf: true, pdfFile: pendingPdfFile.name };
+                } else if (pendingRemovePdf) {
+                    await pdfRemove(listId);
+                    pdfState = { hasPdf: false, pdfFile: urlValue };
+                } else if (found && found.l.hasPdf) {
+                    pdfState = { hasPdf: true, pdfFile: found.l.pdfFile };
+                } else {
+                    pdfState = { hasPdf: false, pdfFile: urlValue };
+                }
+            } catch (err) {
+                console.error(err);
+                toast('تعذر رفع ملف PDF. تأكد من الاتصال وإن الملف أقل من 15 ميجا', 'error', null, 6000);
+                return false;
+            }
+
+            const data = { id: listId, name, discount1: discounts[0], discount2: discounts[1], discount3: discounts[2], startDate, endDate, ...pdfState };
+
+            if (found) {
+                if (found.c.id !== target.id) {
+                    found.c.lists = found.c.lists.filter(x => x.id !== listId);
+                    target.lists.unshift(data);
+                } else {
+                    Object.assign(found.l, data);
+                }
+                log('تعديل لستة', `${name} - ${target.name}`);
+                toast('تم تحديث اللستة', 'success');
+            } else {
+                target.lists.unshift(data);
+                log('إضافة لستة', `${name} - ${target.name}`);
+                toast('تمت إضافة اللستة', 'success');
+            }
+
+            pendingPdfFile = null;
+            pendingRemovePdf = false;
+            saveState();
+            editingListId = null;
+            navigate(currentRouteName());
+            return true;
+        }
+
+        // ============ COMPANY MODAL ============
+        function openCompanyModal(companyId = null) {
+            if (!can('companies.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const c = companyId ? findCompany(companyId) : null;
+            if (companyId && !c) return;
+            editingCompanyId = companyId;
+            pendingLogo = undefined;
+
+            openModal({
+                title: c ? 'تعديل بيانات الشركة' : 'إضافة شركة / مصنع',
+                submitText: c ? 'حفظ التعديلات' : 'إضافة الشركة',
+                body: `
+                    <div>
+                        <span class="block text-xs font-bold text-slate-700 mb-2">شعار الشركة</span>
+                        <div class="flex items-center gap-4">
+                            <div class="w-20 h-20 shrink-0 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center overflow-hidden">
+                                <img id="logoPreview" src="${c?.logo ? esc(c.logo) : ''}" class="${c?.logo ? '' : 'hidden'} w-full h-full object-contain">
+                                <i id="logoEmpty" class="${c?.logo ? 'hidden' : ''} fa-solid fa-image text-2xl text-slate-300"></i>
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <label class="${BTN_SECONDARY} cursor-pointer"><i class="fa-solid fa-upload"></i> رفع شعار<input type="file" accept="image/*" class="hidden" onchange="onImagePicked(this, 'company')"></label>
+                                <button type="button" onclick="removeLogo('company')" class="${BTN_SECONDARY}"><i class="fa-solid fa-trash-can"></i> إزالة</button>
+                            </div>
+                        </div>
+                        <p class="text-[11px] text-slate-400 mt-2">PNG أو JPG، وهيتعدل تلقائياً لحجم مناسب.</p>
+                    </div>
+                    ${field('اسم الشركة / المصنع *', `<input name="name" required value="${esc(c?.name)}" placeholder="مثال: مصنع بريما" class="${INPUT_CLS}">`)}
+                    ${field('اسم الوكيل / التاجر *', `<input name="agent" required value="${esc(c?.agent)}" placeholder="مثال: وكالة بريما" class="${INPUT_CLS}">`)}
+                    ${field('ملاحظات', `<textarea name="notes" rows="3" class="${INPUT_CLS}" placeholder="أي تفاصيل إضافية...">${esc(c?.notes)}</textarea>`)}`,
+                onSubmit: fd => {
+                    const name = String(fd.get('name') || '').trim();
+                    const agent = String(fd.get('agent') || '').trim();
+                    const notes = String(fd.get('notes') || '').trim();
+                    if (!name || !agent) return toast('اكتب اسم الشركة واسم الوكيل', 'error'), false;
+
+                    if (c) {
+                        Object.assign(c, { name, agent, notes });
+                        if (pendingLogo !== undefined) c.logo = pendingLogo || '';
+                        log('تعديل شركة', name);
+                        toast('تم حفظ التعديلات', 'success');
+                        saveState();
+                        navigate('companies/' + c.id);
+                    } else {
+                        const newC = { id: uid('FAC-'), name, agent, notes, logo: pendingLogo || '', lists: [] };
+                        appData.companies.push(newC);
+                        log('إضافة شركة', name);
+                        toast('تمت إضافة الشركة', 'success');
+                        saveState();
+                        navigate('companies');
+                    }
+                    pendingLogo = undefined;
+                }
+            });
+        }
+
+        // Soft delete company (with undo)
+        function deleteCompany(id) {
+            if (!can('companies.delete')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const idx = appData.companies.findIndex(c => c.id === id);
+            if (idx < 0) return;
+            finalizePendingUndo();
+            const c = appData.companies[idx];
+            appData.companies.splice(idx, 1);
+            saveState();
+            log('حذف شركة', c.name);
+            if (currentCompanyId() === id) navigate('companies'); else render();
+
+            scheduleUndo(`تم حذف "${c.name}"`,
+                () => {
+                    appData.companies.splice(Math.min(idx, appData.companies.length), 0, c);
+                    saveState();
+                    log('استعادة شركة', c.name);
+                    render();
+                },
+                async () => {
+                    for (const l of c.lists) {
+                        if (l.hasPdf) await pdfRemove(l.id);
+                    }
+                });
+        }
+
+        // ============ LIST MODAL ============
+        function listDuplicateDefaults(source) {
+            const duration = daysBetween(source.startDate, source.endDate);
+            const start = addDays(source.endDate, 1) || todayISO();
+            const end = duration !== null && duration >= 0 ? addDays(start, duration) : addDays(start, 365);
+            return { start, end: end || '' };
+        }
+
+        function openListModal({ listId = null, companyId = null, sourceId = null } = {}) {
+            if (!can('lists.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const base = listId ? findList(listId) : null;
+            const source = sourceId ? findList(sourceId) : null;
+            if (listId && !base) return;
+
+            editingListId = listId;
+            pendingPdfFile = null;
+            pendingRemovePdf = false;
+
+            const selectedCompany = base?.c.id || companyId || source?.c.id || currentCompanyId() || appData.companies[0]?.id || '';
+            const v = base?.l || (source ? { ...source.l } : null);
+            const dup = source && !base ? listDuplicateDefaults(source.l) : null;
+            const title = base ? 'تعديل لستة الخصم' : (source ? 'لستة جديدة (نسخة من لستة سابقة)' : 'إضافة لستة خصم جديدة');
+
+            if (!appData.companies.length) return toast('أضف شركة أولاً قبل إضافة لستة', 'error');
+
+            openModal({
+                title,
+                size: 'lg',
+                submitText: base ? 'حفظ اللستة' : 'إضافة اللستة',
+                body: `
+                    ${field('الشركة / المصنع *', `<select name="companyId" required class="${INPUT_CLS}">
+                        ${appData.companies.map(c => `<option value="${esc(c.id)}" ${c.id === selectedCompany ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+                    </select>`)}
+                    ${field('اسم اللستة *', `<input name="name" required value="${esc(v ? (source && !base ? `${source.l.name} (نسخة)` : v.name) : '')}" placeholder="مثال: لستة نوفمبر 01" class="${INPUT_CLS}">`)}
+                    <div class="grid grid-cols-3 gap-2 sm:gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        ${[1, 2, 3].map(n => `<div class="min-w-0">
+                            <label class="block text-[11px] sm:text-xs font-bold text-slate-700 mb-1">خصم ${n} (%)</label>
+                            <input type="number" step="0.01" min="0" max="100" inputmode="decimal" name="d${n}" value="${v?.[`discount${n}`] || ''}" oninput="previewDiscount()" class="w-full px-2 py-2 sm:py-1.5 border border-slate-200 rounded-lg text-sm font-semibold text-center focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white">
+                        </div>`).join('')}
+                        <div class="col-span-3 pt-2 border-t border-slate-200 flex justify-between items-center gap-2 text-xs text-slate-600">
+                            <span>الصافي الفعلي بعد الخصم التراكمي:</span>
+                            <span id="effPreview" class="font-bold text-emerald-600 text-sm whitespace-nowrap">0.00%</span>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('تاريخ البداية *', `<input type="date" name="start" required value="${esc(v ? v.startDate : (dup ? dup.start : todayISO()))}" class="${INPUT_CLS}">`)}
+                        ${field('تاريخ النهاية *', `<input type="date" name="end" required value="${esc(v ? v.endDate : (dup ? dup.end : ''))}" class="${INPUT_CLS}">`)}
+                    </div>
+                    <div class="space-y-2">
+                        <span class="block text-xs font-bold text-slate-700">ملف PDF للوحة</span>
+                        <div class="flex flex-col sm:flex-row gap-2">
+                            <button type="button" onclick="el('pdfFileInput').click()" class="${BTN_SECONDARY} flex-1"><i class="fa-solid fa-paperclip"></i> اختيار ملف PDF</button>
+                            <button type="button" id="pdfRemoveBtn" onclick="onPdfRemove()" class="hidden px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-sm font-medium flex items-center justify-center gap-2"><i class="fa-solid fa-trash-can"></i> إزالة</button>
+                            <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" class="hidden" onchange="onPdfPicked(event)">
+                        </div>
+                        <p id="pdfSelectedName" class="text-xs text-slate-600 break-all"></p>
+                        <label class="block text-xs text-slate-500 pt-1">أو الصق رابط الملف:</label>
+                        <input type="text" name="pdfUrl" dir="ltr" value="${esc(v && !v.hasPdf && /^https?:\/\//i.test(v.pdfFile || '') ? v.pdfFile : '')}" placeholder="https://..." class="${INPUT_CLS}">
+                        <p class="text-[11px] text-slate-400">الملف المرفوع بيتحفظ في المتصفح ده بس. لفتحه من أي جهاز استخدم رابطاً.</p>
+                    </div>`,
+                onSubmit: saveListFromForm,
+                onOpen: () => { previewDiscount(); refreshPdfPreview(); }
+            });
+        }
+
+        function previewDiscount() {
+            const f = el('modalForm');
+            if (!f || !el('effPreview')) return;
+            const d = [1, 2, 3].map(n => f.elements['d' + n]?.value);
+            el('effPreview').textContent = `${calculateEffectiveDiscount(d[0], d[1], d[2])}%`;
+        }
+
+        function refreshPdfPreview() {
+            const nameEl = el('pdfSelectedName');
+            const removeBtn = el('pdfRemoveBtn');
+            if (!nameEl) return;
+            const found = editingListId ? findList(editingListId) : null;
+            const existing = found?.l;
+            let text = 'لم يتم إرفاق ملف';
+            let hasAny = false;
+
+            if (pendingPdfFile) { text = `ملف جديد سيتم رفعه: ${pendingPdfFile.name}`; hasAny = true; }
+            else if (pendingRemovePdf) text = 'سيتم إزالة المرفق عند الحفظ';
+            else if (existing?.hasPdf) { text = `ملف مرفوع: ${existing.pdfFile}`; hasAny = true; }
+            else if (existing?.pdfFile) {
+                text = /^https?:\/\//i.test(existing.pdfFile) ? `رابط محفوظ: ${existing.pdfFile}` : `اسم ملف بدون رفع: ${existing.pdfFile} (ارفع الملف الآن)`;
+                hasAny = true;
+            }
+            nameEl.textContent = text;
+            removeBtn.classList.toggle('hidden', !hasAny);
+        }
+
+
+        function onPdfRemove() {
+            pendingPdfFile = null;
+            pendingRemovePdf = true;
+            if (el('modalForm')?.elements['pdfUrl']) el('modalForm').elements['pdfUrl'].value = '';
+            refreshPdfPreview();
+        }
+
+
+        function currentRouteName() {
+            return parseRoute().name === 'companies' && parseRoute().param ? 'companies/' + parseRoute().param : parseRoute().name;
+        }
+
+        // Soft delete list (with undo)
+        function deleteList(listId) {
+            if (!can('lists.delete')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const found = findList(listId);
+            if (!found) return;
+            finalizePendingUndo();
+            const { c, l } = found;
+            const idx = c.lists.indexOf(l);
+            c.lists.splice(idx, 1);
+            saveState();
+            log('حذف لستة', `${l.name} - ${c.name}`);
+            render();
+
+            scheduleUndo(`تم حذف اللستة "${l.name}"`,
+                () => {
+                    const comp = findCompany(c.id);
+                    if (!comp) return;
+                    comp.lists.splice(Math.min(idx, comp.lists.length), 0, l);
+                    saveState();
+                    render();
+                },
+                async () => {
+                    if (l.hasPdf) await pdfRemove(l.id);
+                });
+        }
+
+        // ============ ROW MENU (⋮) ============
+        function menuItem(icon, label, handler, danger = false) {
+            return `<button type="button" onclick="closeRowMenu(); ${handler}"
+                        class="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-start hover:bg-slate-50 ${danger ? 'text-rose-600' : 'text-slate-700'}">
+                        <i class="fa-solid ${icon} w-4 text-center"></i>${label}
+                    </button>`;
+        }
+
+        function openRowMenu(button, listId) {
+            const menu = el('rowMenu');
+            if (!menu.classList.contains('hidden') && menu.dataset.listId === listId) { closeRowMenu(); return; }
+            const id = esc(listId);
+            menu.dataset.listId = listId;
+            const items = [
+                menuItem('fa-calculator', 'حاسبة السعر', `openCalculator('${id}')`),
+                menuItem('fa-clipboard', 'نسخ ملخص (واتساب)', `copyListSummary('${id}')`),
+                can('lists.manage') ? menuItem('fa-copy', 'تكرار كلستة جديدة', `openListModal({ sourceId: '${id}' })`) : '',
+                can('lists.delete') ? `<div class="my-1 border-t border-slate-100"></div>` + menuItem('fa-trash-can', 'حذف', `deleteList('${id}')`, true) : ''
+            ];
+            menu.innerHTML = items.join('');
+            menu.classList.remove('hidden');
+            const r = button.getBoundingClientRect();
+            const mh = menu.offsetHeight, mw = menu.offsetWidth;
+            let top = r.bottom + 6;
+            if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+            let left = Math.min(Math.max(8, r.right - mw), window.innerWidth - mw - 8);
+            menu.style.top = top + 'px';
+            menu.style.left = left + 'px';
+        }
+
+        function closeRowMenu() {
+            el('rowMenu')?.classList.add('hidden');
+        }
+
+        document.addEventListener('click', e => {
+            if (!e.target.closest('#rowMenu') && !e.target.closest('[data-menu-btn]')) closeRowMenu();
+        });
+        window.addEventListener('scroll', closeRowMenu, { passive: true });
+        window.addEventListener('resize', closeRowMenu);
+
+        // ============ CALCULATOR ============
+        function openCalculator(listId) {
+            const found = findList(listId);
+            if (!found) return;
+            calcListId = listId;
+            openModal({
+                title: 'حاسبة السعر',
+                size: 'md',
+                submitText: null,
+                body: `
+                    <p class="text-xs text-slate-500 -mt-2 break-words">${esc(found.l.name)} — ${esc(found.c.name)}</p>
+                    ${field('السعر قبل الخصم (ج.م)', `<input id="calcPriceInput" type="number" min="0" step="0.01" inputmode="decimal" placeholder="مثال: 1000" oninput="calcUpdate()" class="${INPUT_CLS}">`)}
+                    <div id="calcRows" class="space-y-2 bg-slate-50 rounded-xl p-3 border border-slate-100"></div>
+                    <div class="bg-emerald-50 rounded-xl p-3 space-y-2 border border-emerald-100">
+                        <div class="flex justify-between items-center gap-2">
+                            <span class="text-sm text-slate-700 font-semibold">السعر النهائي بعد الخصم</span>
+                            <span id="calcFinal" class="font-extrabold text-emerald-700 text-lg whitespace-nowrap">0.00 ج.م</span>
+                        </div>
+                        <div class="flex justify-between items-center gap-2 text-xs text-slate-600">
+                            <span>إجمالي التوفير</span>
+                            <span id="calcSaving" class="font-semibold whitespace-nowrap">0.00 ج.م (0.00%)</span>
+                        </div>
+                    </div>`,
+                onOpen: calcUpdate
+            });
+        }
+
+        function calcUpdate() {
+            const found = calcListId ? findList(calcListId) : null;
+            if (!found || !el('calcRows')) return;
+            const price = parseFloat(el('calcPriceInput').value) || 0;
+            let current = price;
+            const rows = [];
+            [found.l.discount1, found.l.discount2, found.l.discount3].forEach((d, i) => {
+                const v = parseFloat(d) || 0;
+                if (!v) return;
+                current = current * (1 - v / 100);
+                rows.push(`<div class="flex justify-between items-center gap-2 text-sm">
+                    <span class="text-slate-500">بعد خصم ${i + 1} (${v}%)</span>
+                    <span class="font-semibold text-slate-700 whitespace-nowrap">${fmtMoney(current)}</span></div>`);
+            });
+            const saving = price - current;
+            const savingPct = price ? (saving / price) * 100 : 0;
+            el('calcRows').innerHTML = rows.length ? rows.join('') : '<p class="text-sm text-slate-400 text-center">لا توجد خصومات في هذه اللستة</p>';
+            el('calcFinal').textContent = fmtMoney(current);
+            el('calcSaving').textContent = `${fmtMoney(saving)} (${savingPct.toFixed(2)}%)`;
+        }
+
+        // ============ COPY SUMMARY / PDF ============
+        async function copyText(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                toast('تم نسخ الملخص، تقدر تلصقه في واتساب', 'success');
+            } catch (err) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+                ta.remove();
+                toast(ok ? 'تم نسخ الملخص، تقدر تلصقه في واتساب' : 'تعذر النسخ تلقائياً من هذا المتصفح', ok ? 'success' : 'error');
+            }
+        }
+
+        function copyListSummary(listId) {
+            const found = findList(listId);
+            if (!found) return;
+            const { c, l } = found;
+            const st = listState(l);
+            const discounts = [l.discount1, l.discount2, l.discount3].map(d => parseFloat(d) || 0).filter(d => d > 0).map(d => `${d}%`);
+            const lines = [
+                `*${c.name}*${c.agent ? ` - ${c.agent}` : ''}`,
+                `اللستة: ${l.name}`,
+                `الخصومات: ${discounts.length ? discounts.join(' + ') : 'بدون خصم'}`,
+                `صافي الخصم الفعلي: ${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%`,
+                `الفترة: من ${l.startDate} إلى ${l.endDate}`,
+                `الحالة: ${statusLabel(st)}`
+            ];
+            if (l.pdfFile) lines.push(`${l.hasPdf ? 'الملف' : 'الرابط'}: ${l.pdfFile}`);
+            copyText(lines.join('\n'));
+        }
+
+
+        // ============ EXCEL EXPORT / IMPORT ============
+        function exportItems(items, filename) {
+            if (!can('lists.export')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            if (typeof XLSX === 'undefined') return toast('مكتبة الإكسيل غير متاحة. تأكد من الإنترنت', 'error', null, 5000);
+            if (!items.length) return toast('لا توجد لستات لتصديرها', 'error');
+            const rows = items.map(({ c, l }) => ({
+                'المصنع': c.name,
+                'الوكيل': c.agent,
+                'اسم اللستة': l.name,
+                'خصم 1': parseFloat(l.discount1) || 0,
+                'خصم 2': parseFloat(l.discount2) || 0,
+                'خصم 3': parseFloat(l.discount3) || 0,
+                'تاريخ البداية': l.startDate,
+                'تاريخ النهاية': l.endDate,
+                'الحالة': statusLabel(listState(l)),
+                'صافي الخصم الفعلي %': parseFloat(calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)),
+                'الملف': l.pdfFile || ''
+            }));
+            const ws = XLSX.utils.json_to_sheet(rows);
+            ws['!cols'] = Object.keys(rows[0]).map(k => ({ wch: Math.max(14, k.length + 4) }));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'اللستات');
+            wb.Workbook = { Views: [{ RTL: true }] };
+            XLSX.writeFile(wb, filename);
+            log('تصدير إكسيل', `${rows.length} لستة`);
+            toast(`تم تصدير ${rows.length} لستة`, 'success');
+        }
+
+        function exportScope(scope) {
+            const items = filteredItems(scope);
+            const name = scope === 'ls' ? 'كل-اللستات' : `لستات-${findCompany(currentCompanyId())?.name || ''}`;
+            exportItems(items, `${name}-${todayISO()}.xlsx`);
+        }
+
+        function exportAll() {
+            const items = [];
+            appData.companies.forEach(c => c.lists.forEach(l => items.push({ c, l })));
+            exportItems(items, `كل-اللستات-${todayISO()}.xlsx`);
+        }
+
+        function pickValue(row, keys) {
+            for (const k of keys) {
+                if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') return row[k];
+            }
+            return '';
+        }
+
+        function parsePercent(v) {
+            if (v === '' || v === null || v === undefined) return 0;
+            if (typeof v === 'number') return (v > 0 && v < 1) ? +(v * 100).toFixed(4) : v;
+            const n = parseFloat(String(v).replace('%', '').replace(',', '.'));
+            return isNaN(n) ? 0 : n;
+        }
+
+        function normalizeDate(v, fallback) {
+            if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)) return toISODate(v);
+            if (typeof v === 'number' && window.XLSX && XLSX.SSF) {
+                const d = XLSX.SSF.parse_date_code(v);
+                if (d) return `${d.y}-${pad2(d.m)}-${pad2(d.d)}`;
+            }
+            if (typeof v === 'string') {
+                const s = v.trim();
+                let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+                if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+                m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+                if (m) return `${m[3]}-${pad2(m[2])}-${pad2(m[1])}`;
+            }
+            return fallback;
+        }
+
+        function handleExcelImport(event) {
+            const file = event.target.files[0];
+            event.target.value = '';
+            if (!file) return;
+            if (!can('lists.import')) return toast('ليس لديك صلاحية الاستيراد', 'error');
+            if (typeof XLSX === 'undefined') return toast('تعذر تحميل مكتبة الإكسيل. تأكد من الإنترنت', 'error', null, 5000);
+
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+                    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+                    if (rows.length) processImportedExcel(rows);
+                    else toast('الملف لا يحتوي على بيانات قابلة للقراءة', 'error');
+                } catch (err) {
+                    console.error(err);
+                    toast('حدث خطأ أثناء قراءة ملف الإكسيل: ' + err.message, 'error', null, 5000);
+                }
+            };
+            reader.onerror = () => toast('تعذر قراءة الملف', 'error');
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processImportedExcel(rows) {
+            const today = todayISO();
+            const oneYearLater = addDays(today, 365);
+            let imported = 0, skipped = 0, newCompanies = 0;
+
+            rows.forEach(rawRow => {
+                const row = {};
+                Object.keys(rawRow).forEach(k => { row[String(k).trim()] = rawRow[k]; });
+
+                const companyName = String(pickValue(row, ['المصنع', 'اسم المصنع', 'Factory', 'مصنع', 'الشركة'])).trim();
+                if (!companyName) { skipped++; return; }
+
+                const agentName = String(pickValue(row, ['الوكيل', 'التاجر', 'الوكالة', 'Agent'])).trim();
+                const listName = String(pickValue(row, ['اسم اللستة', 'اللستة', 'List Name'])).trim() || 'لستة مستوردة';
+                const d1 = parsePercent(pickValue(row, ['خصم 1', 'نسبة الخصم 1', 'Discount 1']));
+                const d2 = parsePercent(pickValue(row, ['خصم 2', 'نسبة الخصم 2', 'Discount 2']));
+                const d3 = parsePercent(pickValue(row, ['خصم 3', 'نسبة الخصم 3', 'Discount 3']));
+                const startDate = normalizeDate(pickValue(row, ['تاريخ البداية', 'البداية', 'Start Date']), today);
+                const endDate = normalizeDate(pickValue(row, ['تاريخ النهاية', 'النهاية', 'End Date']), oneYearLater);
+
+                let company = appData.companies.find(c => c.name.trim() === companyName);
+                if (!company) {
+                    company = { id: uid('FAC-'), name: companyName, agent: agentName || 'وكيل عام', notes: 'تم الاستيراد من ملف إكسيل', logo: '', lists: [] };
+                    appData.companies.push(company);
+                    newCompanies++;
+                }
+                company.lists.push({
+                    id: uid('LST-'), name: listName, discount1: d1, discount2: d2, discount3: d3,
+                    startDate, endDate, pdfFile: '', hasPdf: false
+                });
+                imported++;
+            });
+
+            log('استيراد إكسيل', `${imported} لستة`);
+            saveState();
+            navigate('lists');
+            let msg = `تم استيراد ${imported} لستة بنجاح${newCompanies ? ` (وإضافة ${newCompanies} شركة جديدة)` : ''}.`;
+            if (skipped) msg += `\nتم تجاهل ${skipped} صف لأن اسم الشركة فارغ.`;
+            toast(msg, 'success', null, 5000);
+        }
+
+        // ============ BACKUP / RESTORE ============
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+
+
+        // ============ KEYBOARD ============
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                closeRowMenu();
+                closeModal();
+                toggleSidebar(false);
+                return;
+            }
+            const a = document.activeElement;
+            const typing = a && (['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) || a.isContentEditable);
+            if (e.key === '/' && !typing && sessionUserId && el('modalHost').classList.contains('hidden')) {
+                const search = document.querySelector('#content input[type=search]');
+                if (search) { e.preventDefault(); search.focus(); }
+            }
+        });
+
+        window.addEventListener('beforeunload', () => finalizePendingUndo());
+
+        // ============ INIT ============
+        document.addEventListener('DOMContentLoaded', async () => {
+            appData = normalizeData(defaultData());   // placeholder until the first sync
+            window.addEventListener('hashchange', render);
+
+            if (!firebaseReady()) {
+                showAuth('login');
+                el('authSubmit').disabled = true;
+                el('authHint').textContent = typeof firebase === 'undefined'
+                    ? 'تعذر تحميل مكتبة Firebase. تأكد من الاتصال بالإنترنت'
+                    : 'Firebase لم يُعد بعد: ضع إعدادات المشروع في FIREBASE_CONFIG';
+                return;
+            }
+
+            try {
+                fbApp = firebase.initializeApp(FIREBASE_CONFIG);
+                fbAuth = firebase.auth();
+                fbDb = firebase.firestore();
+                fbStorage = firebase.storage();
+                fbDb.settings({ experimentalAutoDetectLongPolling: true });
+                if (FIREBASE_EMULATORS) {
+                    fbAuth.useEmulator(FIREBASE_EMULATORS.auth);
+                    fbDb.useEmulator(...FIREBASE_EMULATORS.firestore);
+                    fbStorage.useEmulator(...FIREBASE_EMULATORS.storage);
+                }
+            } catch (err) {
+                console.error(err);
+                showAuth('login');
+                el('authSubmit').disabled = true;
+                el('authHint').textContent = 'تعذر تشغيل Firebase في هذا المتصفح: ' + (err && err.message ? err.message : err);
+                return;
+            }
+            fbDb.enablePersistence({ synchronizeTabs: true }).catch(() => { /* offline cache unavailable: keep working online */ });
+
+            // show a spinner while the server is asked (bounded by the timeout below), then login or setup
+            setAuthLoading('جاري الاتصال بالسيرفر...');
+            fbAuth.onAuthStateChanged(user => { handleFbUser(user); });
+
+            // public information: does the admin exist yet, and the system name/logo for the login screen.
+            // A slow or blocked network must not block the screen, so this has a timeout.
+            const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+            try {
+                const [init, cfg] = await withTimeout(Promise.all([
+                    fbDb.collection('system').doc('init').get(),
+                    fbDb.collection('settings').doc('main').get()
+                ]), 10000);
+                initExists = init.exists;
+                if (cfg.exists) appData.settings = Object.assign(defaultData().settings, cfg.data());
+            } catch (err) {
+                console.error(err);
+                initExists = null;
+                toast('تعذر الاتصال بقاعدة البيانات. تأكد من الإنترنت', 'error', null, 6000);
+            }
+            serverChecked = true;
+            // now the mode is known: show login or setup unless a session has started
+            if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
+        });
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a554f4597a58189a',t:'MTc5MzgwOTMxNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a554f4597a58189a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
