@@ -223,7 +223,7 @@
         let editingCompanyId = null;
         let editingUserId = null;
         let pendingPdfFile = null;
-        let pendingBigPdf = null;          // PDF over 5 MB waiting for compression
+        let pendingBigPdf = null;          // PDF over 8 MB waiting for compression
         let pendingRemovePdf = false;
         let pendingLogo = undefined;      // company logo: undefined = unchanged, null = removed, string = new
         let pendingSysLogo = undefined;   // system logo, same meaning
@@ -1102,10 +1102,10 @@
         }
 
         // ============ PDF FILES (stored in Realtime Database: pdfs/{listId} = { total, chunks: [base64, ...] }) ============
-        // Each chunk keeps 512 KB of the file (about 700 KB as base64). The limit is 5 MB per PDF (10 chunks).
+        // Each chunk keeps 512 KB of the file (about 700 KB as base64). The limit is 8 MB per PDF (16 chunks).
         // The PDF has its own node, so the list screens never download it.
         const PDF_CHUNK_BYTES = 512 * 1024;
-        const PDF_MAX_BYTES = 5 * 1024 * 1024;
+        const PDF_MAX_BYTES = 8 * 1024 * 1024;
 
         function readBytes(file) {
             return new Promise((resolve, reject) => {
@@ -2751,7 +2751,7 @@
                 pendingBigPdf = file;
                 pendingPdfFile = null;
                 pendingRemovePdf = false;
-                toast('الملف أكبر من 5 ميجا. اضغطه بزر "ضغط الملف" وبعدين احفظ', 'info', null, 6000);
+                toast('الملف أكبر من 8 ميجا. اضغطه بزر "ضغط الملف" وبعدين احفظ', 'info', null, 6000);
                 refreshPdfPreview();
                 return;
             }
@@ -2772,7 +2772,7 @@
                 const before = (file.size / 1048576).toFixed(1);
                 const after = (result.bytes.length / 1048576).toFixed(1);
                 if (result.bytes.length > PDF_MAX_BYTES) {
-                    toast(`بعد الضغط الملف لسه ${after} ميجا والحد 5 ميجا. ارفعه على Google Drive وحط الرابط`, 'error', null, 9000);
+                    toast(`بعد الضغط الملف لسه ${after} ميجا والحد 8 ميجا. ارفعه على Google Drive وحط الرابط`, 'error', null, 9000);
                     return;
                 }
                 pendingPdfFile = new File([result.bytes], file.name.replace(/\.pdf$/i, '') + ' (مضغوط).pdf', { type: 'application/pdf' });
@@ -2803,7 +2803,7 @@
             const endDate = String(fd.get('end') || '');
             const urlValue = String(fd.get('pdfUrl') || '').trim();
 
-            if (pendingBigPdf) return toast('الملف لسه أكبر من 5 ميجا. اضغطه الأول أو امسحه', 'error', null, 6000), false;
+            if (pendingBigPdf) return toast('الملف لسه أكبر من 8 ميجا. اضغطه الأول أو امسحه', 'error', null, 6000), false;
             if (!name) return toast('اكتب اسم اللستة', 'error'), false;
             if (discounts.some(d => d < 0 || d > 100)) return toast('نسب الخصم لازم تكون بين 0 و 100', 'error'), false;
             if (!startDate || !endDate) return toast('حدد تاريخ البداية والنهاية', 'error'), false;
@@ -3025,7 +3025,7 @@
             let text = 'لم يتم إرفاق ملف';
             let hasAny = false;
 
-            if (pendingBigPdf) { text = `ملف ${(pendingBigPdf.size / 1048576).toFixed(1)} ميجا: ${pendingBigPdf.name} (أكبر من 5 ميجا، اضغطه الأول)`; hasAny = true; }
+            if (pendingBigPdf) { text = `ملف ${(pendingBigPdf.size / 1048576).toFixed(1)} ميجا: ${pendingBigPdf.name} (أكبر من 8 ميجا، اضغطه الأول)`; hasAny = true; }
             else if (pendingPdfFile) { text = `ملف جديد سيتم رفعه: ${pendingPdfFile.name}`; hasAny = true; }
             else if (pendingRemovePdf) text = 'سيتم إزالة المرفق عند الحفظ';
             else if (existing?.hasPdf) { text = `ملف مرفوع: ${existing.pdfFile}`; hasAny = true; }
@@ -3429,5 +3429,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55828ec4f5ca631',t:'MTc5Mzg0MjkyNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55828ec4f5ca631',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5584a08acf6e192',t:'MTc5Mzg0NDI4MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5584a08acf6e192',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
