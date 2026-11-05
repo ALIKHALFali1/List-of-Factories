@@ -12,8 +12,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 
     <script>
         // if the Tailwind CDN is blocked, skip the config instead of throwing
@@ -134,14 +133,15 @@
         // ============ CONSTANTS ============
         // ============ FIREBASE SETTINGS ============
         // 1) In the Firebase console: create a project, add a Web app and paste its config below.
-        // 2) Enable Authentication (Email/Password), Firestore Database and Storage, then publish the rules from /firebase.
+        // 2) Enable Authentication (Email/Password) and Realtime Database, then publish the rules from /firebase/database.rules.json.
         const FIREBASE_CONFIG = {
             apiKey: 'AIzaSyDspy-JSaVrbQYynpov1_CQkN8Ypm9Y8oU',
             authDomain: 'braided-keel-437500-e7.firebaseapp.com',
             projectId: 'braided-keel-437500-e7',
+            databaseURL: 'https://braided-keel-437500-e7-default-rtdb.europe-west1.firebasedatabase.app',
             storageBucket: 'braided-keel-437500-e7.firebasestorage.app',
             messagingSenderId: '116896506140',
-            appId: '1:116896506140:web:4552021389f7d578511ad9'
+            appId: '1:116896506140:web:582f86025b10006a511ad9'
         };
         // Local emulators, for testing only. Keep null in production.
         const FIREBASE_EMULATORS = null;
@@ -506,10 +506,120 @@
         }
 
         // ============ FIREBASE SYNC ============
-        // appData is the in-memory copy the whole UI works on. It is kept in sync with Firestore:
+        // appData is the in-memory copy the whole UI works on. It is kept in sync with the database:
         //  - incoming: real-time listeners rebuild appData whenever the server data changes
         //  - outgoing: saveState() writes only the documents that changed (batched)
-        let fbApp = null, fbAuth = null, fbDb = null, fbStorage = null;
+        let fbApp = null, fbAuth = null, fbDb = null, rtdb = null;
+
+        // ============ DATABASE LAYER (Firebase Realtime Database) ============
+        // The app talks to the database through the small API below: collection / doc / batch / get / set / delete / onSnapshot.
+        // Paths in the database:
+        //   system/init, settings/main, users/{uid}, roles/{id}, companies/{id}, lists/{id}, logs/{id}, pdfs/{listId}
+        // batch.commit() is one multi-path update(), so a whole batch is written atomically.
+        const DB_CODEC = {
+            // rules check roles/{id}/permissions/{perm} as a map; '_' replaces '.' because RTDB keys cannot contain '.'
+            roles: {
+                encode: d => ({ ...d, permissions: Object.fromEntries((d.permissions || []).map(p => [p.replace(/\./g, '_'), true])) }),
+                decode: d => ({ ...d, permissions: Object.keys(d.permissions || {}).filter(k => d.permissions[k] === true).map(k => k.replace(/_/g, '.')).sort() })
+            }
+        };
+        const dbClean = v => JSON.parse(JSON.stringify(v)); // drops undefined; RTDB treats null as "no value"
+        const dbEncode = (path, data) => {
+            const plain = dbClean(data);
+            const c = DB_CODEC[path.split('/')[0]];
+            return c ? c.encode(plain) : plain;
+        };
+        const dbDecode = (path, val) => {
+            const c = DB_CODEC[path.split('/')[0]];
+            return c ? c.decode(val) : val;
+        };
+        // RTDB reports rule denials as "permission_denied"; the app checks err.code === 'permission-denied'
+        function dbError(err) {
+            if (err && /permission_denied/i.test(String(err.message || err))) {
+                const e = new Error('permission denied');
+                e.code = 'permission-denied';
+                return e;
+            }
+            return err;
+        }
+
+        class DbDoc {
+            constructor(path) { this.path = path; this.id = path.split('/').pop(); }
+            _ref() { return rtdb.ref(this.path); }
+            get() {
+                return this._ref().once('value').then(s => new DbSnap(this.path, s.val()), e => { throw dbError(e); });
+            }
+            set(data) {
+                return this._ref().set(dbEncode(this.path, data)).catch(e => { throw dbError(e); });
+            }
+            update(fields) {
+                return this._ref().update(dbClean(fields)).catch(e => { throw dbError(e); });
+            }
+            delete() {
+                return this._ref().remove().catch(e => { throw dbError(e); });
+            }
+            onSnapshot(next, error) {
+                const r = this._ref();
+                const fn = s => next(new DbSnap(this.path, s.val()));
+                r.on('value', fn, e => { if (error) error(dbError(e)); });
+                return () => r.off('value', fn);
+            }
+        }
+
+        class DbSnap {
+            constructor(path, val) {
+                this.ref = new DbDoc(path);
+                this.id = this.ref.id;
+                this.exists = val !== null && val !== undefined;
+                this._path = path;
+                this._val = val;
+            }
+            data() { return this.exists ? dbDecode(this._path, this._val) : undefined; }
+        }
+
+        class DbCollection {
+            constructor(name, q = {}) { this.name = name; this.q = q; }
+            doc(id) { return new DbDoc(this.name + '/' + id); }
+            orderBy(field, dir = 'asc') { return new DbCollection(this.name, { ...this.q, order: field, dir }); }
+            limit(n) { return new DbCollection(this.name, { ...this.q, limit: n }); }
+            _ref() {
+                let r = rtdb.ref(this.name);
+                if (this.q.order) r = r.orderByChild(this.q.order);
+                if (this.q.limit) r = this.q.order ? r.limitToLast(this.q.limit) : r.limitToFirst(this.q.limit);
+                return r;
+            }
+            _snap(s) {
+                const docs = [];
+                s.forEach(c => { docs.push(new DbSnap(this.name + '/' + c.key, c.val())); });
+                if (this.q.dir === 'desc') docs.reverse();
+                return { size: docs.length, empty: docs.length === 0, docs, forEach: fn => docs.forEach(fn) };
+            }
+            get() {
+                return this._ref().once('value').then(s => this._snap(s), e => { throw dbError(e); });
+            }
+            onSnapshot(next, error) {
+                const r = this._ref();
+                const fn = s => next(this._snap(s));
+                r.on('value', fn, e => { if (error) error(dbError(e)); });
+                return () => r.off('value', fn);
+            }
+        }
+
+        class DbBatch {
+            constructor() { this.updates = {}; }
+            set(ref, data) { this.updates[ref.path] = dbEncode(ref.path, data); return this; }
+            delete(ref) { this.updates[ref.path] = null; return this; }
+            commit() {
+                if (!Object.keys(this.updates).length) return Promise.resolve();
+                return rtdb.ref().update(this.updates).catch(e => { throw dbError(e); });
+            }
+        }
+
+        const fbDbApi = {
+            collection: name => new DbCollection(name),
+            doc: path => new DbDoc(path),
+            batch: () => new DbBatch()
+        };
         let fbUser = null;                 // signed-in Firebase user (null when signed out)
         let fbSynced = false;              // true once every collection delivered its first snapshot
         let fbBaseline = new Map();        // key -> { data, sig }: what the server is known to hold
@@ -533,7 +643,8 @@
         function canon(v) {
             if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
             if (v && typeof v === 'object') {
-                return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort()
+                // null and undefined are the same here: the database keeps neither (a null field is simply absent)
+                return '{' + Object.keys(v).filter(k => v[k] !== undefined && v[k] !== null).sort()
                     .map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
             }
             return v === undefined ? 'null' : JSON.stringify(v);
@@ -553,7 +664,7 @@
                 createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null
             }));
             Object.values(d.roles).forEach(r => out.set('roles/' + r.id, {
-                name: r.name, permissions: r.permissions, locked: !!r.locked
+                name: r.name, permissions: [...(r.permissions || [])].sort(), locked: !!r.locked
             }));
             out.set('settings/main', {
                 systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays
@@ -607,10 +718,12 @@
             const entry = { id: uid('LOG-'), t: new Date().toISOString(), user: currentUser()?.name || 'النظام', action, detail };
             appData.logs.unshift(entry);
             if (appData.logs.length > LOG_LIMIT) appData.logs.length = LOG_LIMIT;
+            // The data change goes out first. The database fires its listeners synchronously on a local write,
+            // so the logs listener must not rebuild the state before the change itself is in the local cache.
+            saveState();
             if (fbDb && fbUser) {
                 fbDb.collection('logs').doc(entry.id).set(entry).catch(err => console.warn('log not saved:', err && err.code));
             }
-            saveState();
         }
 
         function mapDocs(snap) {
@@ -717,7 +830,16 @@
             if (!['users', 'roles', 'companies', 'lists', 'settings'].every(k => fbLoaded[k])) return;
             const sigOf = () => canon([...desiredDocs(appData).entries(), appData.logs.map(l => l.id)]);
             const before = appData ? sigOf() : '';
+            const previous = appData;
             buildFromCache();
+            // Realtime Database can report a value again with the same content. Then keep the same objects:
+            // an open dialog (company, list, user) holds references to them and would save into stale copies.
+            // Only the logs are taken from the new build.
+            const contentOf = d => canon([...desiredDocs(d).entries()]);
+            if (previous && contentOf(previous) === contentOf(appData)) {
+                previous.logs = appData.logs;
+                appData = previous;
+            }
             fbSynced = true;
             const me = appData.users.find(u => u.id === fbUser.uid);
             if (!me) return handleAccessLost('حسابك غير مفعّل داخل النظام. تواصل مع مدير النظام');
@@ -759,9 +881,9 @@
         function enterApp() {
             el('authScreen').classList.add('hidden');
             el('appShell').classList.remove('hidden');
-            if (!location.hash || !canAccessRoute(parseRoute().name)) {
-                location.hash = '#/' + (firstAllowedRoute() || 'dashboard');
-            }
+            // opening the app always starts on the companies page (or the first page the user may open)
+            const start = canAccessRoute('companies') ? 'companies' : (firstAllowedRoute() || 'dashboard');
+            if (location.hash !== '#/' + start) location.hash = '#/' + start;
             render();
         }
 
@@ -805,17 +927,63 @@
             });
         }
 
-        // ============ PDF FILES (Firebase Storage: pdfs/{listId}) ============
-        const pdfRef = listId => fbStorage.ref('pdfs/' + listId);
+        // ============ PDF FILES (stored in Realtime Database: pdfs/{listId} = { total, chunks: [base64, ...] }) ============
+        // Each chunk keeps 512 KB of the file (about 700 KB as base64). The limit is 5 MB per PDF (10 chunks).
+        // The PDF has its own node, so the list screens never download it.
+        const PDF_CHUNK_BYTES = 512 * 1024;
+        const PDF_MAX_BYTES = 5 * 1024 * 1024;
 
+        function readBytes(file) {
+            return new Promise((resolve, reject) => {
+                const fr = new FileReader();
+                fr.onload = () => resolve(new Uint8Array(fr.result));
+                fr.onerror = () => reject(fr.error);
+                fr.readAsArrayBuffer(file);
+            });
+        }
+
+        function bytesToBase64(bytes) {
+            let bin = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+            }
+            return btoa(bin);
+        }
+
+        function base64ToBytes(b64) {
+            const bin = atob(b64);
+            const out = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+            return out;
+        }
+
+        // replaces the list's PDF in one write: the whole pdfs/{listId} node is set at once
         async function pdfUpload(listId, file) {
-            await pdfRef(listId).put(file, { contentType: 'application/pdf' });
+            if (file.size > PDF_MAX_BYTES) throw new Error('pdf too large');
+            const bytes = await readBytes(file);
+            if (!bytes.length) throw new Error('pdf empty');
+            const chunks = [];
+            for (let i = 0; i < bytes.length; i += PDF_CHUNK_BYTES) {
+                chunks.push(bytesToBase64(bytes.subarray(i, i + PDF_CHUNK_BYTES)));
+            }
+            await rtdb.ref('pdfs/' + listId).set({ total: chunks.length, chunks });
         }
 
         async function pdfRemove(listId) {
-            try { await pdfRef(listId).delete(); } catch (err) {
-                if (!err || err.code !== 'storage/object-not-found') console.error(err);
-            }
+            try {
+                await rtdb.ref('pdfs/' + listId).remove();
+            } catch (err) { console.error(err); }
+        }
+
+        // downloads the list's PDF (all parts) and joins them into one file
+        async function pdfBlob(listId) {
+            const v = (await rtdb.ref('pdfs/' + listId).once('value')).val();
+            if (!v || !v.chunks) throw new Error('pdf missing');
+            const parts = Array.isArray(v.chunks)
+                ? v.chunks
+                : Object.keys(v.chunks).sort((a, b) => a - b).map(k => v.chunks[k]);
+            if (!parts.length || parts.length !== v.total) throw new Error('pdf incomplete');
+            return new Blob(parts.map(base64ToBytes), { type: 'application/pdf' });
         }
 
         // ============ AUTH HELPERS ============
@@ -1073,7 +1241,7 @@
                 ]);
                 initExists = true;
 
-                // step 2: local PDFs go to Storage, then the companies and lists
+                // step 2: local PDFs go to Realtime Database (pdfs/{listId}), then the companies and lists
                 for (const id of seed.localPdfIds || []) {
                     const blob = await readLocalPdf(id);
                     if (!blob) continue;
@@ -1420,15 +1588,6 @@
                             <h1 class="text-xl sm:text-2xl font-extrabold">مرحباً، ${esc(u?.name || '')}</h1>
                             <p class="text-sm text-slate-500">نظرة سريعة على الشركات واللستات والخصومات · ${new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
                         </div>
-                    </div>
-
-                    <div class="grid grid-cols-2 xl:grid-cols-6 gap-3 sm:gap-4">
-                        ${kpi('الشركات / المصانع', s.companies, 'fa-industry', 'bg-blue-50 text-blue-600')}
-                        ${kpi('إجمالي اللستات', s.totalLists, 'fa-file-invoice-dollar', 'bg-brand-50 text-brand-600')}
-                        ${kpi('اللستات النشطة', s.active, 'fa-circle-check', 'bg-emerald-50 text-emerald-600')}
-                        ${kpi(`تنتهي خلال ${expiryDays()} يوم`, s.expiring, 'fa-hourglass-half', 'bg-amber-50 text-amber-600')}
-                        ${kpi('اللستات المنتهية', s.expired, 'fa-circle-xmark', 'bg-rose-50 text-rose-600')}
-                        ${kpi('متوسط الخصم الفعلي', `${s.avgEff.toFixed(1)}%`, 'fa-percent', 'bg-violet-50 text-violet-600', 'للستات النشطة')}
                     </div>
 
                     ${quick ? `<div class="flex flex-wrap gap-2">${quick}</div>` : ''}
@@ -2206,7 +2365,8 @@
             if (l.hasPdf) {
                 const win = window.open('', '_blank');
                 try {
-                    const url = await pdfRef(l.id).getDownloadURL();
+                    const url = URL.createObjectURL(await pdfBlob(l.id));
+                    setTimeout(() => URL.revokeObjectURL(url), 120000);
                     if (win) win.location.href = url; else window.open(url, '_blank', 'noopener');
                 } catch (err) {
                     console.error(err);
@@ -2272,7 +2432,7 @@
             event.target.value = '';
             if (!file) return;
             if (!(file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) return toast('من فضلك اختر ملف PDF فقط', 'error');
-            if (file.size > 15 * 1024 * 1024) return toast('الملف أكبر من 15 ميجا. صغّره أو استخدم رابطاً', 'error', null, 5000);
+            if (file.size > 5 * 1024 * 1024) return toast('الملف أكبر من 5 ميجا. صغّره أو استخدم رابطاً', 'error', null, 5000);
             pendingPdfFile = file;
             pendingRemovePdf = false;
             refreshPdfPreview();
@@ -2313,7 +2473,7 @@
                 }
             } catch (err) {
                 console.error(err);
-                toast('تعذر رفع ملف PDF. تأكد من الاتصال وإن الملف أقل من 15 ميجا', 'error', null, 6000);
+                toast('تعذر رفع ملف PDF. تأكد من الاتصال وإن الملف أقل من 5 ميجا', 'error', null, 6000);
                 return false;
             }
 
@@ -2863,13 +3023,11 @@
             try {
                 fbApp = firebase.initializeApp(FIREBASE_CONFIG);
                 fbAuth = firebase.auth();
-                fbDb = firebase.firestore();
-                fbStorage = firebase.storage();
-                fbDb.settings({ experimentalAutoDetectLongPolling: true });
+                rtdb = firebase.database();
+                fbDb = fbDbApi;
                 if (FIREBASE_EMULATORS) {
                     fbAuth.useEmulator(FIREBASE_EMULATORS.auth);
-                    fbDb.useEmulator(...FIREBASE_EMULATORS.firestore);
-                    fbStorage.useEmulator(...FIREBASE_EMULATORS.storage);
+                    rtdb.useEmulator(...FIREBASE_EMULATORS.database);
                 }
             } catch (err) {
                 console.error(err);
@@ -2878,7 +3036,6 @@
                 el('authHint').textContent = 'تعذر تشغيل Firebase في هذا المتصفح: ' + (err && err.message ? err.message : err);
                 return;
             }
-            fbDb.enablePersistence({ synchronizeTabs: true }).catch(() => { /* offline cache unavailable: keep working online */ });
 
             // show a spinner while the server is asked (bounded by the timeout below), then login or setup
             setAuthLoading('جاري الاتصال بالسيرفر...');
@@ -2897,12 +3054,15 @@
             } catch (err) {
                 console.error(err);
                 initExists = null;
-                toast('تعذر الاتصال بقاعدة البيانات. تأكد من الإنترنت', 'error', null, 6000);
+                const why = (err && (err.code || err.message)) || 'unknown';
+                const msg = 'تعذر الاتصال بقاعدة البيانات (' + why + '). تأكد من الإنترنت، وإن Realtime Database متعملة وقواعدها متنشرة';
+                toast(msg, 'error', null, 9000);
+                el('authHint').textContent = msg;
             }
             serverChecked = true;
             // now the mode is known: show login or setup unless a session has started
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a554f4597a58189a',t:'MTc5MzgwOTMxNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a554f4597a58189a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a557b066bc1c61ee',t:'MTc5MzgzNzk4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a557b066bc1c61ee',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
