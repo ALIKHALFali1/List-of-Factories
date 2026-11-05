@@ -1484,6 +1484,9 @@
         let scheduleDays = 7;                       // alert window in days
         let reportFilter = { from: '', to: '', partnerId: '', status: 'all' };
         let checkModalId = null;
+        let checksFilter = { status: 'all', payee: '', from: '', to: '', sort: 'due' };
+        let checkSelection = new Set();      // ids of checks ticked in the list
+        let lastVisibleCheckIds = [];        // ids shown in the last list (for select-all)
         const CHECK_MAX_AMOUNT = 999999999999.99;
 
         const AR_ONES = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة'];
@@ -1654,7 +1657,7 @@
                                class="${INPUT_CLS} pr-9">
                     </div>
                     ${addBtn}
-                </div>`;
+                </div>${isP ? '' : checksFilterBar()}`;
             } else if (tab === 'reports') {
                 tools = reportFilterHtml();
             }
@@ -1682,17 +1685,23 @@
             const id = esc(c.id);
             return `<button type="button" onclick="printCheck('${id}')" title="طباعة الشيك" aria-label="طباعة الشيك" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>`
                 + (manage ? `<button type="button" onclick="toggleCashed('${id}')" title="${c.cashed ? 'إلغاء الصرف' : 'تم الصرف'}" aria-label="${c.cashed ? 'إلغاء الصرف' : 'تم الصرف'}" class="${BTN_ICON} ${c.cashed ? 'text-emerald-600 hover:bg-emerald-50' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50'}"><i class="fa-solid ${c.cashed ? 'fa-rotate-left' : 'fa-circle-check'}"></i></button>`
+                    + `<button type="button" onclick="openCheckModal('${id}', { copy: true })" title="نسخ كشيك جديد" aria-label="نسخ كشيك جديد" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-copy"></i></button>`
                     + `<button type="button" onclick="openCheckModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>`
                     + `<button type="button" onclick="deleteCheck('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-400 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : '');
         }
 
-        // one table (desktop) or cards (phone) for any list of checks
-        function checksTableHtml(rows) {
+        // one table (desktop) or cards (phone) for any list of checks; select = show checkboxes
+        function checksTableHtml(rows, select = false) {
             if (!rows.length) return '<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-6 text-center text-slate-600 font-bold">مفيش شيكات</div>';
+            const box = c => select
+                ? `<input type="checkbox" aria-label="تحديد الشيك ${esc(c.number)}" ${checkSelection.has(c.id) ? 'checked' : ''} onchange="toggleCheckSel('${esc(c.id)}', this.checked)" class="w-4 h-4 accent-brand-600">`
+                : '';
+            const allChecked = rows.every(c => checkSelection.has(c.id));
             return `<div class="hidden md:block bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300">
                         <tr>
+                            ${select ? `<th class="py-3 px-4"><input type="checkbox" aria-label="تحديد الكل" ${allChecked ? 'checked' : ''} onchange="toggleAllCheckSel(this.checked)" class="w-4 h-4 accent-brand-600"></th>` : ''}
                             <th class="py-3 px-4 text-start">رقم الشيك</th>
                             <th class="py-3 px-4 text-start">البنك</th>
                             <th class="py-3 px-4 text-start">المستفيد</th>
@@ -1703,7 +1712,8 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200">
-                        ${rows.map(c => `<tr class="hover:bg-slate-50">
+                        ${rows.map(c => `<tr class="hover:bg-slate-50 ${checkSelection.has(c.id) ? 'bg-brand-50/60' : ''}">
+                            ${select ? `<td class="py-3 px-4">${box(c)}</td>` : ''}
                             <td class="py-3 px-4 font-mono font-bold">${esc(c.number)}</td>
                             <td class="py-3 px-4 font-semibold">${esc(c.bank)}</td>
                             <td class="py-3 px-4 font-semibold">${esc(c.payeeName)}</td>
@@ -1716,11 +1726,14 @@
                 </table>
             </div>
             <div class="md:hidden space-y-3">
-                ${rows.map(c => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4">
+                ${rows.map(c => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 ${checkSelection.has(c.id) ? 'ring-2 ring-brand-400' : ''}">
                     <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0">
-                            <p class="font-mono font-bold text-slate-800">${esc(c.number)}</p>
-                            <p class="font-semibold text-slate-700 truncate">${esc(c.bank)}</p>
+                        <div class="flex items-start gap-2 min-w-0">
+                            ${box(c)}
+                            <div class="min-w-0">
+                                <p class="font-mono font-bold text-slate-800">${esc(c.number)}</p>
+                                <p class="font-semibold text-slate-700 truncate">${esc(c.bank)}</p>
+                            </div>
                         </div>
                         <div class="text-end">
                             <p class="font-bold text-brand-700 whitespace-nowrap">${fmtMoney(c.amount)}</p>
@@ -1734,8 +1747,92 @@
             </div>`;
         }
 
+        // ---- list filters, sorting and summary (الشيكات tab) ----
+        const CHECKS_FILTER_DEFAULT = { status: 'all', payee: '', from: '', to: '', sort: 'due' };
+
+        function filteredChecksList() {
+            const q = checksQuery.trim().toLowerCase(), f = checksFilter;
+            const rows = appData.checks.filter(c => {
+                if (q && !`${c.number} ${c.bank} ${c.payeeName}`.toLowerCase().includes(q)) return false;
+                if (f.status === 'open' && c.cashed) return false;
+                if (f.status === 'cashed' && !c.cashed) return false;
+                if (f.status === 'overdue' && !isOverdue(c)) return false;
+                if (f.payee && c.payeeId !== f.payee) return false;
+                if (f.from && c.dueDate < f.from) return false;
+                if (f.to && c.dueDate > f.to) return false;
+                return true;
+            });
+            const amt = c => Number(c.amount) || 0;
+            const sorters = {
+                due: byDue,
+                due_desc: (a, b) => -byDue(a, b),
+                amount_desc: (a, b) => amt(b) - amt(a) || byDue(a, b),
+                amount_asc: (a, b) => amt(a) - amt(b) || byDue(a, b),
+                payee: (a, b) => String(a.payeeName).localeCompare(String(b.payeeName), 'ar') || byDue(a, b)
+            };
+            return rows.sort(sorters[f.sort] || byDue);
+        }
+
+        function checksFilterDescription() {
+            const f = checksFilter;
+            const status = { all: 'الكل', open: 'مفتوح', overdue: 'متأخر', cashed: 'مصروف' };
+            const parts = ['الحالة: ' + (status[f.status] || 'الكل')];
+            if (f.from || f.to) parts.push(`الاستحقاق من ${f.from || 'البداية'} إلى ${f.to || 'النهاية'}`);
+            if (f.payee) { const p = appData.partners.find(x => x.id === f.payee); if (p) parts.push('المستفيد: ' + p.name); }
+            return parts.join(' — ');
+        }
+
+        function checksFilterBar() {
+            const f = checksFilter;
+            const payees = [...appData.partners].sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+                .map(p => `<option value="${esc(p.id)}" ${f.payee === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+            const opt = (cur, v, l) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
+                <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                    ${field('الحالة', `<select onchange="setChecksFilter('status', this.value)" class="${INPUT_CLS}">${opt(f.status, 'all', 'الكل')}${opt(f.status, 'open', 'مفتوح')}${opt(f.status, 'overdue', 'متأخر')}${opt(f.status, 'cashed', 'مصروف')}</select>`)}
+                    ${field('المستفيد', `<select onchange="setChecksFilter('payee', this.value)" class="${INPUT_CLS}"><option value="">كل المستفيدين</option>${payees}</select>`)}
+                    ${field('استحقاق من', `<input type="date" value="${esc(f.from)}" onchange="setChecksFilter('from', this.value)" class="${INPUT_CLS}">`)}
+                    ${field('استحقاق إلى', `<input type="date" value="${esc(f.to)}" onchange="setChecksFilter('to', this.value)" class="${INPUT_CLS}">`)}
+                    ${field('الترتيب', `<select onchange="setChecksFilter('sort', this.value)" class="${INPUT_CLS}">${opt(f.sort, 'due', 'الأقرب استحقاقاً')}${opt(f.sort, 'due_desc', 'الأبعد استحقاقاً')}${opt(f.sort, 'amount_desc', 'المبلغ الأكبر')}${opt(f.sort, 'amount_asc', 'المبلغ الأصغر')}${opt(f.sort, 'payee', 'اسم المستفيد')}</select>`)}
+                </div>
+                <div class="flex flex-wrap gap-2 justify-end">
+                    ${btn('clearChecksFilter()', 'مسح الفلاتر', 'fa-filter-circle-xmark', BTN_SECONDARY)}
+                    ${btn('printChecksList()', 'طباعة القائمة', 'fa-print', BTN_SECONDARY)}
+                    ${btn('exportChecksList()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                </div>
+            </div>`;
+        }
+
+        function checksSummaryCards(rows) {
+            const today = todayISO(), upto = addDaysISO(today, 7);
+            const open = rows.filter(isOpen), overdue = rows.filter(isOverdue);
+            const soon = open.filter(c => c.dueDate >= today && c.dueDate <= upto);
+            const cashedRows = rows.filter(c => !isOpen(c));
+            const card = (label, value, cls) => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-3">
+                <p class="text-xs font-bold text-slate-600">${label}</p><p class="text-base font-bold ${cls} whitespace-nowrap">${value}</p></div>`;
+            return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                ${card('المفتوح', `${open.length} شيك — ${fmtMoney(sumAmt(open))}`, 'text-amber-700')}
+                ${card('متأخر', `${overdue.length} شيك — ${fmtMoney(sumAmt(overdue))}`, 'text-rose-700')}
+                ${card('يستحق خلال 7 أيام', `${soon.length} شيك — ${fmtMoney(sumAmt(soon))}`, 'text-brand-700')}
+                ${card('المصروف', `${cashedRows.length} شيك — ${fmtMoney(sumAmt(cashedRows))}`, 'text-emerald-700')}
+            </div>`;
+        }
+
+        function checksBulkBar() {
+            if (!checkSelection.size) return '';
+            const manage = can('checks.manage');
+            return `<div class="rounded-2xl border-2 border-brand-400 bg-brand-50 p-3 flex flex-wrap items-center justify-between gap-2 shadow">
+                <p class="font-bold text-brand-900">محدد ${checkSelection.size} شيك</p>
+                <div class="flex flex-wrap gap-2">
+                    ${manage ? btn('bulkSetCashed(true)', 'تم الصرف للمحدد', 'fa-circle-check') : ''}
+                    ${manage ? btn('bulkSetCashed(false)', 'إلغاء الصرف للمحدد', 'fa-rotate-left', BTN_SECONDARY) : ''}
+                    ${btn('exportSelectedChecks()', 'تصدير المحدد', 'fa-file-excel', BTN_SECONDARY)}
+                    <button type="button" onclick="clearCheckSelection()" class="${BTN_SECONDARY}">إلغاء التحديد</button>
+                </div>
+            </div>`;
+        }
+
         function checksListHtml() {
-            const q = checksQuery.trim().toLowerCase();
             if (!appData.checks.length) {
                 return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center">
                     <i class="fa-solid fa-money-check-dollar text-4xl text-slate-300 mb-3"></i>
@@ -1743,17 +1840,266 @@
                     ${can('checks.manage') ? btn('openCheckModal()', 'شيك جديد', 'fa-plus') : ''}
                 </div>`;
             }
-            const rows = appData.checks
-                .filter(c => !q || `${c.number} ${c.bank} ${c.payeeName}`.toLowerCase().includes(q))
-                .sort(byDue);
-            const total = sumAmt(rows), openT = sumAmt(rows.filter(isOpen));
-            const summary = `<p class="text-sm font-bold text-slate-700">عدد الشيكات: ${rows.length} — الإجمالي: ${fmtMoney(total)} — المفتوح: ${fmtMoney(openT)}</p>`;
-            if (!rows.length) {
-                return `${alertBanner()}${summary}<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center text-slate-600 font-bold">مفيش نتايج للبحث ده</div>`;
-            }
-            return `${alertBanner()}${summary}${checksTableHtml(rows)}`;
+            const rows = filteredChecksList();
+            lastVisibleCheckIds = rows.map(c => c.id);
+            const body = rows.length
+                ? checksTableHtml(rows, true)
+                : '<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center text-slate-600 font-bold">مفيش نتايج للفلاتر دي</div>';
+            return `${alertBanner()}${checksSummaryCards(rows)}${checksBulkBar()}${body}`;
         }
 
+        function setChecksFilter(key, value) {
+            checksFilter[key] = value;
+            checkSelection.clear();
+            updateChecksBody();
+        }
+
+        function clearChecksFilter() {
+            checksFilter = { ...CHECKS_FILTER_DEFAULT };
+            checksQuery = '';
+            checkSelection.clear();
+            render();
+        }
+
+        function toggleCheckSel(id, on) {
+            if (on) checkSelection.add(id); else checkSelection.delete(id);
+            updateChecksBody();
+        }
+
+        function toggleAllCheckSel(on) {
+            lastVisibleCheckIds.forEach(id => { if (on) checkSelection.add(id); else checkSelection.delete(id); });
+            updateChecksBody();
+        }
+
+        function clearCheckSelection() {
+            checkSelection.clear();
+            updateChecksBody();
+        }
+
+        // cash / reopen many checks at once (needs checks.manage)
+        function bulkSetCashed(flag) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const rows = appData.checks.filter(c => checkSelection.has(c.id) && !!c.cashed !== flag);
+            if (!rows.length) { toast('مفيش شيكات محتاجة التغيير', 'info'); return; }
+            rows.forEach(c => { c.cashed = flag; });
+            log(flag ? 'صرف شيكات (جماعي)' : 'إلغاء صرف شيكات (جماعي)', `${rows.length} شيك`);
+            checkSelection.clear();
+            toast(flag ? `تم تسجيل صرف ${rows.length} شيك` : `تم إلغاء صرف ${rows.length} شيك`, 'success');
+            render();
+        }
+
+        function printChecksList() {
+            if (!can('checks.view')) return;
+            printHtml(reportPrintHtml('قائمة الشيكات', checksFilterDescription(), filteredChecksList()));
+        }
+
+        function exportChecksList() {
+            exportChecksXlsx(filteredChecksList(), 'قائمة-الشيكات', 'قائمة مفلترة');
+        }
+
+        function exportSelectedChecks() {
+            exportChecksXlsx(appData.checks.filter(c => checkSelection.has(c.id)).sort(byDue), 'الشيكات-المحددة', 'محدد');
+        }
+
+        function setCheckDueOffset(days) {
+            const input = document.querySelector('#modalForm input[name=dueDate]');
+            if (input) input.value = addDaysISO(todayISO(), days);
+        }
+
+        // ---- periodic checks report (التقرير الدوري): settings are kept on this browser ----
+        const CHECK_REPORT_KEY = 'factoryChecksReportSchedule';
+        const WEEKDAYS_AR = [['السبت', 6], ['الأحد', 0], ['الاثنين', 1], ['الثلاثاء', 2], ['الأربعاء', 3], ['الخميس', 4], ['الجمعة', 5]];
+
+        function loadCheckReport() {
+            let saved = {};
+            try { saved = JSON.parse(localStorage.getItem(CHECK_REPORT_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+            return Object.assign({ enabled: false, frequency: 'weekly', weekdays: [4], dayOfMonth: 1, everyDays: 14, windowDays: 7, includeOverdue: true, nextRun: '', dismissedOn: '' }, saved);
+        }
+
+        function saveCheckReport(s) {
+            try { localStorage.setItem(CHECK_REPORT_KEY, JSON.stringify(s)); }
+            catch (e) { toast('تعذر حفظ إعدادات التقرير على المتصفح', 'error'); }
+        }
+
+        // the given day of a month (day clamped to 1..28 so every month has it)
+        function monthlyDate(iso, dom) {
+            const [y, m] = iso.split('-').map(Number);
+            return toISODate(new Date(y, m - 1, Math.min(Math.max(Number(dom) || 1, 1), 28)));
+        }
+
+        // first run on or after fromISO
+        function checkReportFirstRun(s, fromISO) {
+            if (s.frequency === 'weekly') {
+                const days = (s.weekdays && s.weekdays.length) ? s.weekdays : [4];
+                let d = fromISO;
+                for (let i = 0; i < 7; i++) {
+                    if (days.includes(new Date(d + 'T00:00:00').getDay())) return d;
+                    d = addDaysISO(d, 1);
+                }
+                return fromISO;
+            }
+            if (s.frequency === 'monthly') {
+                const cand = monthlyDate(fromISO, s.dayOfMonth);
+                if (cand >= fromISO) return cand;
+                const [y, m] = fromISO.split('-').map(Number);
+                return monthlyDate(toISODate(new Date(y, m, 1)), s.dayOfMonth);
+            }
+            return fromISO;
+        }
+
+        // the run that comes after runISO
+        function checkReportAdvance(s, runISO) {
+            if (s.frequency === 'weekly') return checkReportFirstRun(s, addDaysISO(runISO, 1));
+            if (s.frequency === 'monthly') {
+                const [y, m] = runISO.split('-').map(Number);
+                return monthlyDate(toISODate(new Date(y, m, 1)), s.dayOfMonth);
+            }
+            return addDaysISO(runISO, Math.max(1, Number(s.everyDays) || 14));
+        }
+
+        // after a report is marked done: the next run strictly after today (missed runs are skipped)
+        function checkReportSkipTo(s, fromISO) {
+            let next = checkReportAdvance(s, fromISO), guard = 0;
+            while (next <= todayISO() && guard++ < 1000) next = checkReportAdvance(s, next);
+            return next;
+        }
+
+        function checkReportDue(s) {
+            return !!s.enabled && !!s.nextRun && todayISO() >= s.nextRun;
+        }
+
+        function periodicReportRows(s) {
+            const today = todayISO(), upto = addDaysISO(today, Number(s.windowDays) || 7);
+            return appData.checks
+                .filter(c => !c.cashed && c.dueDate && c.dueDate <= upto
+                    && (c.dueDate >= today || (s.includeOverdue && c.dueDate < today)))
+                .sort(byDue);
+        }
+
+        function periodicReportMeta(s) {
+            return `الشيكات خلال ${s.windowDays} يوم${s.includeOverdue ? ' + المتأخرة' : ''}`;
+        }
+
+        // banner shown on every page when a report is due (only for users who can see checks)
+        function checkReportBanner() {
+            if (!can('checks.view')) return '';
+            const s = loadCheckReport();
+            if (!checkReportDue(s) || s.dismissedOn === todayISO()) return '';
+            const n = periodicReportRows(s).length;
+            return `<div class="rounded-2xl border-2 border-brand-300 bg-brand-50 p-4 flex flex-wrap items-center justify-between gap-3">
+                <p class="font-bold text-brand-900"><i class="fa-solid fa-file-circle-check"></i> التقرير الدوري للشيكات مستحق: ${n} شيك (${esc(periodicReportMeta(s))})</p>
+                <div class="flex flex-wrap gap-2">
+                    ${btn('printPeriodicReport()', 'طباعة', 'fa-print', BTN_SECONDARY)}
+                    ${btn('exportPeriodicReport()', 'Excel', 'fa-file-excel', BTN_SECONDARY)}
+                    ${btn('markPeriodicReportDone()', 'تم', 'fa-check')}
+                    <button type="button" onclick="dismissPeriodicReport()" class="${BTN_SECONDARY}">لاحقاً</button>
+                </div>
+            </div>`;
+        }
+
+        function printPeriodicReport() {
+            if (!can('checks.view')) return;
+            const s = loadCheckReport();
+            printHtml(reportPrintHtml('التقرير الدوري للشيكات', periodicReportMeta(s), periodicReportRows(s)));
+        }
+
+        function exportPeriodicReport() {
+            exportChecksXlsx(periodicReportRows(loadCheckReport()), 'التقرير-الدوري-للشيكات', 'تقرير دوري');
+        }
+
+        function markPeriodicReportDone() {
+            if (!can('checks.view')) return;
+            const s = loadCheckReport();
+            s.nextRun = checkReportSkipTo(s, s.nextRun || todayISO());
+            s.dismissedOn = '';
+            saveCheckReport(s);
+            toast(`تم. التقرير الجاي: ${fmtDateAr(s.nextRun)}`, 'success');
+            render();
+        }
+
+        function dismissPeriodicReport() {
+            const s = loadCheckReport();
+            s.dismissedOn = todayISO();
+            saveCheckReport(s);
+            render();
+        }
+
+        function periodicFreqChanged() {
+            const f = document.getElementById('prFreq').value;
+            document.getElementById('prWeekBox').classList.toggle('hidden', f !== 'weekly');
+            document.getElementById('prMonthBox').classList.toggle('hidden', f !== 'monthly');
+            document.getElementById('prCustomBox').classList.toggle('hidden', f !== 'custom');
+        }
+
+        // settings form at the top of the reports tab
+        function periodicScheduleHtml() {
+            const s = loadCheckReport();
+            const dayChecks = WEEKDAYS_AR.map(([label, n]) => `<label class="flex items-center gap-1.5 text-sm font-bold text-slate-700">
+                <input type="checkbox" name="prWd" value="${n}" ${s.weekdays.includes(n) ? 'checked' : ''} class="w-4 h-4 accent-brand-600"> ${label}</label>`).join('');
+            const status = s.enabled && s.nextRun ? `التقرير الجاي: ${fmtDateAr(s.nextRun)}` : 'التقرير الدوري متوقف';
+            const opt = (v, l) => `<option value="${v}" ${s.frequency === v ? 'selected' : ''}>${l}</option>`;
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="font-bold text-slate-800"><i class="fa-solid fa-calendar-check text-brand-600"></i> التقرير الدوري للشيكات</h3>
+                    <p class="text-sm font-bold text-slate-600">${esc(status)}</p>
+                </div>
+                <p class="text-xs text-slate-500">الإعداد ده بيتحفظ على المتصفح ده. لما تفتح التطبيق في يوم التقرير هيظهر تنبيه فيه التقرير جاهز للطباعة أو Excel.</p>
+                <label class="flex items-center gap-2 text-sm font-bold text-slate-700">
+                    <input type="checkbox" id="prEnabled" ${s.enabled ? 'checked' : ''} class="w-4 h-4 accent-brand-600"> تفعيل التقرير الدوري
+                </label>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    ${field('التكرار', `<select id="prFreq" onchange="periodicFreqChanged()" class="${INPUT_CLS}">${opt('weekly', 'أسبوعي (أيام تختارها)')}${opt('monthly', 'شهري (يوم معين)')}${opt('custom', 'كل كام يوم')}</select>`)}
+                    ${field('التقرير يغطي الشيكات خلال (يوم)', `<input type="number" id="prWindow" min="1" max="365" value="${esc(s.windowDays)}" dir="ltr" class="${INPUT_CLS}">`)}
+                    <label class="flex items-end gap-2 pb-2 text-sm font-bold text-slate-700"><input type="checkbox" id="prOverdue" ${s.includeOverdue ? 'checked' : ''} class="w-4 h-4 accent-brand-600"> تشمل المتأخرة اللي لسه ماتصرفتش</label>
+                </div>
+                <div id="prWeekBox" class="${s.frequency === 'weekly' ? '' : 'hidden'}">
+                    <p class="text-sm font-bold text-slate-700 mb-2">أيام التقرير الأسبوعي</p>
+                    <div class="flex flex-wrap gap-3">${dayChecks}</div>
+                </div>
+                <div id="prMonthBox" class="${s.frequency === 'monthly' ? '' : 'hidden'} max-w-xs">
+                    ${field('يوم التقرير في الشهر (1 - 28)', `<input type="number" id="prDom" min="1" max="28" value="${esc(s.dayOfMonth)}" dir="ltr" class="${INPUT_CLS}">`)}
+                </div>
+                <div id="prCustomBox" class="${s.frequency === 'custom' ? '' : 'hidden'} grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+                    ${field('كل كام يوم', `<input type="number" id="prEvery" min="1" max="365" value="${esc(s.everyDays)}" dir="ltr" class="${INPUT_CLS}">`)}
+                    ${field('تاريخ أول تقرير', `<input type="date" id="prStart" value="${esc(s.nextRun || todayISO())}" class="${INPUT_CLS}">`)}
+                </div>
+                <div>${btn('savePeriodicSchedule()', 'حفظ إعدادات التقرير', 'fa-floppy-disk')}</div>
+            </div>`;
+        }
+
+        function savePeriodicSchedule() {
+            if (!can('checks.view')) return;
+            const prev = loadCheckReport();
+            const frequency = document.getElementById('prFreq').value;
+            const weekdays = [...document.querySelectorAll('input[name=prWd]:checked')].map(i => Number(i.value));
+            const dayOfMonth = Math.round(Number(document.getElementById('prDom').value));
+            const everyDays = Math.round(Number(document.getElementById('prEvery').value));
+            const windowDays = Math.round(Number(document.getElementById('prWindow').value));
+            const startDate = document.getElementById('prStart').value;
+            const s = {
+                ...prev,
+                enabled: document.getElementById('prEnabled').checked,
+                frequency, weekdays, dayOfMonth, everyDays, windowDays,
+                includeOverdue: document.getElementById('prOverdue').checked
+            };
+            if (!(windowDays >= 1 && windowDays <= 365)) return toast('اكتب عدد أيام بين 1 و 365', 'error');
+            if (frequency === 'weekly' && !weekdays.length) return toast('اختار يوم أو أكتر للتقرير الأسبوعي', 'error');
+            if (frequency === 'monthly' && !(dayOfMonth >= 1 && dayOfMonth <= 28)) return toast('اكتب يوم في الشهر بين 1 و 28', 'error');
+            if (frequency === 'custom' && !(everyDays >= 1 && everyDays <= 365)) return toast('اكتب عدد أيام بين 1 و 365', 'error');
+            if (s.enabled) {
+                s.nextRun = frequency === 'custom'
+                    ? (startDate || todayISO())
+                    : checkReportFirstRun(s, todayISO());
+            } else {
+                s.nextRun = '';
+            }
+            s.dismissedOn = '';
+            saveCheckReport(s);
+            toast(s.enabled ? 'تم حفظ التقرير الدوري' : 'التقرير الدوري متوقف', 'success');
+            render();
+        }
+
+        // ---- list of checks and filters/sorting ----
         function scheduleBodyHtml() {
             const { overdue, soon } = alertsSummary();
             const alertRows = [...overdue, ...soon];
@@ -1875,7 +2221,7 @@
                         </tr>`).join('')}
                     </tbody>
                 </table></div>` : '';
-            return `${cards}${partnerTable}${checksTableHtml(rows)}`;
+            return `${periodicScheduleHtml()}${cards}${partnerTable}${checksTableHtml(rows)}`;
         }
 
         function partnersBodyHtml() {
@@ -1991,7 +2337,7 @@
             }
         }
 
-        function openCheckModal(id = null) {
+        function openCheckModal(id = null, opts = {}) {
             if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
             const c = id ? appData.checks.find(x => x.id === id) : null;
             if (id && !c) return;
@@ -2000,20 +2346,22 @@
                 navigate('checks/partners');
                 return;
             }
-            checkModalId = id;
+            const copy = !!(opts && opts.copy) && !!c;   // copy mode: a new check with the same data
+            const editing = copy ? null : c;
+            checkModalId = copy ? null : id;
             const partners = [...appData.partners].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
             const payeeOptions = partners.map(p => `<option value="${esc(p.id)}" ${c && c.payeeId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
             const banks = [...new Set(appData.checks.map(x => x.bank).filter(Boolean))].sort();
 
             openModal({
-                title: c ? 'تعديل الشيك' : 'شيك جديد',
-                submitText: c ? 'حفظ التعديلات' : 'إضافة الشيك',
+                title: editing ? 'تعديل الشيك' : (copy ? 'نسخة شيك جديد' : 'شيك جديد'),
+                submitText: editing ? 'حفظ التعديلات' : 'إضافة الشيك',
                 body: `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        ${field('رقم الشيك *', `<input name="number" required value="${esc(c?.number)}" placeholder="مثال: 004512" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                        ${field('رقم الشيك *', `<input name="number" required value="${esc(copy ? '' : c?.number)}" placeholder="مثال: 004512" dir="ltr" class="${INPUT_CLS} font-mono">`)}
                         ${field('البنك *', `<input name="bank" required list="bankList" value="${esc(c?.bank)}" placeholder="مثال: البنك الأهلي" class="${INPUT_CLS}"><datalist id="bankList">${banks.map(b => `<option value="${esc(b)}"></option>`).join('')}</datalist>`)}
                         ${field('المبلغ (جنيه) *', `<input name="amount" type="number" step="0.01" min="0.01" required value="${c ? esc(c.amount) : ''}" oninput="updateAmountWords(this.value); updateCheckWarning()" dir="ltr" class="${INPUT_CLS} font-mono">`)}
-                        ${field('تاريخ الاستحقاق *', `<input name="dueDate" type="date" required value="${esc(c?.dueDate || todayISO())}" class="${INPUT_CLS}">`)}
+                        ${field('تاريخ الاستحقاق *', `<div class="space-y-2"><input name="dueDate" type="date" required value="${esc(copy ? addDaysISO(c.dueDate || todayISO(), 30) : (c?.dueDate || todayISO()))}" class="${INPUT_CLS}"><div class="flex flex-wrap gap-2">${[7, 15, 30].map(n => `<button type="button" onclick="setCheckDueOffset(${n})" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700">بعد ${n} يوم</button>`).join('')}</div></div>`)}
                     </div>
                     <div id="amountWords" class="rounded-xl bg-slate-50 border-2 border-slate-200 p-3 text-sm font-bold text-slate-700"></div>
                     ${field('المستفيد *', `<select name="payeeId" required onchange="updateCheckWarning()" class="${INPUT_CLS}"><option value="">— اختر المستفيد —</option>${payeeOptions}</select>`)}
@@ -2032,8 +2380,8 @@
                         return toast('الشيك ده متسجل قبل كده بنفس الرقم والبنك', 'error'), false;
                     }
                     const data = { number, bank, amount, dueDate, payeeId: payee.id, payeeName: payee.name };
-                    if (c) {
-                        Object.assign(c, data);
+                    if (editing) {
+                        Object.assign(editing, data);
                         log('تعديل شيك', `${number} — ${payee.name}`);
                         toast('تم حفظ التعديلات', 'success');
                     } else {
@@ -2575,6 +2923,7 @@
             el('pageTitle').textContent = view.title;
             el('topActions').innerHTML = view.actions || '';
             el('content').innerHTML = view.html;
+            el('content').insertAdjacentHTML('afterbegin', checkReportBanner());
             renderChrome(name);
             if (view.after) view.after();
             closeRowMenu();
@@ -4322,5 +4671,5 @@
             });
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55c6fa4cb7cb870',t:'MTc5Mzg4Nzc2NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55c6fa4cb7cb870',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55c9f022b5c558e',t:'MTc5Mzg4OTcwNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55c9f022b5c558e',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
