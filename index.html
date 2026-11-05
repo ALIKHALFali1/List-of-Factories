@@ -59,6 +59,11 @@
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <body class="text-slate-800 min-h-screen">
 
@@ -194,6 +199,10 @@
                 ['lists.import', 'استيراد من إكسيل'],
                 ['lists.export', 'تصدير إكسيل']
             ] },
+            { title: 'الشيكات', items: [
+                ['checks.view', 'عرض الشيكات والمستفيدين وطباعة الشيك'],
+                ['checks.manage', 'إضافة وتعديل وحذف الشيكات والمستفيدين']
+            ] },
             { title: 'النظام', items: [
                 ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
@@ -208,11 +217,12 @@
             dashboard: { title: 'لوحة التحكم', icon: 'fa-gauge-high', perm: 'dashboard.view' },
             companies: { title: 'المصانع / الشركات', icon: 'fa-industry', perm: 'companies.view' },
             lists: { title: 'كل اللستات', icon: 'fa-file-invoice-dollar', perm: 'lists.view' },
+            checks: { title: 'الشيكات', icon: 'fa-money-check-dollar', perm: 'checks.view' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'checks', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -283,10 +293,17 @@
 
         function isListActive(startStr, endStr) {
             const start = parseISODate(startStr, false);
-            const end = parseISODate(endStr, true);
-            if (!start || !end) return false;
+            if (!start) return false;
             const now = new Date();
+            if (!String(endStr || '').trim()) return now >= start; // no end date = open-ended
+            const end = parseISODate(endStr, true);
+            if (!end) return false;
             return now >= start && now <= end;
+        }
+
+        // shown in tables/cards when a list has no end date
+        function listEndText(l) {
+            return l.endDate ? esc(l.endDate) : '<span class="font-sans font-semibold text-slate-400">بدون تاريخ انتهاء</span>';
         }
 
         function daysUntilEnd(list) {
@@ -308,13 +325,13 @@
             return 'نشطة';
         }
 
-        function calculateEffectiveDiscount(d1 = 0, d2 = 0, d3 = 0) {
-            const factor = [d1, d2, d3].reduce((acc, d) => acc * (1 - (parseFloat(d) || 0) / 100), 1);
+        function calculateEffectiveDiscount(d1 = 0, d2 = 0, d3 = 0, d4 = 0) {
+            const factor = [d1, d2, d3, d4].reduce((acc, d) => acc * (1 - (parseFloat(d) || 0) / 100), 1);
             return ((1 - factor) * 100).toFixed(2);
         }
 
         function effValue(list) {
-            return parseFloat(calculateEffectiveDiscount(list.discount1, list.discount2, list.discount3));
+            return parseFloat(calculateEffectiveDiscount(list.discount1, list.discount2, list.discount3, list.flatDiscount));
         }
 
         function pct(value) {
@@ -470,6 +487,8 @@
                 roles: defaultRoles(),
                 users: [],
                 companies: sampleCompanies(),
+                partners: [],
+                checks: [],
                 logs: []
             };
         }
@@ -493,6 +512,18 @@
             roles.admin.locked = true;
             roles.admin.permissions = [...ALL_PERMS];
             d.roles = roles;
+
+            // Partners (payees) and checks. A check keeps the payee name it was written with.
+            d.partners = (Array.isArray(d.partners) ? d.partners : [])
+                .filter(p => p && typeof p === 'object' && p.id)
+                .map(p => ({ id: String(p.id), name: String(p.name || '').trim(), notes: String(p.notes || ''), limit: Math.max(0, Number(p.limit) || 0) }));
+            d.checks = (Array.isArray(d.checks) ? d.checks : [])
+                .filter(c => c && typeof c === 'object' && c.id)
+                .map(c => ({
+                    id: String(c.id), number: String(c.number || ''), bank: String(c.bank || ''),
+                    amount: Number(c.amount) || 0, dueDate: String(c.dueDate || ''),
+                    payeeId: String(c.payeeId || ''), payeeName: String(c.payeeName || ''), cashed: c.cashed === true
+                }));
 
             // Users are profiles only. Passwords live in Firebase Authentication.
             d.users = (Array.isArray(d.users) ? d.users : [])
@@ -519,6 +550,7 @@
                     discount1: parseFloat(l.discount1) || 0,
                     discount2: parseFloat(l.discount2) || 0,
                     discount3: parseFloat(l.discount3) || 0,
+                    flatDiscount: parseFloat(l.flatDiscount) || 0,
                     startDate: String(l.startDate || ''),
                     endDate: String(l.endDate || ''),
                     pdfFile: String(l.pdfFile || ''),
@@ -652,6 +684,7 @@
         let fbLoaded = {};
         let fbUnsubs = [];
         let fbLogsUnsub = null;
+        let fbChecksUnsubs = [];           // partners + checks listeners (checks.view only)
         let fbBusy = false;                // login/setup in progress: the auth-state handler waits
         let appEntered = false;
         let pendingLoginLog = false;
@@ -684,6 +717,8 @@
                 out.set('companies/' + c.id, { ...rest, pos: ci });
                 lists.forEach((l, li) => out.set('lists/' + l.id, { ...l, companyId: c.id, pos: li }));
             });
+            (d.partners || []).forEach(p => out.set('partners/' + p.id, { ...p }));
+            (d.checks || []).forEach(c => out.set('checks/' + c.id, { ...c }));
             d.users.forEach(u => out.set('users/' + u.id, {
                 name: u.name, email: u.email, roleId: u.roleId, active: u.active,
                 createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null
@@ -745,7 +780,7 @@
         // One entry is written for every saved change (and every PDF change), by the user who made it.
         // Everyone else who is signed in sees it in the bell. The activity log (logs) stays limited to logs.view.
         const NOTIF_LIMIT = 50;
-        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام' };
+        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
         let notifs = [];                 // newest first, as the database sends them (all users)
         let notifUnsub = null;
@@ -763,7 +798,8 @@
             const kinds = [...new Set(real.map(o => NOTIF_KIND[o.key.split('/')[0]] || 'بيانات'))];
             const names = [...new Set(real.map(o => o.key === 'settings/main'
                 ? 'إعدادات النظام'
-                : (o.data?.name || o.prevData?.name || o.key.split('/')[1])))];
+                : (o.data?.name || o.prevData?.name
+                    || (o.data?.number || o.prevData?.number ? 'شيك رقم ' + (o.data?.number || o.prevData?.number) : o.key.split('/')[1]))))];
             return {
                 verb: NOTIF_VERB[verbs.length === 1 ? verbs[0] : 'edit'],
                 kind: kinds.join('، '),
@@ -921,6 +957,8 @@
                 roles,
                 users: Object.values(c.users),
                 companies,
+                partners: Object.values(c.partners || {}),
+                checks: Object.values(c.checks || {}),
                 logs: c.logs || []
             });
             fbBaseline = new Map();
@@ -933,7 +971,7 @@
 
         function startSync(uid) {
             stopSync();
-            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, settings: null, logs: [] };
+            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, settings: null, logs: [] };
             fbLoaded = {};
             fbSynced = false;
             const listen = (name, ref, apply) => {
@@ -955,6 +993,8 @@
         function stopSync() {
             fbUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbUnsubs = [];
+            fbChecksUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            fbChecksUnsubs = [];
             if (fbLogsUnsub) { try { fbLogsUnsub(); } catch (e) { /* already closed */ } }
             fbLogsUnsub = null;
             stopNotifSync();
@@ -976,6 +1016,34 @@
                 fbLogsUnsub();
                 fbLogsUnsub = null;
                 if (fbCache) fbCache.logs = [];
+            }
+        }
+
+        // Partners and checks are readable only with checks.view. Listen only for them, so a user
+        // without the permission never gets a denied listener (which would sign them out).
+        // Called on a timer: the database can fire a listener synchronously from its cache.
+        function syncChecksListener() {
+            if (!fbCache || !fbUser) return;
+            const canSee = can('checks.view');
+            if (canSee && !fbChecksUnsubs.length) {
+                const onErr = err => console.error('checks listener', err);
+                fbChecksUnsubs.push(fbDb.collection('partners').onSnapshot(snap => {
+                    if (!fbCache) return;
+                    fbCache.partners = mapDocs(snap);
+                    onCacheChanged();
+                }, onErr));
+                fbChecksUnsubs.push(fbDb.collection('checks').onSnapshot(snap => {
+                    if (!fbCache) return;
+                    fbCache.checks = mapDocs(snap);
+                    onCacheChanged();
+                }, onErr));
+            } else if (!canSee && fbChecksUnsubs.length) {
+                fbChecksUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+                fbChecksUnsubs = [];
+                if (fbCache) { fbCache.partners = {}; fbCache.checks = {}; }
+                if (appData) { appData.partners = []; appData.checks = []; }
+                // these docs are no longer known: never delete them on the server from here
+                fbBaseline.forEach((b, key) => { if (/^(partners|checks)\//.test(key)) fbBaseline.delete(key); });
             }
         }
 
@@ -1020,6 +1088,7 @@
             if (!me.active) return handleAccessLost('هذا الحساب موقوف. تواصل مع مدير النظام');
             sessionUserId = me.id;
             syncLogsListener();
+            setTimeout(syncChecksListener, 0);
             if (!appEntered) {
                 appEntered = true;
                 if (pendingLoginLog) {
@@ -1406,6 +1475,801 @@
             el(target === 'company' ? 'logoEmpty' : 'sysLogoEmpty')?.classList.remove('hidden');
         }
 
+        // ============ CHECKS (الشيكات والمستفيدون والتقارير) ============
+        // Tabs: الشيكات · الجدول الشهري (+ تنبيهات) · التقارير · المستفيدون · كشف المستفيد.
+        // A check is "open" until it is cashed (تم الصرف). A partner limit (الحد) is compared with the open amount.
+        // Permissions: checks.view (see, print, export), checks.manage (add, edit, delete, cash, set limits).
+        let checksQuery = '';
+        let partnersQuery = '';
+        let scheduleDays = 7;                       // alert window in days
+        let reportFilter = { from: '', to: '', partnerId: '', status: 'all' };
+        let checkModalId = null;
+        const CHECK_MAX_AMOUNT = 999999999999.99;
+
+        const AR_ONES = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة'];
+        const AR_TEENS = ['عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر'];
+        const AR_TENS = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+        const AR_HUNDREDS = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة', 'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة'];
+        const AR_THOUSANDS = { one: 'ألف', two: 'ألفان', plural: 'آلاف', sing: 'ألف', acc: 'ألفاً' };
+        const AR_MILLIONS = { one: 'مليون', two: 'مليونان', plural: 'ملايين', sing: 'مليون', acc: 'مليوناً' };
+        const AR_BILLIONS = { one: 'مليار', two: 'ملياران', plural: 'مليارات', sing: 'مليار', acc: 'ملياراً' };
+        const AR_PIASTERS = { one: 'قرش', two: 'قرشان', plural: 'قروش', sing: 'قرش', acc: 'قرشاً' };
+
+        // 1..999 in words
+        function arabicUnder1000(n) {
+            const h = Math.floor(n / 100), r = n % 100;
+            const parts = [];
+            if (h) parts.push(AR_HUNDREDS[h]);
+            if (r) {
+                if (r < 10) parts.push(AR_ONES[r]);
+                else if (r < 20) parts.push(AR_TEENS[r - 10]);
+                else if (r % 10 === 0) parts.push(AR_TENS[r / 10]);
+                else parts.push(AR_ONES[r % 10] + ' و' + AR_TENS[Math.floor(r / 10)]);
+            }
+            return parts.join(' و');
+        }
+
+        // a count with its unit (ألف / مليون / قرش ...), c = 1..999
+        function arabicScaled(c, s) {
+            if (c === 1) return s.one;
+            if (c === 2) return s.two;
+            const r = c % 100;
+            const noun = (r >= 3 && r <= 10) ? s.plural : (c < 100 ? s.acc : s.sing);
+            return arabicUnder1000(c) + ' ' + noun;
+        }
+
+        // whole number in Arabic words, 0 .. 999,999,999,999
+        function arabicInteger(n) {
+            if (n === 0) return 'صفر';
+            const groups = [[1e9, AR_BILLIONS], [1e6, AR_MILLIONS], [1e3, AR_THOUSANDS]];
+            const parts = [];
+            let rest = n;
+            groups.forEach(([size, unit]) => {
+                const c = Math.floor(rest / size);
+                if (c) parts.push(arabicScaled(c, unit));
+                rest %= size;
+            });
+            if (rest) parts.push(arabicUnder1000(rest));
+            return parts.reduce((acc, p) => acc === '' ? p : acc + ' و' + p, '');
+        }
+
+        // 1250.5 -> "ألف ومائتان وخمسون جنيه مصري وخمسون قرشاً"
+        function amountToArabicWords(amount) {
+            const cents = Math.round(Number(amount) * 100);
+            if (!(cents >= 0)) return '';
+            const pounds = Math.floor(cents / 100), piasters = cents % 100;
+            let text = arabicInteger(pounds) + ' جنيه مصري';
+            if (piasters) text += ' و' + arabicScaled(piasters, AR_PIASTERS);
+            return text;
+        }
+
+        function fmtDateAr(iso) {
+            const [y, m, d] = String(iso || '').split('-');
+            return (y && m && d) ? `${d}/${m}/${y}` : '';
+        }
+
+        function fmtDigits(n) {
+            return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function updateAmountWords(value) {
+            const box = document.getElementById('amountWords');
+            if (!box) return;
+            const n = Number(value);
+            box.textContent = (n > 0 && n <= CHECK_MAX_AMOUNT)
+                ? 'بالحروف: فقط ' + amountToArabicWords(n) + ' لا غير'
+                : 'اكتب المبلغ عشان يظهر بالحروف';
+        }
+
+        const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+        const r2 = n => Math.round(n * 100) / 100;
+        const sumAmt = rows => r2(rows.reduce((s, c) => s + (Number(c.amount) || 0), 0));
+        const byDue = (a, b) => (a.dueDate || '').localeCompare(b.dueDate || '') || String(a.number).localeCompare(String(b.number));
+        const isOpen = c => !c.cashed;
+        const isOverdue = c => !c.cashed && !!c.dueDate && c.dueDate < todayISO();
+
+        function monthLabel(ym) {
+            const [y, m] = String(ym || '').split('-');
+            return (y && m && MONTHS_AR[Number(m) - 1]) ? `${MONTHS_AR[Number(m) - 1]} ${y}` : 'بدون تاريخ';
+        }
+
+        function addDaysISO(iso, n) {
+            const d = new Date(iso + 'T00:00:00');
+            d.setDate(d.getDate() + n);
+            return toISODate(d);
+        }
+
+        // open amount of one partner (cashed checks do not count); exceptId leaves one check out
+        function partnerOpenTotal(partnerId, exceptId = null) {
+            return r2(appData.checks
+                .filter(c => c.payeeId === partnerId && !c.cashed && c.id !== exceptId)
+                .reduce((s, c) => s + (Number(c.amount) || 0), 0));
+        }
+        function partnerOver(p) {
+            return !!p && p.limit > 0 && partnerOpenTotal(p.id) > p.limit + 1e-9;
+        }
+
+        function alertsSummary() {
+            const today = todayISO(), upto = addDaysISO(today, scheduleDays);
+            const open = appData.checks.filter(isOpen);
+            return {
+                overdue: open.filter(c => c.dueDate && c.dueDate < today).sort(byDue),
+                soon: open.filter(c => c.dueDate >= today && c.dueDate <= upto).sort(byDue)
+            };
+        }
+
+        function alertBanner() {
+            const { overdue, soon } = alertsSummary();
+            if (!overdue.length && !soon.length) return '';
+            return `<div class="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 flex flex-wrap items-center justify-between gap-2">
+                <p class="font-bold text-amber-900"><i class="fa-solid fa-bell"></i> ${overdue.length} شيك متأخر، و${soon.length} شيك قرب ميعاده</p>
+                <a href="#/checks/schedule" class="text-sm font-bold text-brand-700 underline">عرض التنبيهات</a>
+            </div>`;
+        }
+
+        function statusBadge(c) {
+            if (c.cashed) return '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 whitespace-nowrap">مصروف</span>';
+            if (isOverdue(c)) return '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 whitespace-nowrap">متأخر</span>';
+            return '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 whitespace-nowrap">مفتوح</span>';
+        }
+
+        // limit cell: open amount against the limit, with a bar; red when over
+        function limitCell(p) {
+            if (!(p.limit > 0)) return '<span class="text-sm text-slate-500">بدون حد</span>';
+            const open = partnerOpenTotal(p.id);
+            const pct = Math.min(100, Math.round(open / p.limit * 100));
+            const over = open > p.limit + 1e-9;
+            return `<div class="min-w-[160px]">
+                <div class="text-xs font-bold ${over ? 'text-rose-700' : 'text-slate-700'}">${fmtMoney(open)} من ${fmtMoney(p.limit)}${over ? ' — تجاوز الحد' : ''}</div>
+                <div class="h-2 rounded-full bg-slate-200 mt-1 overflow-hidden"><div class="h-full ${over ? 'bg-rose-600' : (pct >= 80 ? 'bg-amber-500' : 'bg-brand-600')}" style="width:${pct}%"></div></div>
+            </div>`;
+        }
+
+        function checksTab(route, label, icon, active) {
+            return `<button type="button" onclick="navigate('${route}')" class="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border-2 ${active ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}"><i class="fa-solid ${icon}"></i>${label}</button>`;
+        }
+
+        function viewChecks(param) {
+            if (param && param.startsWith('partners/')) return viewStatement(param.slice('partners/'.length));
+            const tab = ['schedule', 'reports', 'partners'].includes(param) ? param : 'checks';
+            const titles = { checks: 'الشيكات', schedule: 'الجدول الشهري', reports: 'تقارير الشيكات', partners: 'المستفيدون' };
+            const tabs = `<div class="flex flex-wrap gap-2">
+                ${checksTab('checks', 'الشيكات', 'fa-money-check-dollar', tab === 'checks')}
+                ${checksTab('checks/schedule', 'الجدول الشهري', 'fa-calendar-days', tab === 'schedule')}
+                ${checksTab('checks/reports', 'التقارير', 'fa-chart-column', tab === 'reports')}
+                ${checksTab('checks/partners', 'المستفيدون', 'fa-handshake', tab === 'partners')}
+            </div>`;
+            let tools = '';
+            if (tab === 'checks' || tab === 'partners') {
+                const isP = tab === 'partners';
+                const addBtn = can('checks.manage')
+                    ? btn(isP ? 'openPartnerModal()' : 'openCheckModal()', isP ? 'مستفيد جديد' : 'شيك جديد', 'fa-plus')
+                    : '';
+                tools = `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+                    <div class="relative flex-1 max-w-md">
+                        <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <input type="search" value="${esc(isP ? partnersQuery : checksQuery)}"
+                               oninput="${isP ? 'partnersQuery' : 'checksQuery'} = this.value; updateChecksBody()"
+                               placeholder="${isP ? 'ابحث باسم المستفيد' : 'ابحث برقم الشيك أو البنك أو المستفيد'}"
+                               class="${INPUT_CLS} pr-9">
+                    </div>
+                    ${addBtn}
+                </div>`;
+            } else if (tab === 'reports') {
+                tools = reportFilterHtml();
+            }
+            return {
+                title: titles[tab],
+                actions: '',
+                html: `<div class="space-y-4">${tabs}${tools}<div id="checksBody">${checksBodyFor(tab)}</div></div>`
+            };
+        }
+
+        function updateChecksBody() {
+            const body = document.getElementById('checksBody');
+            if (body) body.innerHTML = checksBodyFor(parseRoute().param);
+        }
+
+        function checksBodyFor(tab) {
+            if (tab === 'partners') return partnersBodyHtml();
+            if (tab === 'schedule') return scheduleBodyHtml();
+            if (tab === 'reports') return reportsBodyHtml();
+            return checksListHtml();
+        }
+
+        function checkRowActions(c) {
+            const manage = can('checks.manage');
+            const id = esc(c.id);
+            return `<button type="button" onclick="printCheck('${id}')" title="طباعة الشيك" aria-label="طباعة الشيك" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>`
+                + (manage ? `<button type="button" onclick="toggleCashed('${id}')" title="${c.cashed ? 'إلغاء الصرف' : 'تم الصرف'}" aria-label="${c.cashed ? 'إلغاء الصرف' : 'تم الصرف'}" class="${BTN_ICON} ${c.cashed ? 'text-emerald-600 hover:bg-emerald-50' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50'}"><i class="fa-solid ${c.cashed ? 'fa-rotate-left' : 'fa-circle-check'}"></i></button>`
+                    + `<button type="button" onclick="openCheckModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>`
+                    + `<button type="button" onclick="deleteCheck('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-400 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : '');
+        }
+
+        // one table (desktop) or cards (phone) for any list of checks
+        function checksTableHtml(rows) {
+            if (!rows.length) return '<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-6 text-center text-slate-600 font-bold">مفيش شيكات</div>';
+            return `<div class="hidden md:block bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300">
+                        <tr>
+                            <th class="py-3 px-4 text-start">رقم الشيك</th>
+                            <th class="py-3 px-4 text-start">البنك</th>
+                            <th class="py-3 px-4 text-start">المستفيد</th>
+                            <th class="py-3 px-4 text-start">المبلغ</th>
+                            <th class="py-3 px-4 text-start">تاريخ الاستحقاق</th>
+                            <th class="py-3 px-4 text-start">الحالة</th>
+                            <th class="py-3 px-4 text-center">إجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200">
+                        ${rows.map(c => `<tr class="hover:bg-slate-50">
+                            <td class="py-3 px-4 font-mono font-bold">${esc(c.number)}</td>
+                            <td class="py-3 px-4 font-semibold">${esc(c.bank)}</td>
+                            <td class="py-3 px-4 font-semibold">${esc(c.payeeName)}</td>
+                            <td class="py-3 px-4 font-bold whitespace-nowrap">${fmtMoney(c.amount)}</td>
+                            <td class="py-3 px-4 whitespace-nowrap">${esc(fmtDateAr(c.dueDate))}</td>
+                            <td class="py-3 px-4">${statusBadge(c)}</td>
+                            <td class="py-3 px-4"><div class="flex justify-center gap-1">${checkRowActions(c)}</div></td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div class="md:hidden space-y-3">
+                ${rows.map(c => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="font-mono font-bold text-slate-800">${esc(c.number)}</p>
+                            <p class="font-semibold text-slate-700 truncate">${esc(c.bank)}</p>
+                        </div>
+                        <div class="text-end">
+                            <p class="font-bold text-brand-700 whitespace-nowrap">${fmtMoney(c.amount)}</p>
+                            ${statusBadge(c)}
+                        </div>
+                    </div>
+                    <p class="text-sm text-slate-700 mt-2"><span class="font-bold">المستفيد:</span> ${esc(c.payeeName)}</p>
+                    <p class="text-sm text-slate-700"><span class="font-bold">تاريخ الاستحقاق:</span> ${esc(fmtDateAr(c.dueDate))}</p>
+                    <div class="flex justify-end gap-1 mt-2">${checkRowActions(c)}</div>
+                </div>`).join('')}
+            </div>`;
+        }
+
+        function checksListHtml() {
+            const q = checksQuery.trim().toLowerCase();
+            if (!appData.checks.length) {
+                return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center">
+                    <i class="fa-solid fa-money-check-dollar text-4xl text-slate-300 mb-3"></i>
+                    <p class="text-slate-700 font-bold mb-4">مفيش شيكات مسجلة لسه</p>
+                    ${can('checks.manage') ? btn('openCheckModal()', 'شيك جديد', 'fa-plus') : ''}
+                </div>`;
+            }
+            const rows = appData.checks
+                .filter(c => !q || `${c.number} ${c.bank} ${c.payeeName}`.toLowerCase().includes(q))
+                .sort(byDue);
+            const total = sumAmt(rows), openT = sumAmt(rows.filter(isOpen));
+            const summary = `<p class="text-sm font-bold text-slate-700">عدد الشيكات: ${rows.length} — الإجمالي: ${fmtMoney(total)} — المفتوح: ${fmtMoney(openT)}</p>`;
+            if (!rows.length) {
+                return `${alertBanner()}${summary}<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center text-slate-600 font-bold">مفيش نتايج للبحث ده</div>`;
+            }
+            return `${alertBanner()}${summary}${checksTableHtml(rows)}`;
+        }
+
+        function scheduleBodyHtml() {
+            const { overdue, soon } = alertsSummary();
+            const alertRows = [...overdue, ...soon];
+            const daysOpts = [7, 15, 30].map(n => `<option value="${n}" ${n === scheduleDays ? 'selected' : ''}>${n} يوم</option>`).join('');
+            const alerts = `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="font-bold text-slate-800"><i class="fa-solid fa-bell text-amber-500"></i> تنبيهات الاستحقاق</h3>
+                    <label class="text-sm font-bold text-slate-700 flex items-center gap-2">التنبيه قبل الاستحقاق بـ
+                        <select onchange="scheduleDays = Number(this.value); updateChecksBody()" class="${INPUT_CLS} !w-auto py-1.5">${daysOpts}</select>
+                    </label>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="rounded-xl bg-rose-50 border-2 border-rose-200 p-3">
+                        <p class="text-sm font-bold text-rose-800">متأخرة ولسه ماتصرفتش</p>
+                        <p class="text-2xl font-bold text-rose-700">${overdue.length}</p>
+                        <p class="text-sm font-bold text-rose-800">${fmtMoney(sumAmt(overdue))}</p>
+                    </div>
+                    <div class="rounded-xl bg-amber-50 border-2 border-amber-200 p-3">
+                        <p class="text-sm font-bold text-amber-800">قربت خلال ${scheduleDays} يوم</p>
+                        <p class="text-2xl font-bold text-amber-700">${soon.length}</p>
+                        <p class="text-sm font-bold text-amber-800">${fmtMoney(sumAmt(soon))}</p>
+                    </div>
+                </div>
+                ${alertRows.length ? checksTableHtml(alertRows) : '<p class="text-sm text-slate-600">مفيش تنبيهات دلوقتي</p>'}
+            </div>`;
+
+            const byMonth = {};
+            appData.checks.forEach(c => { const k = (c.dueDate || '').slice(0, 7) || '—'; (byMonth[k] = byMonth[k] || []).push(c); });
+            const months = Object.keys(byMonth).sort();
+            const monthly = months.map(m => {
+                const rows = byMonth[m].sort(byDue);
+                const total = sumAmt(rows), openT = sumAmt(rows.filter(isOpen));
+                return `<section class="space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-100 border-2 border-slate-300 rounded-xl px-4 py-2">
+                        <h3 class="font-bold text-slate-800">${esc(monthLabel(m))}</h3>
+                        <p class="text-sm font-bold text-slate-700">${rows.length} شيك — الإجمالي ${fmtMoney(total)} — المفتوح ${fmtMoney(openT)} — المصروف ${fmtMoney(r2(total - openT))}</p>
+                    </div>
+                    ${checksTableHtml(rows)}
+                </section>`;
+            }).join('');
+            return `${alerts}${monthly || checksTableHtml([])}`;
+        }
+
+        function filteredChecksForReport() {
+            const f = reportFilter;
+            return appData.checks
+                .filter(c => (!f.from || c.dueDate >= f.from) && (!f.to || c.dueDate <= f.to)
+                    && (!f.partnerId || c.payeeId === f.partnerId)
+                    && (f.status === 'all' || (f.status === 'open' ? !c.cashed : !!c.cashed)))
+                .sort(byDue);
+        }
+
+        // per-partner summary of a list of checks
+        function partnerSummaryRows(rows) {
+            const map = new Map();
+            rows.forEach(c => {
+                const k = c.payeeId || c.payeeName;
+                const g = map.get(k) || { name: c.payeeName, partner: appData.partners.find(p => p.id === c.payeeId) || null, count: 0, total: 0, open: 0, cashed: 0 };
+                const amt = Number(c.amount) || 0;
+                g.count++; g.total = r2(g.total + amt);
+                if (c.cashed) g.cashed = r2(g.cashed + amt); else g.open = r2(g.open + amt);
+                map.set(k, g);
+            });
+            return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+        }
+
+        function reportFilterHtml() {
+            const f = reportFilter;
+            const partnerOpts = [...appData.partners].sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+                .map(p => `<option value="${esc(p.id)}" ${f.partnerId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    ${field('من تاريخ الاستحقاق', `<input type="date" value="${esc(f.from)}" onchange="reportFilter.from = this.value; updateChecksBody()" class="${INPUT_CLS}">`)}
+                    ${field('إلى تاريخ الاستحقاق', `<input type="date" value="${esc(f.to)}" onchange="reportFilter.to = this.value; updateChecksBody()" class="${INPUT_CLS}">`)}
+                    ${field('المستفيد', `<select onchange="reportFilter.partnerId = this.value; updateChecksBody()" class="${INPUT_CLS}"><option value="">كل المستفيدين</option>${partnerOpts}</select>`)}
+                    ${field('الحالة', `<select onchange="reportFilter.status = this.value; updateChecksBody()" class="${INPUT_CLS}">
+                        <option value="all" ${f.status === 'all' ? 'selected' : ''}>الكل</option>
+                        <option value="open" ${f.status === 'open' ? 'selected' : ''}>المفتوح</option>
+                        <option value="cashed" ${f.status === 'cashed' ? 'selected' : ''}>المصروف</option>
+                    </select>`)}
+                </div>
+                <div class="flex flex-wrap gap-2 justify-end">
+                    ${btn('printReport()', 'طباعة التقرير', 'fa-print', BTN_SECONDARY)}
+                    ${btn('exportReportXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                </div>
+            </div>`;
+        }
+
+        function reportsBodyHtml() {
+            const rows = filteredChecksForReport();
+            const total = sumAmt(rows), openT = sumAmt(rows.filter(isOpen));
+            const overdueN = rows.filter(isOverdue).length;
+            const overPartners = appData.partners.filter(partnerOver).length;
+            const card = (label, value, cls = 'text-slate-800') => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4">
+                <p class="text-xs font-bold text-slate-600">${label}</p><p class="text-xl font-bold ${cls}">${value}</p></div>`;
+            const cards = `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                ${card('عدد الشيكات', rows.length)}
+                ${card('الإجمالي', fmtMoney(total))}
+                ${card('المفتوح', fmtMoney(openT), 'text-amber-700')}
+                ${card('المصروف', fmtMoney(r2(total - openT)), 'text-emerald-700')}
+                ${card('متأخرة / مستفيدون تجاوزوا الحد', `${overdueN} / ${overPartners}`, 'text-rose-700')}
+            </div>`;
+            const psum = partnerSummaryRows(rows);
+            const partnerTable = psum.length ? `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                        <th class="py-3 px-4 text-start">المستفيد</th><th class="py-3 px-4 text-start">عدد</th>
+                        <th class="py-3 px-4 text-start">الإجمالي</th><th class="py-3 px-4 text-start">المفتوح</th>
+                        <th class="py-3 px-4 text-start">المصروف</th><th class="py-3 px-4 text-start">الحد</th>
+                    </tr></thead>
+                    <tbody class="divide-y divide-slate-200">
+                        ${psum.map(g => `<tr class="hover:bg-slate-50">
+                            <td class="py-3 px-4 font-semibold">${esc(g.name)}</td>
+                            <td class="py-3 px-4">${g.count}</td>
+                            <td class="py-3 px-4 whitespace-nowrap">${fmtMoney(g.total)}</td>
+                            <td class="py-3 px-4 whitespace-nowrap">${fmtMoney(g.open)}</td>
+                            <td class="py-3 px-4 whitespace-nowrap">${fmtMoney(g.cashed)}</td>
+                            <td class="py-3 px-4">${g.partner ? limitCell(g.partner) : ''}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table></div>` : '';
+            return `${cards}${partnerTable}${checksTableHtml(rows)}`;
+        }
+
+        function partnersBodyHtml() {
+            const q = partnersQuery.trim().toLowerCase();
+            const manage = can('checks.manage');
+            if (!appData.partners.length) {
+                return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center">
+                    <i class="fa-solid fa-handshake text-4xl text-slate-300 mb-3"></i>
+                    <p class="text-slate-700 font-bold mb-4">مفيش مستفيدين مسجلين لسه</p>
+                    ${manage ? btn('openPartnerModal()', 'مستفيد جديد', 'fa-plus') : ''}
+                </div>`;
+            }
+            const rows = appData.partners
+                .filter(p => !q || p.name.toLowerCase().includes(q))
+                .sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            if (!rows.length) {
+                return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center text-slate-600 font-bold">مفيش نتايج للبحث ده</div>`;
+            }
+            const countOf = id => appData.checks.filter(c => c.payeeId === id).length;
+            const actions = p => `<button type="button" onclick="navigate('checks/partners/${esc(p.id)}')" title="كشف الحساب" aria-label="كشف الحساب" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-file-lines"></i></button>`
+                + (manage
+                    ? `<button type="button" onclick="openPartnerModal('${esc(p.id)}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>`
+                    + `<button type="button" onclick="deletePartner('${esc(p.id)}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-400 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>`
+                    : '');
+            return `<div class="hidden md:block bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300">
+                        <tr>
+                            <th class="py-3 px-4 text-start">اسم المستفيد</th>
+                            <th class="py-3 px-4 text-start">الحد والمفتوح</th>
+                            <th class="py-3 px-4 text-start">عدد الشيكات</th>
+                            <th class="py-3 px-4 text-center">إجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200">
+                        ${rows.map(p => `<tr class="hover:bg-slate-50">
+                            <td class="py-3 px-4"><div class="font-bold">${esc(p.name)}</div><div class="text-xs text-slate-500">${esc(p.notes)}</div></td>
+                            <td class="py-3 px-4">${limitCell(p)}</td>
+                            <td class="py-3 px-4 font-semibold">${countOf(p.id)}</td>
+                            <td class="py-3 px-4"><div class="flex justify-center gap-1">${actions(p)}</div></td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div class="md:hidden space-y-3">
+                ${rows.map(p => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4">
+                    <div class="flex items-start justify-between gap-2">
+                        <p class="font-bold text-slate-800">${esc(p.name)}</p>
+                        <span class="text-xs font-bold text-slate-600 whitespace-nowrap">${countOf(p.id)} شيك</span>
+                    </div>
+                    <div class="mt-2">${limitCell(p)}</div>
+                    ${p.notes ? `<p class="text-sm text-slate-600 mt-1">${esc(p.notes)}</p>` : ''}
+                    <div class="flex justify-end gap-1 mt-2">${actions(p)}</div>
+                </div>`).join('')}
+            </div>`;
+        }
+
+        // statement of one partner: totals, limit, all of their checks
+        function viewStatement(id) {
+            const p = appData.partners.find(x => x.id === id);
+            const back = `<button type="button" onclick="navigate('checks/partners')" class="text-sm font-bold text-brand-700 hover:underline"><i class="fa-solid fa-arrow-right"></i> رجوع للمستفيدين</button>`;
+            if (!p) {
+                return { title: 'كشف المستفيد', actions: '', html: `<div class="space-y-4">${back}<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center font-bold text-slate-600">المستفيد ده مش موجود</div></div>` };
+            }
+            const rows = appData.checks.filter(c => c.payeeId === p.id).sort(byDue);
+            const total = sumAmt(rows), openT = sumAmt(rows.filter(isOpen));
+            const over = partnerOver(p);
+            return {
+                title: 'كشف المستفيد',
+                actions: '',
+                html: `<div class="space-y-4">
+                    ${back}
+                    <div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-5 space-y-4">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div><h2 class="text-xl font-bold text-slate-800">${esc(p.name)}</h2>${p.notes ? `<p class="text-sm text-slate-600">${esc(p.notes)}</p>` : ''}</div>
+                            <div class="flex flex-wrap gap-2">
+                                ${btn(`printStatement('${esc(p.id)}')`, 'طباعة الكشف', 'fa-print', BTN_SECONDARY)}
+                                ${btn(`exportStatementXlsx('${esc(p.id)}')`, 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div class="rounded-xl bg-slate-50 border-2 border-slate-200 p-3"><p class="text-xs font-bold text-slate-600">عدد الشيكات</p><p class="text-lg font-bold">${rows.length}</p></div>
+                            <div class="rounded-xl bg-slate-50 border-2 border-slate-200 p-3"><p class="text-xs font-bold text-slate-600">الإجمالي</p><p class="text-lg font-bold">${fmtMoney(total)}</p></div>
+                            <div class="rounded-xl bg-amber-50 border-2 border-amber-200 p-3"><p class="text-xs font-bold text-amber-800">المفتوح</p><p class="text-lg font-bold text-amber-800">${fmtMoney(openT)}</p></div>
+                            <div class="rounded-xl bg-emerald-50 border-2 border-emerald-200 p-3"><p class="text-xs font-bold text-emerald-800">المصروف</p><p class="text-lg font-bold text-emerald-800">${fmtMoney(r2(total - openT))}</p></div>
+                        </div>
+                        <div>${limitCell(p)}</div>
+                        ${over ? '<p class="text-sm font-bold text-rose-700"><i class="fa-solid fa-triangle-exclamation"></i> المفتوح تجاوز الحد المسموح للمستفيد ده</p>' : ''}
+                    </div>
+                    ${checksTableHtml(rows)}
+                </div>`
+            };
+        }
+
+        // ---- check modal (with live warning when the partner limit would be passed) ----
+        function updateCheckWarning() {
+            const box = document.getElementById('checkWarn');
+            if (!box) return;
+            const payeeId = document.querySelector('#modalForm select[name=payeeId]')?.value || '';
+            const amount = Number(document.querySelector('#modalForm input[name=amount]')?.value);
+            const p = appData.partners.find(x => x.id === payeeId);
+            const editing = checkModalId ? appData.checks.find(x => x.id === checkModalId) : null;
+            const counts = !(editing && editing.cashed);
+            if (!p || !(p.limit > 0) || !(amount > 0) || !counts) {
+                box.classList.add('hidden'); box.textContent = ''; return;
+            }
+            const after = r2(partnerOpenTotal(p.id, checkModalId) + amount);
+            if (after > p.limit + 1e-9) {
+                box.classList.remove('hidden');
+                box.textContent = `تنبيه: المفتوح للمستفيد ده هيبقى ${fmtMoney(after)} والحد ${fmtMoney(p.limit)} — هيتجاوز الحد بـ ${fmtMoney(r2(after - p.limit))}`;
+            } else {
+                box.classList.add('hidden'); box.textContent = '';
+            }
+        }
+
+        function openCheckModal(id = null) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const c = id ? appData.checks.find(x => x.id === id) : null;
+            if (id && !c) return;
+            if (!appData.partners.length) {
+                toast('أضف مستفيد الأول من تبويب المستفيدين', 'info', null, 5000);
+                navigate('checks/partners');
+                return;
+            }
+            checkModalId = id;
+            const partners = [...appData.partners].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            const payeeOptions = partners.map(p => `<option value="${esc(p.id)}" ${c && c.payeeId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+            const banks = [...new Set(appData.checks.map(x => x.bank).filter(Boolean))].sort();
+
+            openModal({
+                title: c ? 'تعديل الشيك' : 'شيك جديد',
+                submitText: c ? 'حفظ التعديلات' : 'إضافة الشيك',
+                body: `
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        ${field('رقم الشيك *', `<input name="number" required value="${esc(c?.number)}" placeholder="مثال: 004512" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                        ${field('البنك *', `<input name="bank" required list="bankList" value="${esc(c?.bank)}" placeholder="مثال: البنك الأهلي" class="${INPUT_CLS}"><datalist id="bankList">${banks.map(b => `<option value="${esc(b)}"></option>`).join('')}</datalist>`)}
+                        ${field('المبلغ (جنيه) *', `<input name="amount" type="number" step="0.01" min="0.01" required value="${c ? esc(c.amount) : ''}" oninput="updateAmountWords(this.value); updateCheckWarning()" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                        ${field('تاريخ الاستحقاق *', `<input name="dueDate" type="date" required value="${esc(c?.dueDate || todayISO())}" class="${INPUT_CLS}">`)}
+                    </div>
+                    <div id="amountWords" class="rounded-xl bg-slate-50 border-2 border-slate-200 p-3 text-sm font-bold text-slate-700"></div>
+                    ${field('المستفيد *', `<select name="payeeId" required onchange="updateCheckWarning()" class="${INPUT_CLS}"><option value="">— اختر المستفيد —</option>${payeeOptions}</select>`)}
+                    <div id="checkWarn" class="hidden rounded-xl bg-rose-50 border-2 border-rose-300 p-3 text-sm font-bold text-rose-800"></div>`,
+                onOpen: () => { updateAmountWords(c ? c.amount : ''); updateCheckWarning(); },
+                onSubmit: fd => {
+                    const number = String(fd.get('number') || '').trim();
+                    const bank = String(fd.get('bank') || '').trim();
+                    const amount = r2(Number(fd.get('amount')));
+                    const dueDate = String(fd.get('dueDate') || '');
+                    const payee = appData.partners.find(p => p.id === String(fd.get('payeeId') || ''));
+                    if (!number || !bank || !dueDate) return toast('اكتب رقم الشيك والبنك والتاريخ', 'error'), false;
+                    if (!(amount > 0) || amount > CHECK_MAX_AMOUNT) return toast('اكتب مبلغ صحيح أكبر من صفر', 'error'), false;
+                    if (!payee) return toast('اختر المستفيد', 'error'), false;
+                    if (appData.checks.some(x => x.id !== id && x.number === number && x.bank === bank)) {
+                        return toast('الشيك ده متسجل قبل كده بنفس الرقم والبنك', 'error'), false;
+                    }
+                    const data = { number, bank, amount, dueDate, payeeId: payee.id, payeeName: payee.name };
+                    if (c) {
+                        Object.assign(c, data);
+                        log('تعديل شيك', `${number} — ${payee.name}`);
+                        toast('تم حفظ التعديلات', 'success');
+                    } else {
+                        appData.checks.push({ id: uid('CHK-'), ...data, cashed: false });
+                        log('إضافة شيك', `${number} — ${payee.name}`);
+                        toast('تمت إضافة الشيك', 'success');
+                    }
+                    checkModalId = null;
+                    if (payee.limit > 0 && partnerOver(payee)) {
+                        toast(`تنبيه: المفتوح للمستفيد "${payee.name}" تجاوز الحد المسموح`, 'info', null, 7000);
+                    }
+                    render();
+                }
+            });
+        }
+
+        function openPartnerModal(id = null) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const p = id ? appData.partners.find(x => x.id === id) : null;
+            if (id && !p) return;
+            openModal({
+                title: p ? 'تعديل المستفيد' : 'مستفيد جديد',
+                submitText: p ? 'حفظ التعديلات' : 'إضافة المستفيد',
+                body: `
+                    ${field('اسم المستفيد *', `<input name="name" required value="${esc(p?.name)}" placeholder="مثال: شركة الخليج للتوزيع" class="${INPUT_CLS}">`)}
+                    ${field('الحد المسموح (جنيه)', `<input name="limit" type="number" step="0.01" min="0" value="${p && p.limit > 0 ? esc(p.limit) : ''}" placeholder="فاضي = مفيش حد" dir="ltr" class="${INPUT_CLS} font-mono">`, 'لو مجموع الشيكات المفتوحة للمستفيد عدّى الحد، التطبيق بيحذّرك')}
+                    ${field('ملاحظات', `<textarea name="notes" rows="3" class="${INPUT_CLS}" placeholder="أي تفاصيل إضافية...">${esc(p?.notes)}</textarea>`)}`,
+                onSubmit: fd => {
+                    const name = String(fd.get('name') || '').trim();
+                    const notes = String(fd.get('notes') || '').trim();
+                    const limitRaw = String(fd.get('limit') || '').trim();
+                    const limit = limitRaw === '' ? 0 : r2(Number(limitRaw));
+                    if (!name) return toast('اكتب اسم المستفيد', 'error'), false;
+                    if (!(limit >= 0) || limit > CHECK_MAX_AMOUNT) return toast('اكتب حد صحيح أو سيبه فاضي', 'error'), false;
+                    if (appData.partners.some(x => x.id !== id && x.name.trim() === name)) {
+                        return toast('الاسم ده موجود قبل كده', 'error'), false;
+                    }
+                    if (p) {
+                        Object.assign(p, { name, notes, limit });
+                        // keep the payee name on the checks in step with the partner's name
+                        appData.checks.forEach(x => { if (x.payeeId === p.id) x.payeeName = name; });
+                        log('تعديل مستفيد', name);
+                        toast('تم حفظ التعديلات', 'success');
+                    } else {
+                        appData.partners.push({ id: uid('PAY-'), name, notes, limit });
+                        log('إضافة مستفيد', name);
+                        toast('تمت إضافة المستفيد', 'success');
+                    }
+                    render();
+                }
+            });
+        }
+
+        // mark a check as cashed (تم الصرف) or open again
+        function toggleCashed(id) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const c = appData.checks.find(x => x.id === id);
+            if (!c) return;
+            c.cashed = !c.cashed;
+            log(c.cashed ? 'صرف شيك' : 'إلغاء صرف شيك', `${c.number} — ${c.payeeName}`);
+            toast(c.cashed ? 'تم تسجيل الصرف' : 'تم إلغاء الصرف', 'success');
+            render();
+        }
+
+        // Soft delete (with undo), same as companies
+        function deleteCheck(id) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const idx = appData.checks.findIndex(c => c.id === id);
+            if (idx < 0) return;
+            finalizePendingUndo();
+            const c = appData.checks[idx];
+            appData.checks.splice(idx, 1);
+            log('حذف شيك', `${c.number} — ${c.payeeName}`);
+            render();
+            scheduleUndo(`تم حذف الشيك رقم ${c.number}`, () => {
+                appData.checks.splice(Math.min(idx, appData.checks.length), 0, c);
+                log('استعادة شيك', `${c.number} — ${c.payeeName}`);
+                render();
+            }, () => {});
+        }
+
+        function deletePartner(id) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const idx = appData.partners.findIndex(p => p.id === id);
+            if (idx < 0) return;
+            finalizePendingUndo();
+            const p = appData.partners[idx];
+            appData.partners.splice(idx, 1);
+            log('حذف مستفيد', p.name);
+            render();
+            scheduleUndo(`تم حذف "${p.name}"`, () => {
+                appData.partners.splice(Math.min(idx, appData.partners.length), 0, p);
+                log('استعادة مستفيد', p.name);
+                render();
+            }, () => {});
+        }
+
+        // ---- printing and Excel ----
+        // a hidden frame prints one HTML document (no pop-up window)
+        function printHtml(html) {
+            const frame = document.createElement('iframe');
+            frame.setAttribute('aria-hidden', 'true');
+            frame.style.cssText = 'position:fixed;width:0;height:0;border:0;right:0;bottom:0;';
+            frame.onload = () => {
+                try {
+                    frame.contentWindow.focus();
+                    frame.contentWindow.print();
+                } catch (err) {
+                    console.error(err);
+                    toast('تعذر فتح نافذة الطباعة', 'error');
+                }
+                setTimeout(() => frame.remove(), 2000);
+            };
+            frame.srcdoc = html;
+            document.body.appendChild(frame);
+        }
+
+        // The check as an official layout: 18 x 8.5 cm, on A4 landscape.
+        function checkPrintHtml(c) {
+            const words = amountToArabicWords(c.amount);
+            return `<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>شيك رقم ${esc(c.number)}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Tahoma, Arial, sans-serif; }
+  .check { position: relative; width: 180mm; height: 85mm; margin: 0 auto; border: 2px solid #1e3a5f; border-radius: 4mm; padding: 5mm 8mm; }
+  .head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #1e3a5f; padding-bottom: 2mm; }
+  .bank { font-size: 16pt; font-weight: 800; }
+  .title { font-size: 13pt; font-weight: 800; color: #1e3a5f; letter-spacing: 2px; }
+  .num { font-family: 'Courier New', monospace; font-size: 13pt; font-weight: 800; direction: ltr; }
+  .row { display: flex; align-items: flex-end; gap: 3mm; margin-top: 4mm; font-size: 11pt; }
+  .lbl { font-weight: 700; white-space: nowrap; }
+  .line { flex: 1; border-bottom: 1px dotted #000; min-height: 7mm; padding: 0 2mm; font-weight: 700; font-size: 12pt; }
+  .words { font-size: 11.5pt; font-weight: 700; line-height: 1.6; }
+  .amount { margin-top: 4mm; display: flex; align-items: center; justify-content: space-between; }
+  .amount-box { border: 2px solid #000; min-width: 52mm; padding: 2mm 3mm; font-size: 15pt; font-weight: 800; text-align: center; direction: ltr; }
+  .sig { width: 62mm; border-top: 1px solid #000; text-align: center; padding-top: 1mm; font-size: 10pt; font-weight: 700; }
+<\/style><\/head>
+<body><div class="check">
+  <div class="head">
+    <div class="bank">${esc(c.bank)}</div>
+    <div class="title">شيك</div>
+    <div class="num">No. ${esc(c.number)}</div>
+  </div>
+  <div class="row"><span class="lbl">تاريخ الاستحقاق:</span><span class="line" style="flex:0 0 42mm; direction:ltr; text-align:center">${esc(fmtDateAr(c.dueDate))}</span></div>
+  <div class="row"><span class="lbl">ادفعوا لأمر:</span><span class="line">${esc(c.payeeName)}</span></div>
+  <div class="row"><span class="lbl">مبلغ وقدره:</span><span class="line words">فقط ${esc(words)} لا غير</span></div>
+  <div class="amount">
+    <div class="amount-box">${fmtDigits(c.amount)} ج.م</div>
+    <div class="sig">توقيع الساحب</div>
+  </div>
+<\/div><\/body><\/html>`;
+        }
+
+        function printCheck(id) {
+            if (!can('checks.view')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            const c = appData.checks.find(x => x.id === id);
+            if (c) printHtml(checkPrintHtml(c));
+        }
+
+        // report (summary per partner + list of checks), used for the report tab and for statements
+        function reportPrintHtml(title, meta, rows) {
+            const psum = partnerSummaryRows(rows);
+            const total = sumAmt(rows);
+            const openT = sumAmt(rows.filter(isOpen));
+            const partnerRows = psum.map(g => `<tr>
+                <td>${esc(g.name)}</td><td>${g.count}</td><td>${fmtDigits(g.total)}</td><td>${fmtDigits(g.open)}</td><td>${fmtDigits(g.cashed)}</td>
+                <td>${g.partner && g.partner.limit > 0 ? fmtDigits(g.partner.limit) : '—'}</td></tr>`).join('');
+            const detailRows = rows.map(c => `<tr>
+                <td class="num">${esc(c.number)}</td><td>${esc(c.bank)}</td><td>${esc(c.payeeName)}</td>
+                <td class="num">${fmtDigits(c.amount)}</td><td class="num">${esc(fmtDateAr(c.dueDate))}</td>
+                <td>${c.cashed ? 'مصروف' : (isOverdue(c) ? 'متأخر' : 'مفتوح')}</td></tr>`).join('');
+            return `<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+  @page { size: A4 landscape; margin: 10mm; }
+  body { font-family: Tahoma, Arial, sans-serif; color: #000; margin: 0; font-size: 10pt; }
+  h1 { font-size: 15pt; margin: 0 0 2mm; }
+  .meta { color: #333; margin-bottom: 3mm; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4mm; }
+  th, td { border: 1px solid #555; padding: 1.5mm 2mm; text-align: right; }
+  th { background: #e5e7eb; }
+  .num { font-family: 'Courier New', monospace; direction: ltr; text-align: left; }
+  .tot td { font-weight: 800; background: #f3f4f6; }
+<\/style><\/head>
+<body>
+  <h1>${esc(title)}</h1>
+  <div class="meta">${esc(meta)} — عدد الشيكات ${rows.length} — الإجمالي ${fmtDigits(total)} — المفتوح ${fmtDigits(openT)} — تاريخ الطباعة ${esc(fmtDateAr(todayISO()))}</div>
+  ${psum.length ? `<table><thead><tr><th>المستفيد</th><th>عدد</th><th>الإجمالي</th><th>المفتوح</th><th>المصروف</th><th>الحد</th></tr></thead><tbody>${partnerRows}</tbody></table>` : ''}
+  <table><thead><tr><th>رقم الشيك</th><th>البنك</th><th>المستفيد</th><th>المبلغ</th><th>تاريخ الاستحقاق</th><th>الحالة</th></tr></thead>
+    <tbody>${detailRows || '<tr><td colspan="6">مفيش شيكات</td></tr>'}</tbody></table>
+<\/body><\/html>`;
+        }
+
+        function printReport() {
+            if (!can('checks.view')) return;
+            const f = reportFilter;
+            printHtml(reportPrintHtml('تقرير الشيكات', `من ${f.from || 'البداية'} إلى ${f.to || 'النهاية'}`, filteredChecksForReport()));
+        }
+
+        function printStatement(id) {
+            if (!can('checks.view')) return;
+            const p = appData.partners.find(x => x.id === id);
+            if (!p) return;
+            const rows = appData.checks.filter(c => c.payeeId === p.id).sort(byDue);
+            printHtml(reportPrintHtml(`كشف حساب: ${p.name}`, p.limit > 0 ? `الحد المسموح ${fmtDigits(p.limit)} جنيه` : 'بدون حد مسموح', rows));
+        }
+
+        function exportChecksXlsx(rows, fileName, label) {
+            if (!can('checks.view')) return;
+            if (typeof XLSX === 'undefined') { toast('تعذر تحميل مكتبة إكسيل', 'error'); return; }
+            const wb = XLSX.utils.book_new();
+            const detail = [['رقم الشيك', 'البنك', 'المستفيد', 'المبلغ', 'تاريخ الاستحقاق', 'الحالة']]
+                .concat(rows.map(c => [c.number, c.bank, c.payeeName, Number(c.amount) || 0, c.dueDate,
+                    c.cashed ? 'مصروف' : (isOverdue(c) ? 'متأخر' : 'مفتوح')]));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detail), 'الشيكات');
+            const summary = [['المستفيد', 'عدد الشيكات', 'الإجمالي', 'المفتوح', 'المصروف', 'الحد']]
+                .concat(partnerSummaryRows(rows).map(g => [g.name, g.count, g.total, g.open, g.cashed,
+                    g.partner && g.partner.limit > 0 ? g.partner.limit : '']));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'ملخص المستفيدين');
+            XLSX.writeFile(wb, `${fileName}-${todayISO()}.xlsx`);
+            log('تصدير شيكات إكسيل', `${label} — ${rows.length} شيك`);
+            toast('تم تنزيل ملف Excel', 'success');
+        }
+
+        function exportReportXlsx() {
+            exportChecksXlsx(filteredChecksForReport(), 'تقرير-الشيكات', 'تقرير مفلتر');
+        }
+
+        function exportStatementXlsx(id) {
+            const p = appData.partners.find(x => x.id === id);
+            if (!p) return;
+            exportChecksXlsx(appData.checks.filter(c => c.payeeId === p.id).sort(byDue), 'كشف-' + p.name, p.name);
+        }
+
         // ============ AUTH & PERMISSIONS ============
         function currentUser() {
             return appData.users.find(u => u.id === sessionUserId) || null;
@@ -1763,6 +2627,7 @@
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
             lists: () => viewLists(),
+            checks: param => viewChecks(param),
             users: () => viewUsers(),
             logs: () => viewLogs(),
             settings: () => viewSettings()
@@ -2151,7 +3016,7 @@
             default: null,
             startDesc: (a, b) => String(b.startDate).localeCompare(String(a.startDate)),
             startAsc: (a, b) => String(a.startDate).localeCompare(String(b.startDate)),
-            endAsc: (a, b) => String(a.endDate).localeCompare(String(b.endDate)),
+            endAsc: (a, b) => (a.endDate ? 0 : 1) - (b.endDate ? 0 : 1) || String(a.endDate || '').localeCompare(String(b.endDate || '')),
             discountDesc: (a, b) => effValue(b) - effValue(a),
             nameAsc: (a, b) => a.name.localeCompare(b.name, 'ar')
         };
@@ -2191,6 +3056,7 @@
                 <th class="py-3.5 px-4 text-center">خصم 1</th>
                 <th class="py-3.5 px-4 text-center">خصم 2</th>
                 <th class="py-3.5 px-4 text-center">خصم 3</th>
+                <th class="py-3.5 px-4 text-center">خصم قطعي</th>
                 <th class="py-3.5 px-4 text-center bg-slate-100/70">الصافي الفعلي</th>
                 <th class="py-3.5 px-4 whitespace-nowrap">البداية</th>
                 <th class="py-3.5 px-4 whitespace-nowrap">النهاية</th>
@@ -2207,9 +3073,10 @@
                     <td class="py-3.5 px-4 text-center font-bold">${pct(l.discount1)}</td>
                     <td class="py-3.5 px-4 text-center font-bold">${pct(l.discount2)}</td>
                     <td class="py-3.5 px-4 text-center font-bold">${pct(l.discount3)}</td>
-                    <td class="py-3.5 px-4 text-center font-bold text-emerald-600 bg-emerald-50/50 whitespace-nowrap">${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%</td>
+                    <td class="py-3.5 px-4 text-center font-bold">${pct(l.flatDiscount)}</td>
+                    <td class="py-3.5 px-4 text-center font-bold text-emerald-600 bg-emerald-50/50 whitespace-nowrap">${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount)}%</td>
                     <td class="py-3.5 px-4 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">${esc(l.startDate)}</td>
-                    <td class="py-3.5 px-4 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">${esc(l.endDate)}</td>
+                    <td class="py-3.5 px-4 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">${listEndText(l)}</td>
                     <td class="py-3.5 px-4 text-center">${statusBadgeHtml(st)}</td>
                     <td class="py-3.5 px-4 text-center">${pdfButtonHtml(l, false)}</td>
                     <td class="py-3.5 px-4 text-center">${listActionsHtml(l.id)}</td>
@@ -2218,7 +3085,7 @@
 
             el(scope + 'Cards').innerHTML = items.map(({ c, l }, i) => {
                 const st = listState(l);
-                const net = calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3);
+                const net = calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount);
                 return `<article class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg shadow-slate-300/60 p-4 space-y-4">
                     <div class="flex items-start justify-between gap-3">
                         <div class="min-w-0 flex items-center gap-3">
@@ -2231,8 +3098,8 @@
                         </div>
                         <div class="shrink-0">${statusBadgeHtml(st)}</div>
                     </div>
-                    <div class="grid grid-cols-3 gap-2 text-center">
-                        ${[l.discount1, l.discount2, l.discount3].map((d, k) => `<div class="bg-slate-50 rounded-lg py-2 border border-slate-100"><p class="text-xs font-bold text-slate-500">خصم ${k + 1}</p><p class="font-extrabold text-slate-800">${pct(d)}</p></div>`).join('')}
+                    <div class="grid grid-cols-4 gap-2 text-center">
+                        ${[l.discount1, l.discount2, l.discount3, l.flatDiscount].map((d, k) => `<div class="bg-slate-50 rounded-lg py-2 border border-slate-100"><p class="text-xs font-bold text-slate-500">${k === 3 ? 'خصم قطعي' : 'خصم ' + (k + 1)}</p><p class="font-extrabold text-slate-800">${pct(d)}</p></div>`).join('')}
                     </div>
                     <div class="flex items-center justify-between gap-2 bg-emerald-50 rounded-lg px-3 py-2.5">
                         <span class="text-sm font-bold text-slate-700">صافي الخصم الفعلي</span>
@@ -2240,7 +3107,7 @@
                     </div>
                     <div class="grid grid-cols-2 gap-2 text-sm">
                         <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-xs font-bold text-slate-500">البداية</span><span class="font-bold font-mono text-slate-800">${esc(l.startDate)}</span></div>
-                        <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-xs font-bold text-slate-500">النهاية</span><span class="font-bold font-mono text-slate-800">${esc(l.endDate)}</span></div>
+                        <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-xs font-bold text-slate-500">النهاية</span><span class="font-bold font-mono text-slate-800">${listEndText(l)}</span></div>
                     </div>
                     <div class="flex items-center gap-2 pt-3 border-t border-slate-100">
                         <div class="flex-1 min-w-0">${pdfButtonHtml(l, true)}</div>
@@ -2649,11 +3516,13 @@
 
         async function resetAllData() {
             if (!can('settings.manage')) return;
-            const typed = prompt('تحذير: هيتم مسح كل الشركات واللستات وسجل النشاط نهائياً.\nالمستخدمين والصلاحيات والإعدادات لا تتأثر.\nاكتب "حذف الكل" للتأكيد:');
+            const typed = prompt('تحذير: هيتم مسح كل الشركات واللستات' + (can('checks.manage') ? ' والشيكات والمستفيدين' : '') + ' وسجل النشاط نهائياً.\nالمستخدمين والصلاحيات والإعدادات لا تتأثر.\nاكتب "حذف الكل" للتأكيد:');
             if (typed !== 'حذف الكل') return;
             finalizePendingUndo();
             const pdfIds = appData.companies.flatMap(c => c.lists.filter(l => l.hasPdf).map(l => l.id));
             appData.companies = sampleCompanies();
+            // checks and partners are cleared only by a user who may manage them (else the save would be refused)
+            if (can('checks.manage')) { appData.partners = []; appData.checks = []; }
             appData.logs = [];
             saveState();
             pdfIds.forEach(id => pdfRemove(id));
@@ -2692,8 +3561,8 @@
             if (!can('backup.manage')) return;
             const payload = {
                 app: 'factory-lists', version: 5, exportedAt: new Date().toISOString(),
-                note: 'الشركات واللستات والإعدادات فقط. ملفات PDF والمستخدمين والصلاحيات لا تدخل النسخة.',
-                data: { settings: appData.settings, companies: appData.companies }
+                note: 'الشركات واللستات والشيكات والمستفيدين والإعدادات فقط. ملفات PDF والمستخدمين والصلاحيات لا تدخل النسخة.',
+                data: { settings: appData.settings, companies: appData.companies, partners: appData.partners, checks: appData.checks }
             };
             downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `نسخة-احتياطية-${todayISO()}.json`);
             log('نسخ احتياطي');
@@ -2709,21 +3578,31 @@
             reader.onload = () => {
                 let companies;
                 let settings;
+                let partners = null;
+                let checks = null;
                 try {
                     const parsed = JSON.parse(reader.result);
                     const src = parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
                     companies = src && (Array.isArray(src.companies) ? src.companies : (Array.isArray(src.factories) ? src.factories : null));
                     if (!companies) throw new Error('invalid');
                     settings = src.settings || {};
+                    // checks and partners come back only if the backup has them and this user may manage checks
+                    if (can('checks.manage')) {
+                        partners = Array.isArray(src.partners) ? src.partners : null;
+                        checks = Array.isArray(src.checks) ? src.checks : null;
+                    }
                 } catch (err) {
                     return toast('ملف النسخة الاحتياطية غير صالح', 'error');
                 }
                 const count = companies.reduce((n, c) => n + (Array.isArray(c.lists) ? c.lists.length : 0), 0);
-                if (!confirm(`سيتم استبدال كل الشركات واللستات والإعدادات بالنسخة المختارة (${companies.length} شركة، ${count} لستة).\nالمستخدمين والصلاحيات وسجل النشاط لا يتغيروا.\nهل تريد المتابعة؟`)) return;
+                const checksNote = (partners || checks) ? ' والشيكات والمستفيدين' : '';
+                if (!confirm(`سيتم استبدال كل الشركات واللستات${checksNote} والإعدادات بالنسخة المختارة (${companies.length} شركة، ${count} لستة).\nالمستخدمين والصلاحيات وسجل النشاط لا يتغيروا.\nهل تريد المتابعة؟`)) return;
 
                 finalizePendingUndo();
-                const restored = normalizeData({ settings, companies, roles: {}, users: [], logs: [] });
+                const restored = normalizeData({ settings, companies, partners: partners || [], checks: checks || [], roles: {}, users: [], logs: [] });
                 appData.companies = restored.companies;
+                if (partners) appData.partners = restored.partners;
+                if (checks) appData.checks = restored.checks;
                 appData.settings = restored.settings;
                 saveState();
                 log('استعادة نسخة احتياطية', `${companies.length} شركة، ${count} لستة`);
@@ -2798,7 +3677,7 @@
             if (!target) return toast('اختر شركة صحيحة', 'error'), false;
 
             const name = String(fd.get('name') || '').trim();
-            const discounts = [1, 2, 3].map(n => parseFloat(fd.get('d' + n)) || 0);
+            const discounts = [1, 2, 3, 4].map(n => parseFloat(fd.get('d' + n)) || 0);
             const startDate = String(fd.get('start') || '');
             const endDate = String(fd.get('end') || '');
             const urlValue = String(fd.get('pdfUrl') || '').trim();
@@ -2806,8 +3685,8 @@
             if (pendingBigPdf) return toast('الملف لسه أكبر من 8 ميجا. اضغطه الأول أو امسحه', 'error', null, 6000), false;
             if (!name) return toast('اكتب اسم اللستة', 'error'), false;
             if (discounts.some(d => d < 0 || d > 100)) return toast('نسب الخصم لازم تكون بين 0 و 100', 'error'), false;
-            if (!startDate || !endDate) return toast('حدد تاريخ البداية والنهاية', 'error'), false;
-            if (endDate < startDate) return toast('تاريخ النهاية لازم يكون بعد تاريخ البداية أو نفس اليوم', 'error'), false;
+            if (!startDate) return toast('حدد تاريخ البداية', 'error'), false;
+            if (endDate && endDate < startDate) return toast('تاريخ النهاية لازم يكون بعد تاريخ البداية أو نفس اليوم', 'error'), false;
 
             const found = editingListId ? findList(editingListId) : null;
             const listId = found ? found.l.id : uid('LST-');
@@ -2835,7 +3714,7 @@
                 return false;
             }
 
-            const data = { id: listId, name, discount1: discounts[0], discount2: discounts[1], discount3: discounts[2], startDate, endDate, ...pdfState };
+            const data = { id: listId, name, discount1: discounts[0], discount2: discounts[1], discount3: discounts[2], flatDiscount: discounts[3], startDate, endDate, ...pdfState };
 
             if (found) {
                 if (found.c.id !== target.id) {
@@ -2944,6 +3823,7 @@
 
         // ============ LIST MODAL ============
         function listDuplicateDefaults(source) {
+            if (!source.endDate) return { start: todayISO(), end: '' };
             const duration = daysBetween(source.startDate, source.endDate);
             const start = addDays(source.endDate, 1) || todayISO();
             const end = duration !== null && duration >= 0 ? addDays(start, duration) : addDays(start, 365);
@@ -2982,6 +3862,10 @@
                             <label class="block text-[11px] sm:text-xs font-bold text-slate-700 mb-1">خصم ${n} (%)</label>
                             <input type="number" step="0.01" min="0" max="100" inputmode="decimal" name="d${n}" value="${v?.[`discount${n}`] || ''}" oninput="previewDiscount()" class="w-full px-2 py-2 sm:py-1.5 border border-slate-200 rounded-lg text-sm font-semibold text-center focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white">
                         </div>`).join('')}
+                        <div class="col-span-3 min-w-0">
+                            <label class="block text-[11px] sm:text-xs font-bold text-slate-700 mb-1">خصم قطعي (%)</label>
+                            <input type="number" step="0.01" min="0" max="100" inputmode="decimal" name="d4" value="${v?.flatDiscount || ''}" oninput="previewDiscount()" placeholder="0" class="w-full px-2 py-2 sm:py-1.5 border border-slate-200 rounded-lg text-sm font-semibold text-center focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white">
+                        </div>
                         <div class="col-span-3 pt-2 border-t border-slate-200 flex justify-between items-center gap-2 text-xs text-slate-600">
                             <span>الصافي الفعلي بعد الخصم التراكمي:</span>
                             <span id="effPreview" class="font-bold text-emerald-600 text-sm whitespace-nowrap">0.00%</span>
@@ -2989,7 +3873,7 @@
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('تاريخ البداية *', `<input type="date" name="start" required value="${esc(v ? v.startDate : (dup ? dup.start : todayISO()))}" class="${INPUT_CLS}">`)}
-                        ${field('تاريخ النهاية *', `<input type="date" name="end" required value="${esc(v ? v.endDate : (dup ? dup.end : ''))}" class="${INPUT_CLS}">`)}
+                        ${field('تاريخ النهاية (اختياري)', `<div class="flex gap-2"><input type="date" id="listEndInput" name="end" value="${esc(v ? v.endDate : (dup ? dup.end : ''))}" class="${INPUT_CLS} flex-1 min-w-0"><button type="button" onclick="el('listEndInput').value=''" class="${BTN_SECONDARY} whitespace-nowrap">بدون تاريخ</button></div><p class="text-[11px] text-slate-400 mt-1">سيبه فاضي لو اللستة مالهاش تاريخ انتهاء</p>`)}
                     </div>
                     <div class="space-y-2">
                         <span class="block text-xs font-bold text-slate-700">ملف PDF للوحة</span>
@@ -3012,8 +3896,8 @@
         function previewDiscount() {
             const f = el('modalForm');
             if (!f || !el('effPreview')) return;
-            const d = [1, 2, 3].map(n => f.elements['d' + n]?.value);
-            el('effPreview').textContent = `${calculateEffectiveDiscount(d[0], d[1], d[2])}%`;
+            const d = [1, 2, 3, 4].map(n => f.elements['d' + n]?.value);
+            el('effPreview').textContent = `${calculateEffectiveDiscount(d[0], d[1], d[2], d[3])}%`;
         }
 
         function refreshPdfPreview() {
@@ -3152,12 +4036,12 @@
             const price = parseFloat(el('calcPriceInput').value) || 0;
             let current = price;
             const rows = [];
-            [found.l.discount1, found.l.discount2, found.l.discount3].forEach((d, i) => {
+            [found.l.discount1, found.l.discount2, found.l.discount3, found.l.flatDiscount].forEach((d, i) => {
                 const v = parseFloat(d) || 0;
                 if (!v) return;
                 current = current * (1 - v / 100);
                 rows.push(`<div class="flex justify-between items-center gap-2 text-sm">
-                    <span class="text-slate-500">بعد خصم ${i + 1} (${v}%)</span>
+                    <span class="text-slate-500">${i === 3 ? 'بعد الخصم القطعي' : 'بعد خصم ' + (i + 1)} (${v}%)</span>
                     <span class="font-semibold text-slate-700 whitespace-nowrap">${fmtMoney(current)}</span></div>`);
             });
             const saving = price - current;
@@ -3191,13 +4075,13 @@
             if (!found) return;
             const { c, l } = found;
             const st = listState(l);
-            const discounts = [l.discount1, l.discount2, l.discount3].map(d => parseFloat(d) || 0).filter(d => d > 0).map(d => `${d}%`);
+            const discounts = [l.discount1, l.discount2, l.discount3, l.flatDiscount].map(d => parseFloat(d) || 0).filter(d => d > 0).map(d => `${d}%`);
             const lines = [
                 `*${c.name}*${c.agent ? ` - ${c.agent}` : ''}`,
                 `اللستة: ${l.name}`,
                 `الخصومات: ${discounts.length ? discounts.join(' + ') : 'بدون خصم'}`,
-                `صافي الخصم الفعلي: ${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%`,
-                `الفترة: من ${l.startDate} إلى ${l.endDate}`,
+                `صافي الخصم الفعلي: ${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount)}%`,
+                l.endDate ? `الفترة: من ${l.startDate} إلى ${l.endDate}` : `الفترة: من ${l.startDate} (بدون تاريخ انتهاء)`,
                 `الحالة: ${statusLabel(st)}`
             ];
             if (l.pdfFile) lines.push(`${l.hasPdf ? 'الملف' : 'الرابط'}: ${l.pdfFile}`);
@@ -3217,10 +4101,11 @@
                 'خصم 1': parseFloat(l.discount1) || 0,
                 'خصم 2': parseFloat(l.discount2) || 0,
                 'خصم 3': parseFloat(l.discount3) || 0,
+                'خصم قطعي': parseFloat(l.flatDiscount) || 0,
                 'تاريخ البداية': l.startDate,
                 'تاريخ النهاية': l.endDate,
                 'الحالة': statusLabel(listState(l)),
-                'صافي الخصم الفعلي %': parseFloat(calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)),
+                'صافي الخصم الفعلي %': parseFloat(calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount)),
                 'الملف': l.pdfFile || ''
             }));
             const ws = XLSX.utils.json_to_sheet(rows);
@@ -3315,8 +4200,9 @@
                 const d1 = parsePercent(pickValue(row, ['خصم 1', 'نسبة الخصم 1', 'Discount 1']));
                 const d2 = parsePercent(pickValue(row, ['خصم 2', 'نسبة الخصم 2', 'Discount 2']));
                 const d3 = parsePercent(pickValue(row, ['خصم 3', 'نسبة الخصم 3', 'Discount 3']));
+                const d4 = parsePercent(pickValue(row, ['خصم قطعي', 'نسبة الخصم القطعي', 'خصم قطعي %', 'Flat Discount']));
                 const startDate = normalizeDate(pickValue(row, ['تاريخ البداية', 'البداية', 'Start Date']), today);
-                const endDate = normalizeDate(pickValue(row, ['تاريخ النهاية', 'النهاية', 'End Date']), oneYearLater);
+                const endDate = normalizeDate(pickValue(row, ['تاريخ النهاية', 'النهاية', 'End Date']), '');
 
                 let company = appData.companies.find(c => c.name.trim() === companyName);
                 if (!company) {
@@ -3325,7 +4211,7 @@
                     newCompanies++;
                 }
                 company.lists.push({
-                    id: uid('LST-'), name: listName, discount1: d1, discount2: d2, discount3: d3,
+                    id: uid('LST-'), name: listName, discount1: d1, discount2: d2, discount3: d3, flatDiscount: d4,
                     startDate, endDate, pdfFile: '', hasPdf: false
                 });
                 imported++;
@@ -3429,5 +4315,12 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5584a08acf6e192',t:'MTc5Mzg0NDI4MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5584a08acf6e192',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/sw.js').catch(function () {});
+            });
+        }
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55c6fa4cb7cb870',t:'MTc5Mzg4Nzc2NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55c6fa4cb7cb870',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
