@@ -59,11 +59,6 @@
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
-    <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
-    <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <body class="text-slate-800 min-h-screen">
 
@@ -203,6 +198,24 @@
                 ['checks.view', 'عرض الشيكات والمستفيدين وطباعة الشيك'],
                 ['checks.manage', 'إضافة وتعديل وحذف الشيكات والمستفيدين']
             ] },
+            { title: 'الطلبيات', items: [
+                ['orders.view', 'عرض الطلبيات وسجل الحركات'],
+                ['orders.create', 'إنشاء الطلبيات ونسخها'],
+                ['orders.add_supplier', 'إضافة مصنع / مورد جديد من داخل الطلبية'],
+                ['orders.edit', 'تعديل بيانات الطلبية والأصناف (المحتوى)'],
+                ['orders.prices', 'الأسعار والخصومات'],
+                ['orders.schedule', 'الجدولة (شحن ووصول وتسليم وساعات)'],
+                ['orders.transport_truck', 'بيانات النقل: جرار / تريلا'],
+                ['orders.transport_car', 'بيانات النقل: عربية نقل'],
+                ['orders.transport_other', 'بيانات النقل: وسيلة أخرى'],
+                ['orders.payment', 'الدفع والمدفوع والمتبقي'],
+                ['orders.confirm', 'تأكيد وإلغاء وإعادة فتح الطلبيات'],
+                ['orders.execute', 'بدء التحميل وخروج الشحنة وتسجيل التسليم'],
+                ['orders.delete', 'حذف الطلبيات'],
+                ['orders.print', 'طباعة الطلبية وإذن التحميل والقوائم'],
+                ['orders.export', 'تصدير Excel'],
+                ['orders.reports', 'عرض التقارير']
+            ] },
             { title: 'النظام', items: [
                 ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
@@ -218,11 +231,12 @@
             companies: { title: 'المصانع / الشركات', icon: 'fa-industry', perm: 'companies.view' },
             lists: { title: 'كل اللستات', icon: 'fa-file-invoice-dollar', perm: 'lists.view' },
             checks: { title: 'الشيكات', icon: 'fa-money-check-dollar', perm: 'checks.view' },
+            orders: { title: 'الطلبيات', icon: 'fa-truck-ramp-box', perm: 'orders.view' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'checks', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'checks', 'orders', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -489,6 +503,7 @@
                 companies: sampleCompanies(),
                 partners: [],
                 checks: [],
+                orders: [],
                 logs: []
             };
         }
@@ -525,6 +540,22 @@
                     payeeId: String(c.payeeId || ''), payeeName: String(c.payeeName || ''), cashed: c.cashed === true
                 }));
 
+            // Orders: lists that the database may return as objects (keys 0, 1, ...) are turned back into arrays.
+            const asArr = v => (Array.isArray(v) ? v : Object.values(v || {}));
+            d.orders = asArr(d.orders)
+                .filter(o => o && typeof o === 'object' && o.id)
+                .map(o => ({
+                    ...o, id: String(o.id), no: Number(o.no) || 0,
+                    kind: o.kind === 'delivery' ? 'delivery' : 'supply',
+                    status: ORDER_STATUS[o.status] ? o.status : 'draft',
+                    factoryId: String(o.factoryId || ''), factoryName: String(o.factoryName || ''),
+                    items: asArr(o.items).filter(it => it && typeof it === 'object'),
+                    prices: (o.prices && typeof o.prices === 'object') ? o.prices : {},
+                    schedule: o.schedule || {}, transport: o.transport || { type: 'truck' },
+                    payment: o.payment || { terms: 'نقدي', paid: 0, dueDate: '' },
+                    history: asArr(o.history)
+                }));
+
             // Users are profiles only. Passwords live in Firebase Authentication.
             d.users = (Array.isArray(d.users) ? d.users : [])
                 .filter(u => u && typeof u === 'object' && u.id)
@@ -543,6 +574,7 @@
                 name: String(c.name || ''),
                 agent: String(c.agent || ''),
                 notes: String(c.notes || ''),
+                kind: c.kind === 'supplier' ? 'supplier' : 'factory',
                 logo: String(c.logo || ''),
                 lists: (Array.isArray(c.lists) ? c.lists : []).filter(l => l && typeof l === 'object').map(l => ({
                     id: l.id || uid('LST-'),
@@ -719,6 +751,7 @@
             });
             (d.partners || []).forEach(p => out.set('partners/' + p.id, { ...p }));
             (d.checks || []).forEach(c => out.set('checks/' + c.id, { ...c }));
+            orderDocsFor(d.orders || [], out);
             d.users.forEach(u => out.set('users/' + u.id, {
                 name: u.name, email: u.email, roleId: u.roleId, active: u.active,
                 createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null
@@ -733,8 +766,9 @@
         }
 
         function refFor(key) {
-            const [coll, id] = key.split('/');
-            return fbDb.collection(coll).doc(id);
+            // split at the first slash: "orderTransport/truck/{id}" = collection "orderTransport", document "truck/{id}"
+            const i = key.indexOf('/');
+            return fbDb.collection(key.slice(0, i)).doc(key.slice(i + 1));
         }
 
         async function commitChunks(ops) {
@@ -780,7 +814,7 @@
         // One entry is written for every saved change (and every PDF change), by the user who made it.
         // Everyone else who is signed in sees it in the bell. The activity log (logs) stays limited to logs.view.
         const NOTIF_LIMIT = 50;
-        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام' };
+        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
         let notifs = [];                 // newest first, as the database sends them (all users)
         let notifUnsub = null;
@@ -799,7 +833,7 @@
             const names = [...new Set(real.map(o => o.key === 'settings/main'
                 ? 'إعدادات النظام'
                 : (o.data?.name || o.prevData?.name
-                    || (o.data?.number || o.prevData?.number ? 'شيك رقم ' + (o.data?.number || o.prevData?.number) : o.key.split('/')[1]))))];
+                    || (o.data?.number || o.prevData?.number ? 'شيك رقم ' + (o.data?.number || o.prevData?.number) : ((o.data?.no || o.prevData?.no) ? 'طلبية ' + String(o.data?.no || o.prevData?.no).padStart(4, '0') : o.key.split('/')[1])))))];
             return {
                 verb: NOTIF_VERB[verbs.length === 1 ? verbs[0] : 'edit'],
                 kind: kinds.join('، '),
@@ -959,6 +993,7 @@
                 companies,
                 partners: Object.values(c.partners || {}),
                 checks: Object.values(c.checks || {}),
+                orders: buildOrdersFromCache(c),
                 logs: c.logs || []
             });
             fbBaseline = new Map();
@@ -971,7 +1006,7 @@
 
         function startSync(uid) {
             stopSync();
-            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, settings: null, logs: [] };
+            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, ord: {}, settings: null, logs: [] };
             fbLoaded = {};
             fbSynced = false;
             const listen = (name, ref, apply) => {
@@ -995,6 +1030,8 @@
             fbUnsubs = [];
             fbChecksUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbChecksUnsubs = [];
+            fbOrdLive.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            fbOrdLive.clear();
             if (fbLogsUnsub) { try { fbLogsUnsub(); } catch (e) { /* already closed */ } }
             fbLogsUnsub = null;
             stopNotifSync();
@@ -1089,6 +1126,7 @@
             sessionUserId = me.id;
             syncLogsListener();
             setTimeout(syncChecksListener, 0);
+            setTimeout(syncOrdersListener, 0);
             if (!appEntered) {
                 appEntered = true;
                 if (pendingLoginLog) {
@@ -2902,6 +2940,7 @@
         }
 
         function render() {
+            if (orderFormKeep && parseRoute().name !== 'orders') orderFormKeep = null;
             if (!sessionUserId) return;
             const user = currentUser();
             if (!user || !user.active) {
@@ -2972,7 +3011,979 @@
         }
 
         // ============ VIEWS ============
+        // ============ ORDERS (الطلبيات) ============
+        // Ceramics, porcelain and sanitary ware: supply from a factory to the store, or delivery to a customer.
+        // Stored in the "orders" collection (one document per order). Prices live in order.prices (own permission).
+        const ORDER_PERM = {
+            view: 'orders.view', create: 'orders.create', addSupplier: 'orders.add_supplier', edit: 'orders.edit', prices: 'orders.prices', schedule: 'orders.schedule',
+            truck: 'orders.transport_truck', car: 'orders.transport_car', other: 'orders.transport_other', payment: 'orders.payment',
+            confirm: 'orders.confirm', execute: 'orders.execute', delete: 'orders.delete', print: 'orders.print',
+            export: 'orders.export', reports: 'orders.reports'
+        };
+        const canOrd = key => can(ORDER_PERM[key]);
+        const orderUserName = () => { const u = currentUser(); return u ? u.name : ''; };
+        const companyOptionLabel = c => c.name + (c.kind === 'supplier' ? ' (مورد)' : '');
+        // unsaved order kept while the factory / supplier modal is open: { key: 'new' | 'edit/<id>', draft }
+        let orderFormKeep = null;
+
+        let ordersFilter = { status: 'all', kind: 'all', factoryId: '', from: '', to: '', q: '' };
+        let ordersSchedDate = '';
+        let ordersSchedDays = 7;
+        let ordersRepFilter = { from: '', to: '' };
+        const fbOrdLive = new Map();          // collection -> unsubscribe (only collections the user may read)
+        let lastVisibleOrderIds = [];
+
+        const ORDER_STATUS = { draft: 'مسودة', confirmed: 'مؤكدة', loading: 'جاري التحميل', transit: 'في الطريق', delivered: 'تم التسليم', cancelled: 'ملغاة' };
+        const ORDER_STATUS_CLS = {
+            draft: 'bg-slate-100 text-slate-700', confirmed: 'bg-sky-100 text-sky-800', loading: 'bg-amber-100 text-amber-800',
+            transit: 'bg-indigo-100 text-indigo-800', delivered: 'bg-emerald-100 text-emerald-800', cancelled: 'bg-rose-100 text-rose-800'
+        };
+        const ORDER_KIND = { supply: 'توريد من مصنع', delivery: 'تسليم لعميل' };
+        const ORDER_PRODUCTS = ['سيراميك', 'بورسلين', 'أدوات صحية', 'مكملات', 'أخرى'];
+        const ORDER_UNITS = ['م²', 'كرتونة', 'قطعة', 'طن', 'كجم', 'طقم', 'متر طولي', 'كيس', 'أخرى'];
+        const ORDER_TRANSPORT = { truck: 'جرار / تريلا', car: 'عربية نقل', other: 'وسيلة أخرى' };
+        const ORDER_TERMS = ['نقدي', 'شيك', 'أجل', 'تحويل بنكي', 'مختلط'];
+        // allowed moves: from -> [to, permission key, button label]
+        const ORDER_NEXT = {
+            draft: [['confirmed', 'confirm', 'تأكيد الطلبية'], ['cancelled', 'confirm', 'إلغاء الطلبية']],
+            confirmed: [['loading', 'execute', 'بدء التحميل'], ['cancelled', 'confirm', 'إلغاء الطلبية']],
+            loading: [['transit', 'execute', 'خروج للطريق']],
+            transit: [['delivered', 'execute', 'تسجيل التسليم']],
+            delivered: [],
+            cancelled: [['draft', 'confirm', 'إعادة فتح كمسودة']]
+        };
+
+        const orderNoLabel = o => `طلبية ${String(o.no).padStart(4, '0')}`;
+        const orderDateOf = o => (o.schedule && o.schedule.plannedDate) || '';
+        const ordIsActive = o => o.status !== 'cancelled';
+        const ordIsOpen = o => o.status !== 'cancelled' && o.status !== 'delivered';
+        const numOr0 = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+        function nextOrderNo() { return Math.max(0, ...appData.orders.map(o => Number(o.no) || 0)) + 1; }
+
+        // ---- totals (per item, then per order) ----
+        const priceOf = (o, itemId) => ((o.prices || {})[itemId]) || { unitPrice: 0, discount: 0 };
+        function lineCalc(it, pr) {
+            const q = numOr0(it.qty), price = numOr0(pr.unitPrice);
+            const disc = Math.min(100, Math.max(0, numOr0(pr.discount)));
+            const subtotal = r2(q * price), discount = r2(subtotal * disc / 100);
+            const m2 = it.unit === 'م²' ? q : (it.unit === 'كرتونة' ? q * numOr0(it.m2PerBox) : 0);
+            return {
+                subtotal, discount, net: r2(subtotal - discount), m2: r2(m2),
+                boxes: it.unit === 'كرتونة' ? q : 0, pieces: it.unit === 'قطعة' ? q : 0,
+                kg: r2(it.unit === 'طن' ? q * 1000 : (it.unit === 'كجم' ? q : q * numOr0(it.weightPerUnit)))
+            };
+        }
+        function orderTotals(o) {
+            const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0, kg: 0 };
+            (o.items || []).forEach(it => {
+                const l = lineCalc(it, priceOf(o, it.id));
+                Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); });
+            });
+            return t;
+        }
+        const orderBalance = o => r2(orderTotals(o).net - numOr0(o.payment && o.payment.paid));
+
+        // ---- warnings: shown, never blocking ----
+        function timeOverlap(a, b) {
+            if (!a.timeFrom || !a.timeTo || !b.timeFrom || !b.timeTo) return true;   // no hours = whole day
+            return a.timeFrom < b.timeTo && b.timeFrom < a.timeTo;
+        }
+        function orderWarnings(o, all) {
+            const w = [];
+            const s = o.schedule || {}, t = o.transport || {};
+            if (ordIsOpen(o) && !s.plannedDate) w.push('بدون تاريخ جدولة');
+            if (ordIsOpen(o) && s.plannedDate && s.plannedDate < todayISO() && ['draft', 'confirmed', 'loading'].includes(o.status)) w.push('متأخرة عن موعدها');
+            if (s.timeFrom && s.timeTo && s.timeFrom >= s.timeTo) w.push('ساعة النهاية قبل البداية');
+            if (s.arrivalDate && s.plannedDate && s.arrivalDate < s.plannedDate) w.push('الوصول قبل الشحن');
+            if (numOr0(t.capacityKg) > 0 && orderTotals(o).kg > numOr0(t.capacityKg)) w.push('الحمولة أكبر من السعة');
+            return w;
+        }
+
+        // ---- required data before a status move (blocking; these are not warnings) ----
+        function orderProblem(o, to) {
+            if (to === 'confirmed') {
+                if (!o.items || !o.items.length) return 'ضيف أصناف للطلبية الأول';
+                if (o.kind === 'supply' && !o.factoryId) return 'اختار المصنع الأول';
+                if (o.kind === 'delivery' && !o.customerName) return 'اكتب اسم العميل الأول';
+                if (!orderDateOf(o)) return 'حدد تاريخ الجدولة الأول';
+            }
+            return '';
+        }
+
+        // ---- list ----
+        function filteredOrders() {
+            const f = ordersFilter, q = f.q.trim().toLowerCase();
+            return appData.orders.filter(o => {
+                if (f.status !== 'all' && o.status !== f.status) return false;
+                if (f.kind !== 'all' && o.kind !== f.kind) return false;
+                if (f.factoryId && o.factoryId !== f.factoryId) return false;
+                const d = orderDateOf(o);
+                if (f.from && (!d || d < f.from)) return false;
+                if (f.to && (!d || d > f.to)) return false;
+                if (q) {
+                    const hay = [orderNoLabel(o), o.customerName, o.factoryName, o.ref,
+                        ...(o.items || []).map(i => `${i.code} ${i.name}`)].join(' ').toLowerCase();
+                    if (!hay.includes(q)) return false;
+                }
+                return true;
+            }).sort((a, b) => (b.no || 0) - (a.no || 0));
+        }
+
+        function ordersSummaryCards(rows) {
+            const act = rows.filter(ordIsActive);
+            const sum = k => r2(rows.reduce((s, o) => s + orderTotals(o)[k], 0));
+            const today = todayISO();
+            const card = (label, value, cls = 'text-slate-800') => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-3">
+                <p class="text-xs font-bold text-slate-600">${label}</p><p class="text-base font-bold ${cls} whitespace-nowrap">${value}</p></div>`;
+            return `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                ${card('طلبيات نشطة', act.length)}
+                ${canOrd('prices') ? card('صافي القيمة', fmtMoney(r2(act.reduce((s, o) => s + orderTotals(o).net, 0))), 'text-emerald-700') : ''}
+                ${card('مجدولة النهارده', act.filter(o => orderDateOf(o) === today).length, 'text-brand-700')}
+                ${card('متأخرة عن موعدها', rows.filter(o => orderWarnings(o, appData.orders).includes('متأخرة عن موعدها')).length, 'text-rose-700')}
+                ${card('م² / كرتونة / كجم', `${fmtDigits(sum('m2'))} / ${fmtDigits(sum('boxes'))} / ${fmtDigits(sum('kg'))}`)}
+            </div>`;
+        }
+
+        function ordersFilterBar() {
+            const f = ordersFilter;
+            const opt = (cur, v, l) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`;
+            const factories = [...appData.companies].sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+                .map(c => opt(f.factoryId, c.id, companyOptionLabel(c))).join('');
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
+                <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
+                    <div class="col-span-2">${field('بحث', `<input type="search" value="${esc(f.q)}" oninput="ordersFilter.q = this.value; updateOrdersBody()" placeholder="رقم، عميل، مصنع / مورد، مرجع، كود صنف" class="${INPUT_CLS}">`)}</div>
+                    ${field('الحالة', `<select onchange="ordersFilter.status = this.value; updateOrdersBody()" class="${INPUT_CLS}">${opt(f.status, 'all', 'الكل')}${Object.entries(ORDER_STATUS).map(([k, v]) => opt(f.status, k, v)).join('')}</select>`)}
+                    ${field('النوع', `<select onchange="ordersFilter.kind = this.value; updateOrdersBody()" class="${INPUT_CLS}">${opt(f.kind, 'all', 'الكل')}${Object.entries(ORDER_KIND).map(([k, v]) => opt(f.kind, k, v)).join('')}</select>`)}
+                    ${field('المصنع / المورد', `<select onchange="ordersFilter.factoryId = this.value; updateOrdersBody()" class="${INPUT_CLS}"><option value="">كل المصانع</option>${factories}</select>`)}
+                    ${field('تاريخ الجدولة', `<div class="flex gap-1"><input type="date" value="${esc(f.from)}" onchange="ordersFilter.from = this.value; updateOrdersBody()" class="${INPUT_CLS}"><input type="date" value="${esc(f.to)}" onchange="ordersFilter.to = this.value; updateOrdersBody()" class="${INPUT_CLS}"></div>`)}
+                </div>
+                <div class="flex flex-wrap gap-2 justify-end">
+                    ${btn('clearOrdersFilter()', 'مسح الفلاتر', 'fa-filter-circle-xmark', BTN_SECONDARY)}
+                    ${canOrd('print') ? btn('printOrdersList()', 'طباعة القائمة', 'fa-print', BTN_SECONDARY) : ''}
+                    ${canOrd('export') ? btn('exportOrdersXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY) : ''}
+                </div>
+            </div>`;
+        }
+
+        const orderStatusBadge = o => `<span class="px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${ORDER_STATUS_CLS[o.status] || ''}">${esc(ORDER_STATUS[o.status] || o.status)}</span>`;
+        const orderWarnBadges = o => orderWarnings(o, appData.orders).map(w => `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">${esc(w)}</span>`).join(' ');
+        const orderPartyText = o => (o.kind === 'supply' ? (o.factoryName || '—') : (o.customerName || '—'));
+        const orderTimeText = o => { const s = o.schedule || {}; return s.timeFrom ? `${s.timeFrom} - ${s.timeTo || ''}` : ''; };
+        // transport details show only for the vehicle types the user may see (orders.transport_truck / _car / _other)
+        const canSeeVehicle = o => !!(o.transport && o.transport.type && can(ORDER_PERM[o.transport.type]));
+        const vehicleText = o => {
+            const t = o.transport || {};
+            if (!t.type) return '<span class="text-slate-400">—</span>';
+            return esc(ORDER_TRANSPORT[t.type] || '');
+        };
+
+        function orderActionsHtml(o) {
+            const b = (fn, title, icon, cls = '') => `<button type="button" onclick="${fn}" title="${title}" aria-label="${title}" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50 ${cls}"><i class="fa-solid ${icon}"></i></button>`;
+            const id = esc(o.id);
+            return b(`navigate('orders/${id}')`, 'فتح', 'fa-eye')
+                + (canOrd('print') ? b(`printOrderDoc('${id}')`, 'طباعة الطلبية', 'fa-print') : '')
+                + (canOrd('create') ? b(`copyOrder('${id}')`, 'نسخ كطلبية جديدة', 'fa-copy') : '')
+                + (canOrd('delete') ? b(`deleteOrder('${id}')`, 'حذف', 'fa-trash-can', 'hover:text-rose-600 hover:bg-rose-50') : '');
+        }
+
+        function ordersListHtml() {
+            if (!appData.orders.length) {
+                return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center">
+                    <i class="fa-solid fa-truck-ramp-box text-4xl text-slate-300 mb-3"></i>
+                    <p class="text-slate-700 font-bold mb-4">مفيش طلبيات لسه</p>
+                    ${canOrd('create') ? btn("navigate('orders/new')", 'طلبية جديدة', 'fa-plus') : ''}
+                </div>`;
+            }
+            const rows = filteredOrders();
+            lastVisibleOrderIds = rows.map(o => o.id);
+            if (!rows.length) return `${ordersSummaryCards(appData.orders)}<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center text-slate-600 font-bold">مفيش نتايج للفلاتر دي</div>`;
+            return `${ordersSummaryCards(rows)}
+            <div class="hidden md:block bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                        <th class="py-3 px-3 text-start">الرقم</th><th class="py-3 px-3 text-start">النوع</th>
+                        <th class="py-3 px-3 text-start">المصنع / العميل</th><th class="py-3 px-3 text-start">الجدولة</th>
+                        <th class="py-3 px-3 text-start">الوسيلة</th><th class="py-3 px-3 text-start">الكميات</th>
+                        <th class="py-3 px-3 text-start">الصافي</th><th class="py-3 px-3 text-start">الحالة</th>
+                        <th class="py-3 px-3 text-start">تنبيهات</th><th class="py-3 px-3 text-center">إجراءات</th>
+                    </tr></thead>
+                    <tbody class="divide-y divide-slate-200">
+                        ${rows.map(o => { const t = orderTotals(o); return `<tr class="hover:bg-slate-50">
+                            <td class="py-3 px-3 font-mono font-bold whitespace-nowrap"><button type="button" onclick="navigate('orders/${esc(o.id)}')" class="hover:text-brand-700 hover:underline">${orderNoLabel(o)}</button></td>
+                            <td class="py-3 px-3">${esc(ORDER_KIND[o.kind] || '')}</td>
+                            <td class="py-3 px-3 font-semibold">${esc(orderPartyText(o))}${o.kind === 'supply' && o.customerName ? `<br><span class="text-xs text-slate-500">${esc(o.customerName)}</span>` : ''}</td>
+                            <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(orderDateOf(o)) || '—')}<br><span class="text-xs text-slate-500">${esc(orderTimeText(o))}</span></td>
+                            <td class="py-3 px-3">${vehicleText(o)}</td>
+                            <td class="py-3 px-3 text-xs whitespace-nowrap">${t.m2 ? fmtDigits(t.m2) + ' م²' : ''}${t.boxes ? ' · ' + fmtDigits(t.boxes) + ' كرتونة' : ''}${t.pieces ? ' · ' + fmtDigits(t.pieces) + ' قطعة' : ''}${t.kg ? ' · ' + fmtDigits(t.kg) + ' كجم' : ''}</td>
+                            <td class="py-3 px-3 font-bold whitespace-nowrap">${canOrd('prices') ? fmtMoney(t.net) : '<span class="text-slate-400">—</span>'}</td>
+                            <td class="py-3 px-3">${orderStatusBadge(o)}</td>
+                            <td class="py-3 px-3">${orderWarnBadges(o)}</td>
+                            <td class="py-3 px-3"><div class="flex justify-center gap-1">${orderActionsHtml(o)}</div></td>
+                        </tr>`; }).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div class="md:hidden space-y-3">
+                ${rows.map(o => { const t = orderTotals(o); return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4">
+                    <div class="flex items-start justify-between gap-2">
+                        <button type="button" onclick="navigate('orders/${esc(o.id)}')" class="text-start font-mono font-bold text-slate-800">${orderNoLabel(o)}</button>
+                        ${orderStatusBadge(o)}
+                    </div>
+                    <p class="text-sm mt-1"><span class="font-bold">${esc(ORDER_KIND[o.kind] || '')}:</span> ${esc(orderPartyText(o))}</p>
+                    <p class="text-sm"><span class="font-bold">الجدولة:</span> ${esc(fmtDateAr(orderDateOf(o)) || '—')} ${esc(orderTimeText(o))}</p>
+                    <p class="text-sm">${vehicleText(o)}</p>
+                    ${canOrd('prices') ? `<p class="text-sm font-bold text-emerald-700 mt-1">${fmtMoney(t.net)}</p>` : ''}
+                    <div class="flex flex-wrap gap-1 mt-1">${orderWarnBadges(o)}</div>
+                    <div class="flex justify-end gap-1 mt-2">${orderActionsHtml(o)}</div>
+                </div>`; }).join('')}
+            </div>`;
+        }
+
+        function updateOrdersBody() {
+            const body = el('ordersBody');
+            if (body) body.innerHTML = ordersTabBody(parseOrdersTab());
+        }
+        function parseOrdersTab() {
+            const p = String(parseRoute().param || '').split('/')[0];
+            return ['schedule', 'reports'].includes(p) ? p : 'list';
+        }
+        function clearOrdersFilter() {
+            ordersFilter = { status: 'all', kind: 'all', factoryId: '', from: '', to: '', q: '' };
+            render();
+        }
+
+        // ---- schedule board: one card per day, open orders without a date at the bottom ----
+        function setOrdersSched(date, days) {
+            ordersSchedDate = date || todayISO();
+            ordersSchedDays = Number(days) || 7;
+            updateOrdersBody();
+        }
+        const WEEKDAY_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+        function scheduleBoardHtml() {
+            const start = ordersSchedDate || todayISO();
+            const days = [...Array(ordersSchedDays).keys()].map(i => addDaysISO(start, i));
+            const open = appData.orders.filter(ordIsOpen);
+            const dayCards = days.map(d => {
+                const list = open.filter(o => orderDateOf(o) === d)
+                    .sort((a, b) => ((a.schedule && a.schedule.timeFrom) || '99:99').localeCompare((b.schedule && b.schedule.timeFrom) || '99:99'));
+                const kg = r2(list.reduce((s, o) => s + orderTotals(o).kg, 0));
+                const rows = list.length ? list.map(o => {
+                    const t = o.transport || {};
+                    return `<div class="rounded-xl border-2 border-slate-200 bg-white p-3 flex flex-wrap items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="font-bold text-slate-800"><span class="font-mono">${orderNoLabel(o)}</span> — ${esc(orderPartyText(o))}</p>
+                            <p class="text-xs text-slate-600">${esc(orderTimeText(o) || 'طول اليوم')} · ${esc(ORDER_TRANSPORT[t.type] || 'بدون وسيلة')}
+                                · ${fmtDigits(orderTotals(o).kg)} كجم${t.capacityKg ? ' / سعة ' + fmtDigits(t.capacityKg) : ''}</p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1">${orderStatusBadge(o)} ${orderWarnBadges(o)}
+                            <button type="button" onclick="navigate('orders/${esc(o.id)}')" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50" aria-label="فتح"><i class="fa-solid fa-eye"></i></button></div>
+                    </div>`;
+                }).join('') : '<p class="text-sm text-slate-500">مفيش طلبيات في اليوم ده</p>';
+                return `<section class="bg-slate-50 rounded-2xl border-2 border-slate-300 p-3 space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="font-bold text-slate-800">${esc(WEEKDAY_AR[new Date(d + 'T00:00:00').getDay()])} ${esc(fmtDateAr(d))}</h3>
+                        <p class="text-xs font-bold text-slate-700">${list.length} طلبية · ${fmtDigits(kg)} كجم</p>
+                    </div>${rows}</section>`;
+            }).join('');
+            const unscheduled = open.filter(o => !orderDateOf(o));
+            const unsRows = unscheduled.length ? unscheduled.map(o => `<div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-amber-200 bg-amber-50 p-2">
+                <span class="font-mono font-bold">${orderNoLabel(o)}</span><span class="text-sm">${esc(orderPartyText(o))}</span>
+                <button type="button" onclick="navigate('orders/${esc(o.id)}')" class="text-sm font-bold text-brand-700 underline">حدد الجدولة</button></div>`).join('')
+                : '<p class="text-sm text-slate-500">كل الطلبيات المفتوحة متجدولة</p>';
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-4 flex flex-wrap items-end gap-3">
+                    ${field('من يوم', `<input type="date" value="${esc(start)}" onchange="setOrdersSched(this.value, ordersSchedDays)" class="${INPUT_CLS}">`)}
+                    ${field('عدد الأيام', `<select onchange="setOrdersSched(ordersSchedDate, this.value)" class="${INPUT_CLS}">${[7, 14, 30].map(n => `<option value="${n}" ${n === ordersSchedDays ? 'selected' : ''}>${n} يوم</option>`).join('')}</select>`)}
+                    ${btn(`setOrdersSched('${addDaysISO(start, -ordersSchedDays)}', ${ordersSchedDays})`, 'السابق', 'fa-chevron-right', BTN_SECONDARY)}
+                    ${btn(`setOrdersSched('${addDaysISO(start, ordersSchedDays)}', ${ordersSchedDays})`, 'التالي', 'fa-chevron-left', BTN_SECONDARY)}
+                    ${btn(`setOrdersSched('${todayISO()}', ${ordersSchedDays})`, 'النهارده', 'fa-calendar-day', BTN_SECONDARY)}
+                </div>
+                <div class="space-y-3">${dayCards}</div>
+                <div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-4 space-y-2">
+                    <h3 class="font-bold text-slate-800"><i class="fa-solid fa-circle-question text-amber-500"></i> طلبيات مفتوحة لسه مش متجدولة</h3>${unsRows}
+                </div>`;
+        }
+        // ---- add / edit form (its own page: orders/new, orders/edit/<id>) ----
+        // Fields the user cannot change are disabled. Prices are not rendered at all without orders.prices.
+        const ORDER_TRANSPORT_FIELDS = {
+            truck: [],
+            car: ['capacityKg'],
+            other: ['company', 'description', 'capacityKg', 'cost']
+        };
+
+        function ordIn(name, label, value, ok = true, type = 'text', extra = '') {
+            return field(label, `<input name="${name}" type="${type}" value="${esc(value ?? '')}" ${ok ? '' : 'disabled'} ${extra} class="${INPUT_CLS}">`);
+        }
+        function ordSel(name, label, options, value, ok = true) {
+            return field(label, `<select name="${name}" ${ok ? '' : 'disabled'} class="${INPUT_CLS}">${options.map(o => {
+                const [v, l] = Array.isArray(o) ? o : [o, o];
+                return `<option value="${esc(v)}" ${String(value ?? '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
+            }).join('')}</select>`);
+        }
+        const ordCard = (title, icon, body) => `<section class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 sm:p-5 space-y-4">
+            <h3 class="font-bold text-slate-800 text-base"><i class="fa-solid ${icon} text-brand-600"></i> ${title}</h3>${body}</section>`;
+
+        function orderItemRowHtml(it, pr, canEdit, canPrice) {
+            const dis = canEdit ? '' : 'disabled';
+            const f = (name, label, value, type = 'text', cls = '') => `<label class="block text-xs font-bold text-slate-600 mb-1">${label}
+                <input data-f="${name}" type="${type}" value="${esc(value ?? '')}" ${dis} oninput="recalcOrderTotals()" class="${INPUT_CLS} ${cls}"></label>`;
+            const sel = `<label class="block text-xs font-bold text-slate-600 mb-1">نوع الصنف
+                <select data-f="product" ${dis} class="${INPUT_CLS}">${ORDER_PRODUCTS.map(p => `<option ${it.product === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>`;
+            const unit = `<label class="block text-xs font-bold text-slate-600 mb-1">وحدة القياس
+                <select data-f="unit" ${dis} onchange="recalcOrderTotals()" class="${INPUT_CLS}">${ORDER_UNITS.map(u => `<option ${it.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></label>`;
+            const prices = canPrice ? `${f('unitPrice', 'سعر الوحدة', pr.unitPrice, 'number', 'text-start')}${f('discount', 'خصم %', pr.discount, 'number')}` : '';
+            return `<div data-item-row data-iid="${esc(it.id)}" class="rounded-xl border-2 border-slate-200 bg-slate-50 p-3 space-y-3">
+                <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
+                    ${sel}${f('code', 'الكود', it.code)}${f('name', 'الاسم / الموديل', it.name)}${f('size', 'المقاس', it.size)}${f('shade', 'الدرجة / اللون', it.shade)}${unit}
+                </div>
+                <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                    ${f('qty', 'الكمية', it.qty, 'number')}${f('m2PerBox', 'م² في الكرتونة', it.m2PerBox, 'number')}${f('weightPerUnit', 'وزن الوحدة (كجم)', it.weightPerUnit, 'number')}
+                    ${prices}
+                    <div class="col-span-1 flex justify-end">${canEdit ? `<button type="button" onclick="removeOrderItemRow(this)" class="${BTN_ICON} text-rose-600 hover:bg-rose-50" aria-label="حذف الصنف"><i class="fa-solid fa-trash-can"></i></button>` : ''}</div>
+                </div>
+            </div>`;
+        }
+
+        function addOrderItemRow() {
+            const holder = el('orderItems');
+            if (!holder) return;
+            const it = { id: uid('it-'), product: ORDER_PRODUCTS[0], code: '', name: '', size: '', shade: '', unit: 'م²', qty: '', m2PerBox: '', weightPerUnit: '' };
+            holder.insertAdjacentHTML('beforeend', orderItemRowHtml(it, { unitPrice: '', discount: '' }, true, canOrd('prices')));
+            recalcOrderTotals();
+        }
+        function removeOrderItemRow(b) {
+            b.closest('[data-item-row]').remove();
+            recalcOrderTotals();
+        }
+
+        // Read the item rows from the page. Prices are kept from the saved order when the user cannot see them.
+        function readOrderItems(existing) {
+            const items = [], prices = {};
+            document.querySelectorAll('#orderItems [data-item-row]').forEach(row => {
+                const g = n => { const x = row.querySelector(`[data-f="${n}"]`); return x ? x.value : ''; };
+                const it = {
+                    id: row.dataset.iid, product: g('product'), code: g('code').trim(), name: g('name').trim(), size: g('size').trim(),
+                    shade: g('shade').trim(), unit: g('unit'), qty: numOr0(g('qty')), m2PerBox: numOr0(g('m2PerBox')), weightPerUnit: numOr0(g('weightPerUnit'))
+                };
+                if (!it.code && !it.name && !it.qty) return;
+                items.push(it);
+                if (canOrd('prices')) prices[it.id] = { unitPrice: numOr0(g('unitPrice')), discount: Math.min(100, Math.max(0, numOr0(g('discount')))) };
+                else if (existing && existing.prices && existing.prices[it.id]) prices[it.id] = existing.prices[it.id];
+            });
+            return { items, prices };
+        }
+
+        function recalcOrderTotals() {
+            const box = el('orderTotals');
+            if (!box) return;
+            const { items, prices } = readOrderItems({ prices: {} });
+            const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0, kg: 0 };
+            items.forEach(it => { const l = lineCalc(it, prices[it.id] || { unitPrice: 0, discount: 0 }); Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); }); });
+            const cell = (label, value, cls = '') => `<div class="rounded-xl bg-white border border-slate-200 p-2"><p class="text-[11px] font-bold text-slate-500">${label}</p><p class="font-bold ${cls}">${value}</p></div>`;
+            box.innerHTML = `${cell('م²', fmtDigits(t.m2))}${cell('كرتونة', fmtDigits(t.boxes))}${cell('قطعة', fmtDigits(t.pieces))}${cell('كجم', fmtDigits(t.kg))}`
+                + (canOrd('prices') ? `${cell('الإجمالي', fmtMoney(t.subtotal))}${cell('الخصم', fmtMoney(t.discount))}${cell('الصافي', fmtMoney(t.net), 'text-emerald-700')}` : '');
+        }
+
+        function transportTypeChanged(sel) {
+            const type = sel.value;
+            document.querySelectorAll('#orderForm [data-ttype]').forEach(x => { x.classList.toggle('hidden', !x.dataset.ttype.split(' ').includes(type)); });
+            const ok = canOrd(type === 'truck' ? 'truck' : type === 'car' ? 'car' : 'other');
+            document.querySelectorAll('#orderForm [data-tfield]').forEach(x => { x.disabled = !ok; });
+        }
+
+        function keptOrderDraft(key) {
+            if (!orderFormKeep) return null;
+            if (orderFormKeep.key !== key) { orderFormKeep = null; return null; }
+            return orderFormKeep.draft;
+        }
+
+        // Opens the factory / supplier modal from the order form. The unsaved order is kept and the new one is selected.
+        function openSupplierFromOrder() {
+            if (!canOrd('addSupplier')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const param = parseRoute().param || '';
+            const isNew = param === 'new';
+            const id = param.startsWith('edit/') ? param.slice(5) : '';
+            const base = isNew ? { id: '', no: 0, status: 'draft', createdAt: '', createdBy: '', items: [], prices: {}, history: [] }
+                : appData.orders.find(x => x.id === id);
+            if (!base) return toast('افتح الطلبية الأول', 'error');
+            orderFormKeep = { key: isNew ? 'new' : 'edit/' + id, draft: readOrderForm(base) };
+            openCompanyModal(null, true);
+        }
+
+        function ordersFormHtml(o, isNew) {
+            const canContent = isNew ? canOrd('create') : canOrd('edit');
+            const canSched = canOrd('schedule');
+            const canPay = canOrd('payment');
+            const t = o.transport || {};
+            const type = t.type || 'truck';
+            const s = o.schedule || {};
+            const p = o.payment || {};
+            const tOk = canOrd(type === 'truck' ? 'truck' : type === 'car' ? 'car' : 'other');
+            const tf = (name, label, value, ttype = '', type2 = 'text') => {
+                const wrap = field(label, `<input name="${name}" data-tfield type="${type2}" value="${esc(value ?? '')}" ${tOk ? '' : 'disabled'} class="${INPUT_CLS}">`);
+                return ttype ? `<div data-ttype="${ttype}" class="${ttype.split(' ').includes(type) ? '' : 'hidden'}">${wrap}</div>` : wrap;
+            };
+            const headerCard = ordCard('بيانات الطلبية', 'fa-file-lines', `
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    ${ordSel('kind', 'نوع الطلبية', Object.entries(ORDER_KIND), o.kind || 'supply', canContent)}
+                    ${field('المصنع / المورد (للتوريد)', `<select name="factoryId" ${canContent ? '' : 'disabled'} class="${INPUT_CLS}">${[['', '—'], ...appData.companies.map(c => [c.id, companyOptionLabel(c)])].map(([v, l]) => `<option value="${esc(v)}" ${String(o.factoryId || '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>${canContent && canOrd('addSupplier') ? `<button type="button" onclick="openSupplierFromOrder()" class="${BTN_SECONDARY} w-full mt-2"><i class="fa-solid fa-plus"></i> إضافة مصنع / مورد جديد</button>` : ''}`)}
+                    ${ordIn('ref', 'رقم المرجع / الفاتورة', o.ref, canContent)}
+                    ${ordIn('customerName', 'اسم العميل (للتسليم)', o.customerName, canContent)}
+                    ${ordIn('customerPhone', 'تليفون العميل', o.customerPhone, canContent, 'tel')}
+                    ${ordIn('customerAddress', 'عنوان التسليم', o.customerAddress, canContent)}
+                </div>
+                ${field('ملاحظات', `<textarea name="notes" rows="2" ${canContent ? '' : 'disabled'} class="${INPUT_CLS}">${esc(o.notes || '')}</textarea>`)}`);
+            const schedCard = ordCard('الجدولة', 'fa-calendar-days', `
+                <p class="text-xs text-slate-600">للتوريد: تاريخ الشحن من المصنع وتاريخ الوصول لمخزنك. للتسليم: تاريخ التسليم ونافذة الساعات والمسار.</p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    ${ordIn('plannedDate', 'تاريخ الشحن / التسليم المخطط', s.plannedDate, canSched, 'date')}
+                    ${ordIn('timeFrom', 'من الساعة', s.timeFrom, canSched, 'time')}
+                    ${ordIn('timeTo', 'إلى الساعة', s.timeTo, canSched, 'time')}
+                    ${ordIn('arrivalDate', 'تاريخ الوصول للمخزن (توريد)', s.arrivalDate, canSched, 'date')}
+                    ${ordIn('route', 'المسار / المنطقة (تسليم)', s.route, canSched)}
+                    ${ordIn('actualDate', 'تاريخ التنفيذ الفعلي', s.actualDate, canSched, 'date')}
+                </div>`);
+            const transportCard = ordCard('الوسيلة والنقل', 'fa-truck', `
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    ${ordSel('transportType', 'نوع الوسيلة', Object.entries(ORDER_TRANSPORT), type, true).replace('<select ', '<select onchange="transportTypeChanged(this)" ')}
+                    ${tf('capacityKg', 'السعة (كجم)', t.capacityKg, 'car other', 'number')}
+                    ${tf('company', 'شركة النقل', t.company, 'other')}
+                    ${tf('description', 'وصف الوسيلة', t.description, 'other')}
+                    ${tf('cost', 'تكلفة النقل', t.cost, 'other', 'number')}
+                </div>
+                <p class="text-xs text-slate-500">الحقول بتتغير حسب نوع الوسيلة. كل نوع ليه صلاحية تعديل منفصلة.</p>`);
+            const itemsCard = ordCard('الأصناف', 'fa-boxes-stacked', `
+                <div id="orderItems" class="space-y-3">${(o.items || []).map(it => orderItemRowHtml(it, priceOf(o, it.id), canContent, canOrd('prices'))).join('')}</div>
+                ${canContent ? btn('addOrderItemRow()', 'إضافة صنف', 'fa-plus', BTN_SECONDARY) : ''}
+                <div id="orderTotals" class="grid grid-cols-2 lg:grid-cols-7 gap-2 text-sm"></div>`);
+            const payCard = canOrd('payment') ? ordCard('الدفع', 'fa-wallet', `
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    ${ordSel('terms', 'شروط الدفع', ORDER_TERMS, p.terms || 'نقدي', canPay)}
+                    ${ordIn('paid', 'المدفوع', p.paid, canPay, 'number')}
+                    ${ordIn('dueDate', 'تاريخ الاستحقاق', p.dueDate, canPay, 'date')}
+                </div>`) : '';
+            return `<form id="orderForm" onsubmit="saveOrderForm(event, ${isNew ? "''" : `'${esc(o.id)}'`})" class="space-y-4">
+                ${headerCard}${schedCard}${transportCard}${itemsCard}${payCard}
+                <div class="flex flex-wrap gap-2 justify-end sticky bottom-2">
+                    ${btn("navigate('orders')", 'رجوع', 'fa-arrow-right', BTN_SECONDARY)}
+                    <button type="submit" class="${BTN_PRIMARY} whitespace-nowrap"><i class="fa-solid fa-floppy-disk"></i><span>${isNew ? 'حفظ الطلبية' : 'حفظ التعديلات'}</span></button>
+                </div>
+            </form>`;
+        }
+
+        // Build the order from the form. Keeps everything the user cannot change.
+        function readOrderForm(o) {
+            const f = el('orderForm');
+            const v = n => (f.elements[n] ? f.elements[n].value : '');
+            const type = v('transportType') || 'truck';
+            const { items, prices } = readOrderItems(o);
+            const transport = { type };
+            ORDER_TRANSPORT_FIELDS[type].forEach(k => { transport[k] = v(k).trim(); });
+            transport.capacityKg = type === 'truck' ? 0 : numOr0(v('capacityKg'));
+            if (type === 'other') transport.cost = numOr0(v('cost'));
+            return {
+                ...o,
+                kind: v('kind') || 'supply',
+                factoryId: v('factoryId'),
+                factoryName: (appData.companies.find(c => c.id === v('factoryId')) || {}).name || '',
+                customerName: v('customerName').trim(), customerPhone: v('customerPhone').trim(), customerAddress: v('customerAddress').trim(),
+                ref: v('ref').trim(), notes: v('notes').trim(),
+                schedule: {
+                    plannedDate: v('plannedDate'), timeFrom: v('timeFrom'), timeTo: v('timeTo'), arrivalDate: v('arrivalDate'),
+                    route: v('route').trim(), actualDate: v('actualDate')
+                },
+                transport,
+                payment: canOrd('payment') ? { terms: v('terms') || 'نقدي', paid: numOr0(v('paid')), dueDate: v('dueDate') } : (o.payment || { terms: 'نقدي', paid: 0, dueDate: '' }),
+                items,
+                prices
+            };
+        }
+
+        // Which permission groups a change touches. Used to block a save the user is not allowed to make.
+        // A new order is compared with an empty order, so only the parts that were filled in need permissions.
+        const EMPTY_ORDER = {
+            kind: 'supply', factoryId: '', customerName: '', customerPhone: '', customerAddress: '', ref: '', notes: '',
+            items: [], prices: {}, schedule: {}, transport: { type: 'truck' }, payment: { terms: 'نقدي', paid: 0, dueDate: '' }
+        };
+        const nonEmpty = obj => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== 0 && v !== false));
+        function orderChangedGroups(before, after) {
+            const base = before || EMPTY_ORDER;
+            const groups = [];
+            const contentKeys = ['kind', 'factoryId', 'customerName', 'customerPhone', 'customerAddress', 'ref', 'notes', 'items'];
+            if (canon(contentKeys.map(k => base[k] ?? '')) !== canon(contentKeys.map(k => after[k] ?? ''))) groups.push('edit');
+            if (canon(base.prices || {}) !== canon(after.prices || {})) groups.push('prices');
+            if (canon(nonEmpty(base.schedule)) !== canon(nonEmpty(after.schedule))) groups.push('schedule');
+            if (canon(nonEmpty(base.payment)) !== canon(nonEmpty(after.payment))) groups.push('payment');
+            const bt = nonEmpty(base.transport), at = nonEmpty(after.transport);
+            if (canon(bt) !== canon(at)) {
+                // a transport change needs the permission of the new type, and of the old type when the type changed
+                [...new Set([bt.type, at.type].filter(Boolean))].forEach(tp => groups.push(tp));
+            }
+            return groups;
+        }
+        const missingOrderPerms = (before, after) => orderChangedGroups(before, after)
+            .map(g => ORDER_PERM[g]).filter(p => !can(p));
+
+        function saveOrderForm(e, id) {
+            e.preventDefault();
+            const isNew = !id;
+            if (isNew && !canOrd('create')) return toast('ليس لديك صلاحية إنشاء طلبيات', 'error');
+            const before = isNew ? null : appData.orders.find(x => x.id === id);
+            if (!isNew && !before) return navigate('orders');
+            const base = before || { id: uid('ord-'), no: nextOrderNo(), status: 'draft', createdAt: new Date().toISOString(), createdBy: orderUserName(), items: [], prices: {}, history: [] };
+            const draft = readOrderForm(base);
+            const denied = missingOrderPerms(before, draft);
+            if (denied.length) {
+                const names = denied.map(p => PERM_LABELS[p] || p).join('، ');
+                return toast(`ليس لديك صلاحية لتعديل: ${names}`, 'error', null, 6000);
+            }
+            if (draft.kind === 'supply' && !draft.factoryId && !draft.customerName) return toast('اختار المصنع للتوريد', 'error');
+            if (draft.kind === 'delivery' && !draft.customerName) return toast('اكتب اسم العميل للتسليم', 'error');
+            if (draft.schedule.timeFrom && draft.schedule.timeTo && draft.schedule.timeFrom >= draft.schedule.timeTo) return toast('ساعة النهاية لازم تكون بعد البداية', 'error');
+            draft.history = [...(base.history || []), { at: new Date().toISOString(), by: orderUserName(), text: isNew ? 'إنشاء الطلبية' : 'تعديل البيانات' }];
+            if (isNew) appData.orders.push(draft);
+            else Object.assign(before, draft);
+            saveState();
+            log(isNew ? 'إضافة طلبية' : 'تعديل طلبية', orderNoLabel(draft));
+            toast(isNew ? 'تم حفظ الطلبية' : 'تم حفظ التعديلات', 'success');
+            navigate(`orders/${draft.id}`);
+        }
+
+        // ---- status moves ----
+        function changeOrderStatus(id, to) {
+            const o = appData.orders.find(x => x.id === id);
+            if (!o) return;
+            const move = (ORDER_NEXT[o.status] || []).find(m => m[0] === to);
+            if (!move) return toast('الحركة دي مش مسموحة من الحالة الحالية', 'error');
+            if (!canOrd(move[1])) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const problem = orderProblem(o, to);
+            if (problem) return toast(problem, 'error', null, 5000);
+            o.status = to;
+            o.history = [...(o.history || []), { at: new Date().toISOString(), by: orderUserName(), text: `الحالة: ${ORDER_STATUS[to]}` }];
+            saveState();
+            log('حالة طلبية', `${orderNoLabel(o)} — ${ORDER_STATUS[to]}`);
+            toast(`تم تغيير الحالة إلى ${ORDER_STATUS[to]}`, 'success');
+            render();
+        }
+
+        function deleteOrder(id) {
+            if (!canOrd('delete')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const idx = appData.orders.findIndex(x => x.id === id);
+            if (idx < 0) return;
+            finalizePendingUndo();
+            const o = appData.orders[idx];
+            appData.orders.splice(idx, 1);
+            log('حذف طلبية', orderNoLabel(o));
+            render();
+            scheduleUndo(`تم حذف ${orderNoLabel(o)}`, () => {
+                appData.orders.splice(Math.min(idx, appData.orders.length), 0, o);
+                log('استعادة طلبية', orderNoLabel(o));
+                render();
+            }, () => {});
+        }
+
+        // A copy starts as a new draft: same parties, items and prices; dates and history are cleared.
+        function copyOrder(id) {
+            if (!canOrd('create')) return toast('ليس لديك صلاحية إنشاء طلبيات', 'error');
+            const src = appData.orders.find(x => x.id === id);
+            if (!src) return;
+            const items = (src.items || []).map(it => ({ ...it, id: uid('it-') }));
+            const prices = {};
+            (src.items || []).forEach((it, i) => { if (src.prices && src.prices[it.id]) prices[items[i].id] = { ...src.prices[it.id] }; });
+            const copy = {
+                ...src, id: uid('ord-'), no: nextOrderNo(), status: 'draft', items, prices,
+                schedule: { route: (src.schedule || {}).route || '' }, createdAt: new Date().toISOString(), createdBy: orderUserName(),
+                history: [{ at: new Date().toISOString(), by: orderUserName(), text: `نسخة من ${orderNoLabel(src)}` }]
+            };
+            if (!canOrd('payment')) copy.payment = { terms: 'نقدي', paid: 0, dueDate: '' };
+            appData.orders.push(copy);
+            saveState();
+            log('نسخ طلبية', `${orderNoLabel(src)} → ${orderNoLabel(copy)}`);
+            navigate(`orders/edit/${copy.id}`);
+        }
+        // ---- pages: list (with tabs), schedule, reports, form, detail ----
+        function ordersTabs(tab) {
+            const tabBtn = (route, label, icon, key) => `<button type="button" onclick="navigate('${route}')" class="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 ${tab === key ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 border-2 border-slate-300 hover:bg-slate-50'}"><i class="fa-solid ${icon}"></i>${label}</button>`;
+            return `<div class="flex flex-wrap gap-2">
+                ${tabBtn('orders', 'الطلبيات', 'fa-list', 'list')}
+                ${tabBtn('orders/schedule', 'لوحة الجدولة', 'fa-calendar-days', 'schedule')}
+                ${canOrd('reports') ? tabBtn('orders/reports', 'التقارير', 'fa-chart-column', 'reports') : ''}
+            </div>`;
+        }
+
+        function ordersTabBody(tab) {
+            if (tab === 'schedule') return scheduleBoardHtml();
+            if (tab === 'reports') return ordersReportsHtml();
+            return `${ordersFilterBar()}${ordersListHtml()}`;
+        }
+
+        function viewOrders(param) {
+            const parts = String(param || '').split('/');
+            if (parts[0] === 'new') {
+                if (!canOrd('create')) return { title: 'طلبية جديدة', html: noOrderAccessHtml() };
+                const o = keptOrderDraft('new') || { kind: 'supply', items: [], prices: {}, schedule: {}, transport: { type: 'truck' }, payment: { terms: 'نقدي', paid: 0, dueDate: '' } };
+                return { title: 'طلبية جديدة', actions: btn("navigate('orders')", 'رجوع', 'fa-arrow-right', BTN_SECONDARY), html: ordersFormHtml(o, true), after: addFirstItemIfEmpty };
+            }
+            if (parts[0] === 'edit' && parts[1]) {
+                const o = keptOrderDraft('edit/' + parts[1]) || appData.orders.find(x => x.id === parts[1]);
+                if (!o) return { title: 'الطلبيات', html: notFoundOrderHtml() };
+                return { title: `تعديل ${orderNoLabel(o)}`, actions: btn(`navigate('orders/${esc(o.id)}')`, 'رجوع', 'fa-arrow-right', BTN_SECONDARY), html: ordersFormHtml(o, false) };
+            }
+            if (parts[0] && !['schedule', 'reports'].includes(parts[0])) {
+                const o = appData.orders.find(x => x.id === parts[0]);
+                if (!o) return { title: 'الطلبيات', html: notFoundOrderHtml() };
+                return { title: orderNoLabel(o), actions: orderDetailActions(o), html: orderDetailHtml(o) };
+            }
+            const tab = parts[0] === 'schedule' ? 'schedule' : (parts[0] === 'reports' ? 'reports' : 'list');
+            if (tab === 'reports' && !canOrd('reports')) return { title: 'التقارير', html: noOrderAccessHtml() };
+            const titles = { list: 'الطلبيات', schedule: 'لوحة الجدولة', reports: 'تقارير الطلبيات' };
+            return {
+                title: titles[tab],
+                actions: canOrd('create') ? btn("navigate('orders/new')", 'طلبية جديدة', 'fa-plus') : '',
+                html: `${ordersTabs(tab)}<div id="ordersBody" class="space-y-4 mt-4">${ordersTabBody(tab)}</div>`
+            };
+        }
+        function addFirstItemIfEmpty() {
+            if (el('orderItems') && !el('orderItems').children.length) addOrderItemRow();
+            recalcOrderTotals();
+        }
+        const noOrderAccessHtml = () => `<div class="bg-white rounded-2xl border-2 border-slate-300 p-8 text-center"><i class="fa-solid fa-lock text-4xl text-slate-300 mb-3"></i><p class="text-slate-600 font-bold">ليس لديك صلاحية لهذه الصفحة</p></div>`;
+        const notFoundOrderHtml = () => `<div class="bg-white rounded-2xl border-2 border-slate-300 p-8 text-center"><p class="text-slate-600 font-bold mb-4">الطلبية دي مش موجودة (ممكن تكون اتحذفت)</p>${btn("navigate('orders')", 'رجوع للطلبيات', 'fa-arrow-right', BTN_SECONDARY)}</div>`;
+
+        // ---- detail page ----
+        function orderDetailActions(o) {
+            const acts = [];
+            if (canOrd('print')) acts.push(btn(`printOrderDoc('${esc(o.id)}')`, 'طباعة', 'fa-print', BTN_SECONDARY));
+            if (canOrd('print')) acts.push(btn(`printLoadingSlip('${esc(o.id)}')`, 'إذن تحميل', 'fa-file-signature', BTN_SECONDARY));
+            if (canOrd('edit') || canOrd('schedule') || canOrd('payment') || canOrd('prices') || ['truck', 'car', 'other'].some(k => can(ORDER_PERM[k]))) {
+                acts.push(btn(`navigate('orders/edit/${esc(o.id)}')`, 'تعديل', 'fa-pen', BTN_SECONDARY));
+            }
+            return `<div class="flex flex-wrap gap-2">${acts.join('')}</div>`;
+        }
+
+        function orderDetailHtml(o) {
+            const t = orderTotals(o);
+            const s = o.schedule || {}, tr = o.transport || {}, pay = o.payment || {};
+            const moves = (ORDER_NEXT[o.status] || []).filter(m => canOrd(m[1]));
+            const moveBtns = moves.map(([to, perm, label]) => `<button type="button" onclick="changeOrderStatus('${esc(o.id)}', '${to}')" class="${to === 'cancelled' ? 'px-4 py-2 rounded-lg text-sm font-bold bg-rose-600 hover:bg-rose-700 text-white' : BTN_PRIMARY} whitespace-nowrap">${label}</button>`).join('');
+            const warn = orderWarnBadges(o);
+            const row = (label, value) => `<div class="flex justify-between gap-3 py-2 border-b border-slate-200 text-sm"><span class="text-slate-600 font-bold">${label}</span><span class="text-slate-900 text-end">${value || '—'}</span></div>`;
+            const card = (title, icon, body) => `<section class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 sm:p-5"><h3 class="font-bold text-slate-800 mb-2"><i class="fa-solid ${icon} text-brand-600"></i> ${title}</h3>${body}</section>`;
+            const itemRows = (o.items || []).map((it, i) => {
+                const l = lineCalc(it, priceOf(o, it.id));
+                return `<tr class="border-t border-slate-200">
+                    <td class="py-2 px-2">${i + 1}</td><td class="py-2 px-2">${esc(it.product)}</td><td class="py-2 px-2 font-mono">${esc(it.code)}</td>
+                    <td class="py-2 px-2">${esc(it.name)}</td><td class="py-2 px-2">${esc(it.size)}</td><td class="py-2 px-2">${esc(it.shade)}</td>
+                    <td class="py-2 px-2">${esc(it.unit)}</td><td class="py-2 px-2">${fmtDigits(numOr0(it.qty))}</td>
+                    <td class="py-2 px-2">${l.m2 ? fmtDigits(l.m2) : ''}${l.boxes ? ' ' + fmtDigits(l.boxes) + ' كرتونة' : ''}</td>
+                    <td class="py-2 px-2">${fmtDigits(l.kg)}</td>
+                    ${canOrd('prices') ? `<td class="py-2 px-2">${fmtDigits(numOr0(priceOf(o, it.id).unitPrice))}</td><td class="py-2 px-2">${fmtDigits(numOr0(priceOf(o, it.id).discount))}%</td><td class="py-2 px-2 font-bold">${fmtMoney(l.net)}</td>` : ''}
+                </tr>`;
+            }).join('');
+            const itemsTable = (o.items || []).length ? `<div class="overflow-x-auto"><table class="w-full text-sm">
+                <thead class="bg-slate-50 font-bold text-slate-700"><tr>
+                    <th class="py-2 px-2 text-start">م</th><th class="py-2 px-2 text-start">النوع</th><th class="py-2 px-2 text-start">الكود</th>
+                    <th class="py-2 px-2 text-start">الاسم</th><th class="py-2 px-2 text-start">المقاس</th><th class="py-2 px-2 text-start">الدرجة</th>
+                    <th class="py-2 px-2 text-start">الوحدة</th><th class="py-2 px-2 text-start">الكمية</th><th class="py-2 px-2 text-start">م² / كرتونة</th><th class="py-2 px-2 text-start">كجم</th>
+                    ${canOrd('prices') ? '<th class="py-2 px-2 text-start">السعر</th><th class="py-2 px-2 text-start">الخصم</th><th class="py-2 px-2 text-start">الصافي</th>' : ''}
+                </tr></thead><tbody>${itemRows}</tbody>
+                <tfoot class="bg-slate-50 font-bold"><tr><td colspan="9" class="py-2 px-2">الإجمالي</td><td class="py-2 px-2">${fmtDigits(t.kg)}</td>
+                    ${canOrd('prices') ? `<td colspan="2"></td><td class="py-2 px-2 text-emerald-700">${fmtMoney(t.net)}</td>` : ''}</tr></tfoot>
+            </table></div>` : '<p class="text-slate-500 text-sm">مفيش أصناف</p>';
+            const schedBody = `${row(o.kind === 'supply' ? 'تاريخ الشحن المخطط' : 'تاريخ التسليم المخطط', fmtDateAr(s.plannedDate))}
+                ${row('نافذة الساعات', orderTimeText(o))}
+                ${o.kind === 'supply' ? row('تاريخ الوصول للمخزن', fmtDateAr(s.arrivalDate)) : row('المسار / المنطقة', esc(s.route))}
+                ${row('تاريخ التنفيذ الفعلي', fmtDateAr(s.actualDate))}`;
+            const transportBody = canSeeVehicle(o) ? `${row('نوع الوسيلة', ORDER_TRANSPORT[tr.type])}
+                ${tr.type === 'other' ? row('شركة النقل', esc(tr.company)) + row('وصف الوسيلة', esc(tr.description)) : ''}
+                ${tr.type !== 'truck' ? row('السعة (كجم)', tr.capacityKg ? fmtDigits(tr.capacityKg) : '') : ''}
+                ${tr.type === 'other' && canOrd('prices') ? row('تكلفة النقل', tr.cost ? fmtMoney(numOr0(tr.cost)) : '') : ''}`
+                : `<p class="text-sm text-slate-600">${tr.type ? 'نوع الوسيلة: ' + esc(ORDER_TRANSPORT[tr.type]) + ' — تفاصيلها مش متاحة لصلاحياتك' : 'لسه مش متسجلة وسيلة'}</p>`;
+            const payBody = canOrd('payment') ? `${row('شروط الدفع', esc(pay.terms))}${row('المدفوع', fmtMoney(numOr0(pay.paid)))}${row('المتبقي', fmtMoney(orderBalance(o)))}${row('تاريخ الاستحقاق', fmtDateAr(pay.dueDate))}` : '';
+            const histBody = (o.history || []).slice().reverse().map(h => `<li class="text-sm"><span class="font-mono text-xs text-slate-500">${esc(new Date(h.at).toLocaleString('ar-EG'))}</span> — ${esc(h.text)} <span class="text-slate-500">(${esc(h.by || '')})</span></li>`).join('');
+            const summary = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الحالة</p><div class="mt-1">${orderStatusBadge(o)}</div></div>
+                <div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الكميات</p><p class="font-bold text-sm">${fmtDigits(t.m2)} م² · ${fmtDigits(t.boxes)} كرتونة · ${fmtDigits(t.kg)} كجم</p></div>
+                ${canOrd('prices') ? `<div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الصافي</p><p class="font-bold text-emerald-700">${fmtMoney(t.net)}</p></div>` : ''}
+                ${canOrd('payment') ? `<div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">المتبقي</p><p class="font-bold text-rose-700">${fmtMoney(orderBalance(o))}</p></div>` : ''}
+            </div>`;
+            return `<div class="space-y-4">
+                <div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 flex flex-wrap items-center justify-between gap-3">
+                    <div><p class="font-bold text-lg text-slate-800">${orderNoLabel(o)} — ${esc(ORDER_KIND[o.kind] || '')}</p>
+                        <p class="text-sm text-slate-700">${esc(orderPartyText(o))}${o.ref ? ' · مرجع: ' + esc(o.ref) : ''}</p>
+                        <div class="flex flex-wrap gap-1 mt-1">${orderWarnBadges(o)}</div></div>
+                    <div class="flex flex-wrap gap-2 items-center">${moveBtns}</div>
+                </div>
+                ${summary}
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    ${card('بيانات الطلبية', 'fa-file-lines', `${row('المصنع', esc(o.factoryName))}${row('العميل', esc(o.customerName))}${row('تليفون العميل', esc(o.customerPhone))}${row('عنوان التسليم', esc(o.customerAddress))}${row('ملاحظات', esc(o.notes))}`)}
+                    ${card('الجدولة', 'fa-calendar-days', schedBody)}
+                    ${card('الوسيلة والنقل', 'fa-truck', transportBody)}
+                    ${canOrd('payment') ? card('الدفع', 'fa-wallet', payBody) : ''}
+                </div>
+                ${card('الأصناف', 'fa-boxes-stacked', itemsTable)}
+                ${card('سجل الحركات', 'fa-clock-rotate-left', `<ul class="space-y-1">${histBody || '<li class="text-sm text-slate-500">مفيش حركات</li>'}</ul>`)}
+            </div>`;
+        }
+
+        // ---- print: the order, a loading slip (إذن تحميل), the list, reports ----
+        function orderPrintShell(title, body) {
+            return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+  @page { size: A4; margin: 10mm; }
+  body { font-family: Tahoma, Arial, sans-serif; color: #000; margin: 0; font-size: 10pt; }
+  h1 { font-size: 15pt; margin: 0 0 2mm; } h2 { font-size: 11pt; margin: 4mm 0 1mm; }
+  .meta { color: #333; margin-bottom: 3mm; } .box { border: 1px solid #000; padding: 2mm; margin-bottom: 2mm; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3mm; }
+  th, td { border: 1px solid #000; padding: 1.5mm 2mm; text-align: start; vertical-align: top; }
+  th { background: #e5e5e5; } .tot td { font-weight: bold; background: #f2f2f2; }
+  .sign { display: flex; justify-content: space-between; margin-top: 12mm; } .sign div { width: 30%; border-top: 1px solid #000; padding-top: 1mm; text-align: center; }
+</style>${'<'}/head><body>${body}${'<'}/body></html>`;
+        }
+        const printHead = (title, o) => `<h1>${esc(title)}</h1><div class="meta">${esc(o ? orderNoLabel(o) : '')} · ${esc(fmtDateAr(todayISO()))}</div>`;
+
+        function orderDocHtml(o) {
+            const showPrice = canOrd('prices');
+            const t = orderTotals(o);
+            const rows = (o.items || []).map((it, i) => {
+                const l = lineCalc(it, priceOf(o, it.id));
+                return `<tr><td>${i + 1}</td><td>${esc(it.product)}</td><td>${esc(it.code)}</td><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.shade)}</td>
+                    <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td><td>${fmtDigits(l.kg)}</td>
+                    ${showPrice ? `<td>${fmtDigits(numOr0(priceOf(o, it.id).unitPrice))}</td><td>${fmtDigits(numOr0(priceOf(o, it.id).discount))}%</td><td>${fmtMoney(l.net)}</td>` : ''}</tr>`;
+            }).join('');
+            const s = o.schedule || {}, tr = canSeeVehicle(o) ? (o.transport || {}) : {};
+            return orderPrintShell(orderNoLabel(o), `${printHead(`طلبية ${ORDER_KIND[o.kind] || ''}`, o)}
+                <div class="box"><b>${o.kind === 'supply' ? 'المصنع' : 'العميل'}:</b> ${esc(orderPartyText(o))}
+                ${o.kind === 'supply' && o.customerName ? ` · <b>العميل:</b> ${esc(o.customerName)}` : ''}
+                ${o.ref ? ` · <b>المرجع:</b> ${esc(o.ref)}` : ''}<br>
+                <b>${o.kind === 'supply' ? 'شحن' : 'تسليم'}:</b> ${esc(fmtDateAr(s.plannedDate) || '—')} ${esc(orderTimeText(o))}
+                ${o.kind === 'supply' ? ` · <b>وصول للمخزن:</b> ${esc(fmtDateAr(s.arrivalDate) || '—')}` : ` · <b>المسار:</b> ${esc(s.route || '—')}`}
+                ${tr.type ? `<br><b>الوسيلة:</b> ${esc(ORDER_TRANSPORT[tr.type])}` : ''}</div>
+                <table><thead><tr><th>م</th><th>النوع</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th><th>كجم</th>
+                ${showPrice ? '<th>السعر</th><th>خصم</th><th>الصافي</th>' : ''}</tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes || t.pieces || '')}</td><td>${fmtDigits(t.kg)}</td>${showPrice ? `<td colspan="2"></td><td>${fmtMoney(t.net)}</td>` : ''}</tr></tfoot></table>
+                ${showPrice && canOrd('payment') ? `<div class="box"><b>شروط الدفع:</b> ${esc(o.payment && o.payment.terms)} · <b>المتبقي:</b> ${fmtMoney(orderBalance(o))}</div>` : ''}
+                ${o.notes ? `<div class="box"><b>ملاحظات:</b> ${esc(o.notes)}</div>` : ''}
+                <div class="sign"><div>المستلم</div><div>المندوب</div><div>الإدارة</div></div>`);
+        }
+
+        // loading slip: quantities and vehicle only, no prices
+        function loadingSlipHtml(o) {
+            const t = orderTotals(o), s = o.schedule || {}, tr = canSeeVehicle(o) ? (o.transport || {}) : {};
+            const rows = (o.items || []).map((it, i) => {
+                const l = lineCalc(it, priceOf(o, it.id));
+                return `<tr><td>${i + 1}</td><td>${esc(it.code)}</td><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.shade)}</td>
+                    <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td><td>${fmtDigits(l.boxes || '')}</td><td>${fmtDigits(l.kg)}</td><td></td></tr>`;
+            }).join('');
+            return orderPrintShell(`إذن تحميل ${orderNoLabel(o)}`, `${printHead('إذن تحميل', o)}
+                <div class="box"><b>${o.kind === 'supply' ? 'من المصنع:' : 'تسليم للعميل:'}</b> ${esc(orderPartyText(o))}
+                · <b>التاريخ:</b> ${esc(fmtDateAr(s.plannedDate) || '—')} ${esc(orderTimeText(o))}<br>
+                <b>الوسيلة:</b> ${esc(tr.type ? ORDER_TRANSPORT[tr.type] : '—')}</div>
+                <table><thead><tr><th>م</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th><th>كرتونة</th><th>كجم</th><th>ملاحظة</th></tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes)}</td><td>${fmtDigits(t.kg)}</td><td></td></tr></tfoot></table>
+                <div class="sign"><div>أمين المخزن</div><div>السائق</div><div>المستلم</div></div>`);
+        }
+        function printOrderDoc(id) {
+            if (!canOrd('print')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const o = appData.orders.find(x => x.id === id);
+            if (o) printHtml(orderDocHtml(o));
+        }
+        function printLoadingSlip(id) {
+            if (!canOrd('print')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const o = appData.orders.find(x => x.id === id);
+            if (o) printHtml(loadingSlipHtml(o));
+        }
+        function printOrdersList() {
+            if (!canOrd('print')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const rows = filteredOrders();
+            const showPrice = canOrd('prices');
+            const body = `${printHead('قائمة الطلبيات', null)}
+                <table><thead><tr><th>الرقم</th><th>النوع</th><th>المصنع / العميل</th><th>التاريخ</th><th>الوقت</th><th>الوسيلة</th><th>م²</th><th>كرتونة</th><th>كجم</th>
+                ${showPrice ? '<th>الصافي</th>' : ''}<th>الحالة</th></tr></thead><tbody>
+                ${rows.map(o => { const t = orderTotals(o); return `<tr><td>${orderNoLabel(o)}</td><td>${esc(ORDER_KIND[o.kind] || '')}</td><td>${esc(orderPartyText(o))}</td>
+                    <td>${esc(fmtDateAr(orderDateOf(o)) || '—')}</td><td>${esc(orderTimeText(o))}</td><td>${esc(ORDER_TRANSPORT[(o.transport || {}).type] || '')}</td>
+                    <td>${fmtDigits(t.m2)}</td><td>${fmtDigits(t.boxes)}</td><td>${fmtDigits(t.kg)}</td>
+                    ${showPrice ? `<td>${fmtMoney(t.net)}</td>` : ''}<td>${esc(ORDER_STATUS[o.status] || '')}</td></tr>`; }).join('')}
+                </tbody></table>`;
+            printHtml(orderPrintShell('قائمة الطلبيات', body));
+        }
+
+        // ---- reports (tab): by status, by party, by product ----
+        function ordersReportRows() {
+            const f = ordersRepFilter;
+            return appData.orders.filter(o => {
+                const d = orderDateOf(o);
+                if (f.from && (!d || d < f.from)) return false;
+                if (f.to && (!d || d > f.to)) return false;
+                return true;
+            });
+        }
+        function groupRows(rows, keyOf, labelOf) {
+            const map = new Map();
+            rows.forEach(o => {
+                const k = keyOf(o);
+                if (!map.has(k)) map.set(k, { label: labelOf(o, k), count: 0, m2: 0, boxes: 0, kg: 0, net: 0 });
+                const g = map.get(k), t = orderTotals(o);
+                g.count++; g.m2 = r2(g.m2 + t.m2); g.boxes = r2(g.boxes + t.boxes); g.kg = r2(g.kg + t.kg); g.net = r2(g.net + t.net);
+            });
+            return [...map.values()].sort((a, b) => b.count - a.count);
+        }
+        function reportTables(rows) {
+            const showPrice = canOrd('prices');
+            const table = (title, groups) => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 overflow-x-auto">
+                <h3 class="font-bold text-slate-800 mb-2">${title}</h3>
+                <table class="w-full text-sm"><thead class="bg-slate-50 font-bold"><tr><th class="py-2 px-2 text-start">البند</th><th class="py-2 px-2 text-start">عدد</th>
+                <th class="py-2 px-2 text-start">م²</th><th class="py-2 px-2 text-start">كرتونة</th><th class="py-2 px-2 text-start">كجم</th>${showPrice ? '<th class="py-2 px-2 text-start">الصافي</th>' : ''}</tr></thead>
+                <tbody>${groups.map(g => `<tr class="border-t border-slate-200"><td class="py-2 px-2">${esc(g.label)}</td><td class="py-2 px-2">${g.count}</td>
+                <td class="py-2 px-2">${fmtDigits(g.m2)}</td><td class="py-2 px-2">${fmtDigits(g.boxes)}</td><td class="py-2 px-2">${fmtDigits(g.kg)}</td>
+                ${showPrice ? `<td class="py-2 px-2 font-bold">${fmtMoney(g.net)}</td>` : ''}</tr>`).join('') || '<tr><td colspan="6" class="py-2 px-2 text-slate-500">لا توجد بيانات</td></tr>'}</tbody></table></div>`;
+            return table('حسب الحالة', groupRows(rows, o => o.status, (o, k) => ORDER_STATUS[k] || k))
+                + table('حسب المصنع / العميل', groupRows(rows, o => (o.kind === 'supply' ? 'f:' + (o.factoryName || '—') : 'c:' + (o.customerName || '—')), (o, k) => (o.kind === 'supply' ? 'مصنع: ' : 'عميل: ') + k.slice(2)))
+                + table('حسب نوع الصنف', groupRows(rows.flatMap(o => (o.items || []).map(it => ({ ...o, items: [it], prices: { [it.id]: priceOf(o, it.id) } }))), o => o.items[0].product, (o, k) => k));
+        }
+        function ordersReportsHtml() {
+            const f = ordersRepFilter;
+            const rows = ordersReportRows();
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-4 flex flex-wrap items-end gap-3">
+                    ${field('من تاريخ', `<input type="date" value="${esc(f.from)}" onchange="ordersRepFilter.from = this.value; updateOrdersBody()" class="${INPUT_CLS}">`)}
+                    ${field('إلى تاريخ', `<input type="date" value="${esc(f.to)}" onchange="ordersRepFilter.to = this.value; updateOrdersBody()" class="${INPUT_CLS}">`)}
+                    ${canOrd('print') ? btn('printOrdersReport()', 'طباعة التقرير', 'fa-print', BTN_SECONDARY) : ''}
+                    ${canOrd('export') ? btn('exportOrdersReportXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY) : ''}
+                </div>
+                <p class="text-sm font-bold text-slate-700">عدد الطلبيات في الفترة: ${rows.length}</p>
+                ${reportTables(rows)}`;
+        }
+        function printOrdersReport() {
+            if (!canOrd('print')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const f = ordersRepFilter;
+            printHtml(orderPrintShell('تقرير الطلبيات', `<h1>تقرير الطلبيات</h1><div class="meta">${f.from || '—'} إلى ${f.to || '—'}</div>${reportTables(ordersReportRows())}`));
+        }
+
+        // ---- Excel ----
+        function orderExportRow(o) {
+            const t = orderTotals(o), s = o.schedule || {};
+            const row = {
+                'الرقم': orderNoLabel(o), 'النوع': ORDER_KIND[o.kind] || '', 'المصنع': o.factoryName || '', 'العميل': o.customerName || '',
+                'تاريخ الجدولة': s.plannedDate || '', 'من': s.timeFrom || '', 'إلى': s.timeTo || '', 'تاريخ الوصول': s.arrivalDate || '',
+                'الوسيلة': o.transport && o.transport.type ? ORDER_TRANSPORT[o.transport.type] : '', 'الحالة': ORDER_STATUS[o.status] || '',
+                'م²': t.m2, 'كرتونة': t.boxes, 'قطعة': t.pieces, 'كجم': t.kg
+            };
+            if (canOrd('prices')) { row['الإجمالي'] = t.subtotal; row['الخصم'] = t.discount; row['الصافي'] = t.net; }
+            if (canOrd('payment')) { row['المدفوع'] = numOr0(o.payment && o.payment.paid); row['المتبقي'] = orderBalance(o); }
+            return row;
+        }
+        function writeXlsx(sheets, fileName) {
+            if (typeof XLSX === 'undefined') return toast('مكتبة الإكسيل غير متاحة. تأكد من الإنترنت', 'error', null, 5000);
+            const wb = XLSX.utils.book_new();
+            sheets.forEach(([name, rows]) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{ ملاحظة: 'لا توجد بيانات' }]), name));
+            XLSX.writeFile(wb, `${fileName}-${todayISO()}.xlsx`);
+        }
+        function exportOrdersXlsx() {
+            if (!canOrd('export')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const rows = filteredOrders();
+            const items = rows.flatMap(o => (o.items || []).map(it => {
+                const l = lineCalc(it, priceOf(o, it.id));
+                const r = { 'الرقم': orderNoLabel(o), 'النوع': it.product, 'الكود': it.code, 'الاسم': it.name, 'المقاس': it.size, 'الدرجة': it.shade, 'الوحدة': it.unit, 'الكمية': numOr0(it.qty), 'م²': l.m2, 'كجم': l.kg };
+                if (canOrd('prices')) { r['السعر'] = numOr0(priceOf(o, it.id).unitPrice); r['خصم %'] = numOr0(priceOf(o, it.id).discount); r['الصافي'] = l.net; }
+                return r;
+            }));
+            writeXlsx([['الطلبيات', rows.map(orderExportRow)], ['الأصناف', items]], 'الطلبيات');
+        }
+        function exportOrdersReportXlsx() {
+            if (!canOrd('export')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const rows = ordersReportRows();
+            const f = ordersRepFilter;
+            const sheet = (groups, label) => groups.map(g => ({ [label]: g.label, 'عدد': g.count, 'م²': g.m2, 'كرتونة': g.boxes, 'كجم': g.kg, ...(canOrd('prices') ? { 'الصافي': g.net } : {}) }));
+            writeXlsx([
+                ['الطلبيات', rows.map(orderExportRow)],
+                ['حسب الحالة', sheet(groupRows(rows, o => o.status, (o, k) => ORDER_STATUS[k] || k), 'الحالة')],
+                ['حسب الطرف', sheet(groupRows(rows, o => (o.kind === 'supply' ? 'f:' + (o.factoryName || '—') : 'c:' + (o.customerName || '—')), (o, k) => k.slice(2)), 'المصنع / العميل')],
+                ['حسب الصنف', sheet(groupRows(rows.flatMap(o => (o.items || []).map(it => ({ ...o, items: [it], prices: { [it.id]: priceOf(o, it.id) } }))), o => o.items[0].product, (o, k) => k), 'الصنف')]
+            ], `تقرير-الطلبيات-${f.from || 'من-البداية'}`);
+        }
+
+        // ---- storage: one database node per part of the order, so each part has its own permission ----
+        // orders/{id}            header: no, kind, parties, notes (orders.edit)
+        // orderStatus/{id}       { status } (orders.confirm / orders.execute)
+        // orderItems/{id}        { items }  (orders.edit)
+        // orderPrices/{id}       { prices } (orders.prices)
+        // orderSchedule/{id}     { schedule } (orders.schedule)
+        // orderPayment/{id}      { payment } (orders.payment)
+        // orderHistory/{id}      { history } (anyone who can view)
+        // orderTransport/{type}/{id}  { transport } (orders.transport_<type>)
+        // A part is written only if its listener has loaded (ready) and the user may write it, so a partial load or
+        // a missing permission can never overwrite or delete data the user did not see.
+        const ORD_GROUPS = [
+            ['orders', 'orders.view'], ['orderStatus', 'orders.view'], ['orderItems', 'orders.view'], ['orderSchedule', 'orders.view'],
+            ['orderHistory', 'orders.view'], ['orderPrices', 'orders.prices'], ['orderPayment', 'orders.payment'],
+            ['orderTransport/truck', 'orders.transport_truck'], ['orderTransport/car', 'orders.transport_car'], ['orderTransport/other', 'orders.transport_other']
+        ];
+        function orderDocsFor(list, out) {
+            const ready = coll => !!(fbCache && fbCache.ord && fbCache.ord[coll] !== undefined);
+            const usable = (coll, perm) => ready(coll) && can(perm);
+            const nz = obj => Object.keys(obj || {}).some(k => obj[k] !== '' && obj[k] !== null && obj[k] !== undefined && obj[k] !== 0 && obj[k] !== false);
+            list.forEach(o => {
+                if (usable('orders', 'orders.view')) out.set('orders/' + o.id, {
+                    id: o.id, no: o.no, kind: o.kind, factoryId: o.factoryId || '', factoryName: o.factoryName || '',
+                    customerName: o.customerName || '', customerPhone: o.customerPhone || '', customerAddress: o.customerAddress || '',
+                    ref: o.ref || '', notes: o.notes || '', createdAt: o.createdAt || '', createdBy: o.createdBy || ''
+                });
+                if (usable('orderStatus', 'orders.view')) out.set('orderStatus/' + o.id, { status: o.status });
+                if (usable('orderItems', 'orders.view') && (o.items || []).length) out.set('orderItems/' + o.id, { items: o.items });
+                if (usable('orderHistory', 'orders.view') && (o.history || []).length) out.set('orderHistory/' + o.id, { history: o.history });
+                if (usable('orderPrices', 'orders.prices') && nz(o.prices)) out.set('orderPrices/' + o.id, { prices: o.prices });
+                if (usable('orderSchedule', 'orders.schedule') && nz(o.schedule)) out.set('orderSchedule/' + o.id, { schedule: o.schedule });
+                if (usable('orderPayment', 'orders.payment') && nz(o.payment)) out.set('orderPayment/' + o.id, { payment: o.payment });
+                const t = o.transport || {};
+                if (t.type && usable('orderTransport/' + t.type, ORDER_PERM[t.type])) out.set(`orderTransport/${t.type}/${o.id}`, { transport: t });
+            });
+        }
+        // rebuild the in-memory orders from the parts that have loaded
+        function buildOrdersFromCache(c) {
+            const ord = c.ord || {};
+            const part = (coll, key) => { const m = {}; Object.values(ord[coll] || {}).forEach(d => { m[d.id] = d[key]; }); return m; };
+            const headers = Object.values(ord.orders || {});
+            const status = part('orderStatus', 'status'), items = part('orderItems', 'items'), prices = part('orderPrices', 'prices'),
+                sched = part('orderSchedule', 'schedule'), pay = part('orderPayment', 'payment'), hist = part('orderHistory', 'history');
+            const transport = {};
+            ['truck', 'car', 'other'].forEach(tp => Object.values(ord['orderTransport/' + tp] || {}).forEach(d => { transport[d.id] = d.transport; }));
+            return headers.map(h => {
+                const { pos, ...rest } = h;
+                return {
+                    ...rest, status: status[h.id], items: items[h.id] || [], prices: prices[h.id] || {}, schedule: sched[h.id] || {},
+                    payment: pay[h.id] || {}, history: hist[h.id] || [], transport: transport[h.id] || { type: 'truck' }
+                };
+            });
+        }
+
+        // Permission-gated listeners. Nothing is subscribed without its permission (a denied listener would sign the user out).
+        function syncOrdersListener() {
+            if (!fbCache || !fbUser) return;
+            let changed = false;
+            ORD_GROUPS.forEach(([coll, perm]) => {
+                const want = can(perm), live = fbOrdLive.has(coll);
+                if (want && !live) {
+                    const unsub = fbDb.collection(coll).onSnapshot(snap => {
+                        if (!fbCache) return;
+                        fbCache.ord = fbCache.ord || {};
+                        fbCache.ord[coll] = mapDocs(snap);
+                        onCacheChanged();
+                    }, err => console.error('orders listener ' + coll, err));
+                    fbOrdLive.set(coll, unsub);
+                } else if (!want && live) {
+                    try { fbOrdLive.get(coll)(); } catch (e) { /* already closed */ }
+                    fbOrdLive.delete(coll);
+                    if (fbCache && fbCache.ord) delete fbCache.ord[coll];
+                    fbBaseline.forEach((b, key) => { if (key.startsWith(coll + '/')) fbBaseline.delete(key); });
+                    changed = true;
+                }
+            });
+            if (changed) onCacheChanged();
+        }
+
         const VIEWS = {
+            orders: param => viewOrders(param),
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
             lists: () => viewLists(),
@@ -3872,6 +4883,7 @@
             appData.companies = sampleCompanies();
             // checks and partners are cleared only by a user who may manage them (else the save would be refused)
             if (can('checks.manage')) { appData.partners = []; appData.checks = []; }
+            if (can('orders.delete')) appData.orders = [];
             appData.logs = [];
             saveState();
             pdfIds.forEach(id => pdfRemove(id));
@@ -3910,8 +4922,8 @@
             if (!can('backup.manage')) return;
             const payload = {
                 app: 'factory-lists', version: 5, exportedAt: new Date().toISOString(),
-                note: 'الشركات واللستات والشيكات والمستفيدين والإعدادات فقط. ملفات PDF والمستخدمين والصلاحيات لا تدخل النسخة.',
-                data: { settings: appData.settings, companies: appData.companies, partners: appData.partners, checks: appData.checks }
+                note: 'الشركات واللستات والشيكات والمستفيدين والطلبيات والإعدادات فقط. ملفات PDF والمستخدمين والصلاحيات لا تدخل النسخة.',
+                data: { settings: appData.settings, companies: appData.companies, partners: appData.partners, checks: appData.checks, orders: appData.orders }
             };
             downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `نسخة-احتياطية-${todayISO()}.json`);
             log('نسخ احتياطي');
@@ -3929,6 +4941,7 @@
                 let settings;
                 let partners = null;
                 let checks = null;
+                let orders = null;
                 try {
                     const parsed = JSON.parse(reader.result);
                     const src = parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
@@ -3940,6 +4953,8 @@
                         partners = Array.isArray(src.partners) ? src.partners : null;
                         checks = Array.isArray(src.checks) ? src.checks : null;
                     }
+                    // orders come back only with orders.create and orders.delete (the database refuses the write otherwise)
+                    if (can('orders.create') && can('orders.delete')) orders = Array.isArray(src.orders) ? src.orders : null;
                 } catch (err) {
                     return toast('ملف النسخة الاحتياطية غير صالح', 'error');
                 }
@@ -3948,10 +4963,11 @@
                 if (!confirm(`سيتم استبدال كل الشركات واللستات${checksNote} والإعدادات بالنسخة المختارة (${companies.length} شركة، ${count} لستة).\nالمستخدمين والصلاحيات وسجل النشاط لا يتغيروا.\nهل تريد المتابعة؟`)) return;
 
                 finalizePendingUndo();
-                const restored = normalizeData({ settings, companies, partners: partners || [], checks: checks || [], roles: {}, users: [], logs: [] });
+                const restored = normalizeData({ settings, companies, partners: partners || [], checks: checks || [], orders: orders || [], roles: {}, users: [], logs: [] });
                 appData.companies = restored.companies;
                 if (partners) appData.partners = restored.partners;
                 if (checks) appData.checks = restored.checks;
+                if (orders) appData.orders = restored.orders;
                 appData.settings = restored.settings;
                 saveState();
                 log('استعادة نسخة احتياطية', `${companies.length} شركة، ${count} لستة`);
@@ -4090,15 +5106,16 @@
         }
 
         // ============ COMPANY MODAL ============
-        function openCompanyModal(companyId = null) {
-            if (!can('companies.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+        function openCompanyModal(companyId = null, fromOrder = false) {
+            const canNew = fromOrder && !companyId && canOrd('addSupplier');
+            if (!can('companies.manage') && !canNew) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
             const c = companyId ? findCompany(companyId) : null;
             if (companyId && !c) return;
             editingCompanyId = companyId;
             pendingLogo = undefined;
 
             openModal({
-                title: c ? 'تعديل بيانات الشركة' : 'إضافة شركة / مصنع',
+                title: c ? 'تعديل بيانات الشركة' : 'إضافة مصنع / مورد',
                 submitText: c ? 'حفظ التعديلات' : 'إضافة الشركة',
                 body: `
                     <div>
@@ -4116,28 +5133,34 @@
                         <p class="text-[11px] text-slate-400 mt-2">PNG أو JPG، وهيتعدل تلقائياً لحجم مناسب.</p>
                     </div>
                     ${field('اسم الشركة / المصنع *', `<input name="name" required value="${esc(c?.name)}" placeholder="مثال: مصنع بريما" class="${INPUT_CLS}">`)}
+                    ${field('النوع', `<select name="kind" class="${INPUT_CLS}"><option value="factory" ${c?.kind === 'supplier' ? '' : 'selected'}>مصنع</option><option value="supplier" ${c?.kind === 'supplier' ? 'selected' : ''}>مورد</option></select>`)}
                     ${field('اسم الوكيل / التاجر *', `<input name="agent" required value="${esc(c?.agent)}" placeholder="مثال: وكالة بريما" class="${INPUT_CLS}">`)}
                     ${field('ملاحظات', `<textarea name="notes" rows="3" class="${INPUT_CLS}" placeholder="أي تفاصيل إضافية...">${esc(c?.notes)}</textarea>`)}`,
                 onSubmit: fd => {
                     const name = String(fd.get('name') || '').trim();
                     const agent = String(fd.get('agent') || '').trim();
                     const notes = String(fd.get('notes') || '').trim();
+                    const kind = fd.get('kind') === 'supplier' ? 'supplier' : 'factory';
                     if (!name || !agent) return toast('اكتب اسم الشركة واسم الوكيل', 'error'), false;
 
                     if (c) {
-                        Object.assign(c, { name, agent, notes });
+                        Object.assign(c, { name, agent, notes, kind });
                         if (pendingLogo !== undefined) c.logo = pendingLogo || '';
                         log('تعديل شركة', name);
                         toast('تم حفظ التعديلات', 'success');
                         saveState();
                         navigate('companies/' + c.id);
                     } else {
-                        const newC = { id: uid('FAC-'), name, agent, notes, logo: pendingLogo || '', lists: [] };
+                        const newC = { id: uid('FAC-'), name, agent, notes, kind, logo: pendingLogo || '', lists: [] };
                         appData.companies.push(newC);
                         log('إضافة شركة', name);
-                        toast('تمت إضافة الشركة', 'success');
+                        toast(kind === 'supplier' ? 'تمت إضافة المورد' : 'تمت إضافة المصنع', 'success');
                         saveState();
-                        navigate('companies');
+                        if (fromOrder) {
+                            // back to the same order form: the unsaved values stay, and the new company is selected
+                            if (orderFormKeep) { orderFormKeep.draft.factoryId = newC.id; orderFormKeep.draft.factoryName = newC.name; }
+                            render();
+                        } else navigate('companies');
                     }
                     pendingLogo = undefined;
                 }
@@ -4664,12 +5687,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function () {
-                navigator.serviceWorker.register('/sw.js').catch(function () {});
-            });
-        }
-    </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55c9f022b5c558e',t:'MTc5Mzg4OTcwNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55c9f022b5c558e',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55d349cca45e1c0',t:'MTc5Mzg5NTgzMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55d349cca45e1c0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
