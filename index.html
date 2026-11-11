@@ -784,8 +784,68 @@
         }
 
         // Write only what changed since the last known server state.
+        // ============ SAVING (confirmed by the server) ============
+        // A change is "saved" only after the server confirms it: fbBaseline moves only on success.
+        // Failed or unsent changes stay on screen. Orders also keep a copy on this device and are retried.
+        let unsavedChanges = false;          // the last attempt failed, a retry is needed
+        let ordersRetryTimer = null;
+        let ordersRetryDelay = 5000;
+        let pendingUid = null;
+        let pendingOrderCopies = new Map();  // order id -> copy of the order the user saved, not yet confirmed
+        let pendingOrderError = new Map();   // order id -> reason of the last failed attempt
+        const pendingKey = uid => 'factoryOrdersPending:' + uid;
+        const isPendingOrder = o => !!o && pendingOrderCopies.has(o.id);
+
+        function loadPendingLocal(uid) {
+            pendingUid = uid;
+            pendingOrderCopies = new Map();
+            pendingOrderError = new Map();
+            try {
+                JSON.parse(localStorage.getItem(pendingKey(uid)) || '[]').forEach(o => { if (o && o.id) pendingOrderCopies.set(o.id, o); });
+            } catch (e) { console.error('pending orders could not be read', e); }
+        }
+
+        function savePendingLocal() {
+            if (!pendingUid) return;
+            try {
+                if (pendingOrderCopies.size) localStorage.setItem(pendingKey(pendingUid), JSON.stringify([...pendingOrderCopies.values()]));
+                else localStorage.removeItem(pendingKey(pendingUid));
+            } catch (e) { console.error('pending orders could not be stored', e); }
+        }
+
+        // pending orders stay visible after every rebuild from the server data
+        function applyPendingOrders() {
+            if (!appData) return;
+            pendingOrderCopies.forEach((copy, id) => {
+                const fresh = JSON.parse(JSON.stringify(copy));
+                const i = appData.orders.findIndex(o => o.id === id);
+                if (i >= 0) appData.orders[i] = fresh; else appData.orders.push(fresh);
+            });
+        }
+
+        // all order collections the user may read have delivered their first snapshot
+        function ordersReady() {
+            return !!fbCache && ORD_GROUPS.every(([coll, perm]) => !can(perm) || (!!fbCache.ord && fbCache.ord[coll] !== undefined));
+        }
+
+        function scheduleSaveRetry() {
+            if (ordersRetryTimer || !fbUser) return;
+            ordersRetryTimer = setTimeout(() => {
+                ordersRetryTimer = null;
+                if (unsavedChanges || pendingOrderCopies.size || !fbSynced) saveState();
+            }, ordersRetryDelay);
+            ordersRetryDelay = Math.min(ordersRetryDelay * 2, 60000);
+        }
+
+        function retryPendingOrders() {
+            ordersRetryDelay = 5000;
+            saveState().then(ok => { if (ok) toast('تم حفظ الطلبيات المعلّقة على السيرفر', 'success'); });
+        }
+
+        // Writes everything that changed since the last server-confirmed state. Resolves true only when the server accepted it.
         function saveState() {
-            if (!fbDb || !fbSynced || !appData) return;
+            if (!fbDb || !appData) return Promise.resolve(false);
+            if (!fbSynced) { scheduleSaveRetry(); return Promise.resolve(false); }
             const desired = desiredDocs(appData);
             const ops = [];
             desired.forEach((data, key) => {
@@ -794,21 +854,42 @@
                 if (!prev || prev.sig !== sig) ops.push({ key, data, sig, isNew: !prev, prevData: prev ? prev.data : null });
             });
             fbBaseline.forEach((b, key) => { if (!desired.has(key)) ops.push({ key, del: true, prevData: b.data }); });
-            if (!ops.length) return;
-            ops.forEach(op => {
-                if (op.del) fbBaseline.delete(op.key);
-                else fbBaseline.set(op.key, { data: op.data, sig: op.sig });
-            });
+            if (!ops.length) { unsavedChanges = false; return Promise.resolve(true); }
+            const sent = new Map([...pendingOrderCopies].map(([id, copy]) => [id, canon(copy)]));
             const note = fbUser ? notificationFor(ops) : null;
             const batchOps = note ? [...ops, { key: 'notifications/' + note.id, data: note }] : ops;
-            commitChunks(batchOps).catch(err => {
+            return commitChunks(batchOps).then(() => {
+                ops.forEach(op => { if (op.del) fbBaseline.delete(op.key); else fbBaseline.set(op.key, { data: op.data, sig: op.sig }); });
+                unsavedChanges = false;
+                ordersRetryDelay = 5000;
+                sent.forEach((sig, id) => {
+                    const copy = pendingOrderCopies.get(id);
+                    if (copy && canon(copy) === sig) pendingOrderCopies.delete(id);
+                    pendingOrderError.delete(id);
+                });
+                savePendingLocal();
+                return true;
+            }, err => {
                 console.error(err);
-                const denied = err && err.code === 'permission-denied';
-                toast(denied ? 'ليس لديك صلاحية لهذا التعديل. تم التراجع عنه' : 'تعذر حفظ التعديل على السيرفر', 'error', null, 6000);
-                rebuildFromCache();
+                unsavedChanges = true;
+                const denied = !!err && (err.code === 'permission-denied' || /permission/i.test(String(err.message || '')));
+                const reason = denied
+                    ? 'السيرفر رفض الحفظ. راجع صلاحيات حسابك، ولو الصلاحيات تمام يبقى قواعد قاعدة البيانات مش منشورة'
+                    : 'مفيش اتصال بالسيرفر حالياً';
+                sent.forEach((sig, id) => { if (pendingOrderCopies.has(id)) pendingOrderError.set(id, reason); });
+                // a rejected change is taken back from the screen (as before); saved-on-device orders stay
+                if (denied) rebuildFromCache();
                 render();
+                const msg = pendingOrderCopies.size
+                    ? 'لم تُحفظ الطلبية على السيرفر: ' + reason + '. الطلبية محفوظة على الجهاز وهتتعاد المحاولة'
+                    : (denied ? 'ليس لديك صلاحية لهذا التعديل. تم التراجع عنه' : 'تعذر حفظ التعديل على السيرفر');
+                toast(msg, 'error', null, 8000);
+                scheduleSaveRetry();
+                return false;
             });
         }
+
+        window.addEventListener('online', () => { ordRetryDelay = 3000; syncOrdersListener(); if (unsavedChanges || pendingOrderCopies.size) saveState(); });
 
         // ============ NOTIFICATIONS (bell) ============
         // One entry is written for every saved change (and every PDF change), by the user who made it.
@@ -998,6 +1079,7 @@
             });
             fbBaseline = new Map();
             desiredDocs(appData).forEach((data, key) => fbBaseline.set(key, { data, sig: canon(data) }));
+            applyPendingOrders();   // not in the baseline: they are still to be sent
         }
 
         function rebuildFromCache() {
@@ -1009,6 +1091,7 @@
             fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, ord: {}, settings: null, logs: [] };
             fbLoaded = {};
             fbSynced = false;
+            loadPendingLocal(uid);
             const listen = (name, ref, apply) => {
                 fbUnsubs.push(ref.onSnapshot(snap => {
                     if (!fbCache) return;
@@ -1032,12 +1115,16 @@
             fbChecksUnsubs = [];
             fbOrdLive.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbOrdLive.clear();
+            fbOrdErr.clear();
+            clearTimeout(ordRetryTimer); ordRetryTimer = null; ordRetryDelay = 3000;
             if (fbLogsUnsub) { try { fbLogsUnsub(); } catch (e) { /* already closed */ } }
             fbLogsUnsub = null;
             stopNotifSync();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
+            pendingOrderCopies = new Map();
+            pendingOrderError = new Map();
         }
 
         // the activity log is only readable by users with logs.view, so listen only for them
@@ -1124,6 +1211,7 @@
             if (!me) return handleAccessLost('حسابك غير مفعّل داخل النظام. تواصل مع مدير النظام');
             if (!me.active) return handleAccessLost('هذا الحساب موقوف. تواصل مع مدير النظام');
             sessionUserId = me.id;
+            if (pendingOrderCopies.size || unsavedChanges) saveState();
             syncLogsListener();
             setTimeout(syncChecksListener, 0);
             setTimeout(syncOrdersListener, 0);
@@ -3166,7 +3254,8 @@
         }
 
         const orderStatusBadge = o => `<span class="px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${ORDER_STATUS_CLS[o.status] || ''}">${esc(ORDER_STATUS[o.status] || o.status)}</span>`;
-        const orderWarnBadges = o => orderWarnings(o, appData.orders).map(w => `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">${esc(w)}</span>`).join(' ');
+        const pendingBadge = o => isPendingOrder(o) ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 whitespace-nowrap">لم تُحفظ بعد</span> ' : '';
+        const orderWarnBadges = o => pendingBadge(o) + orderWarnings(o, appData.orders).map(w => `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">${esc(w)}</span>`).join(' ');
         const orderPartyText = o => (o.kind === 'supply' ? (o.factoryName || '—') : (o.customerName || '—'));
         const orderTimeText = o => { const s = o.schedule || {}; return s.timeFrom ? `${s.timeFrom} - ${s.timeTo || ''}` : ''; };
         // transport details show only for the vehicle types the user may see (orders.transport_truck / _car / _other)
@@ -3539,12 +3628,15 @@
             if (draft.kind === 'supply' && !draft.factoryId && !draft.customerName) return toast('اختار المصنع للتوريد', 'error');
             if (draft.kind === 'delivery' && !draft.customerName) return toast('اكتب اسم العميل للتسليم', 'error');
             if (draft.schedule.timeFrom && draft.schedule.timeTo && draft.schedule.timeFrom >= draft.schedule.timeTo) return toast('ساعة النهاية لازم تكون بعد البداية', 'error');
+            if (!ordersReady()) return toast(ordersBlockReason(), 'error', null, 8000);
             draft.history = [...(base.history || []), { at: new Date().toISOString(), by: orderUserName(), text: isNew ? 'إنشاء الطلبية' : 'تعديل البيانات' }];
             if (isNew) appData.orders.push(draft);
             else Object.assign(before, draft);
-            saveState();
+            pendingOrderCopies.set(draft.id, JSON.parse(JSON.stringify(draft)));
+            pendingOrderError.delete(draft.id);
+            savePendingLocal();
+            saveState().then(ok => { if (ok) toast(isNew ? 'تم حفظ الطلبية على السيرفر' : 'تم حفظ التعديلات على السيرفر', 'success'); });
             log(isNew ? 'إضافة طلبية' : 'تعديل طلبية', orderNoLabel(draft));
-            toast(isNew ? 'تم حفظ الطلبية' : 'تم حفظ التعديلات', 'success');
             navigate(`orders/${draft.id}`);
         }
 
@@ -3572,6 +3664,9 @@
             finalizePendingUndo();
             const o = appData.orders[idx];
             appData.orders.splice(idx, 1);
+            pendingOrderCopies.delete(id);
+            pendingOrderError.delete(id);
+            savePendingLocal();
             log('حذف طلبية', orderNoLabel(o));
             render();
             scheduleUndo(`تم حذف ${orderNoLabel(o)}`, () => {
@@ -3631,7 +3726,7 @@
             if (parts[0] && !['schedule', 'reports'].includes(parts[0])) {
                 const o = appData.orders.find(x => x.id === parts[0]);
                 if (!o) return { title: 'الطلبيات', html: notFoundOrderHtml() };
-                return { title: orderNoLabel(o), actions: orderDetailActions(o), html: orderDetailHtml(o) };
+                return { title: orderNoLabel(o), actions: orderDetailActions(o), html: pendingOrderBanner(o) + orderDetailHtml(o) };
             }
             const tab = parts[0] === 'schedule' ? 'schedule' : (parts[0] === 'reports' ? 'reports' : 'list');
             if (tab === 'reports' && !canOrd('reports')) return { title: 'التقارير', html: noOrderAccessHtml() };
@@ -3658,6 +3753,17 @@
                 acts.push(btn(`navigate('orders/edit/${esc(o.id)}')`, 'تعديل', 'fa-pen', BTN_SECONDARY));
             }
             return `<div class="flex flex-wrap gap-2">${acts.join('')}</div>`;
+        }
+
+        function pendingOrderBanner(o) {
+            if (!isPendingOrder(o)) return '';
+            return `<div class="mb-4 rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 flex flex-wrap items-center justify-between gap-3">
+                <div class="text-sm text-amber-900 min-w-0">
+                    <p class="font-bold"><i class="fa-solid fa-triangle-exclamation"></i> الطلبية دي لسه ما اتحفظتش على السيرفر</p>
+                    <p class="text-xs mt-1">${esc(pendingOrderError.get(o.id) || 'جاري المحاولة تلقائياً')}. محفوظة على جهازك ومش هتتمسح.</p>
+                </div>
+                ${btn('retryPendingOrders()', 'إعادة المحاولة', 'fa-rotate', BTN_PRIMARY)}
+            </div>`;
         }
 
         function orderDetailHtml(o) {
@@ -3958,6 +4064,21 @@
         }
 
         // Permission-gated listeners. Nothing is subscribed without its permission (a denied listener would sign the user out).
+        const fbOrdErr = new Map();          // collection -> 'perm' or 'net': its listener failed and has not delivered since
+        let ordRetryTimer = null;
+        let ordRetryDelay = 3000;
+        function scheduleOrdersRetry() {
+            if (ordRetryTimer || !fbUser) return;
+            ordRetryTimer = setTimeout(() => { ordRetryTimer = null; syncOrdersListener(); }, ordRetryDelay);
+            ordRetryDelay = Math.min(ordRetryDelay * 2, 60000);
+        }
+        // the reason shown when an order cannot be saved yet
+        function ordersBlockReason() {
+            const kinds = [...fbOrdErr.values()];
+            if (kinds.includes('perm')) return 'ليس لديك صلاحية قراءة الطلبيات من السيرفر. راجع صلاحياتك في صفحة الأدوار، ولو الصلاحيات تمام يبقى قواعد قاعدة البيانات مش منشورة';
+            if (kinds.length) return 'تعذر تحميل الطلبيات من السيرفر، والمحاولة هتتكرر تلقائياً';
+            return 'الطلبيات لسه بتتحمل من السيرفر. جرّب بعد ثانية';
+        }
         function syncOrdersListener() {
             if (!fbCache || !fbUser) return;
             let changed = false;
@@ -3968,12 +4089,23 @@
                         if (!fbCache) return;
                         fbCache.ord = fbCache.ord || {};
                         fbCache.ord[coll] = mapDocs(snap);
+                        fbOrdErr.delete(coll);
+                        ordRetryDelay = 3000;
                         onCacheChanged();
-                    }, err => console.error('orders listener ' + coll, err));
+                    }, err => {
+                        // a failed listener is closed by Firebase: forget it so it is opened again
+                        if (fbOrdLive.get(coll) !== unsub) return;   // an older session
+                        console.error('orders listener ' + coll, err);
+                        fbOrdLive.delete(coll);
+                        fbOrdErr.set(coll, err && err.code === 'permission-denied' ? 'perm' : 'net');
+                        scheduleOrdersRetry();
+                        render();
+                    });
                     fbOrdLive.set(coll, unsub);
                 } else if (!want && live) {
                     try { fbOrdLive.get(coll)(); } catch (e) { /* already closed */ }
                     fbOrdLive.delete(coll);
+                    fbOrdErr.delete(coll);
                     if (fbCache && fbCache.ord) delete fbCache.ord[coll];
                     fbBaseline.forEach((b, key) => { if (key.startsWith(coll + '/')) fbBaseline.delete(key); });
                     changed = true;
@@ -5687,5 +5819,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55d64e12cb67d33',t:'MTc5Mzg5NzgxMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55d64e12cb67d33',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a58de49bd88fe22e',t:'MTc5NDQwNjM1OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a58de49bd88fe22e',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
