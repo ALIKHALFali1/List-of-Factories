@@ -3029,6 +3029,7 @@
 
         function render() {
             if (orderFormKeep && parseRoute().name !== 'orders') orderFormKeep = null;
+            if (pendingNewOrderImages.length && parseRoute().param !== 'new') pendingNewOrderImages = [];
             if (!sessionUserId) return;
             const user = currentUser();
             if (!user || !user.active) {
@@ -3549,8 +3550,13 @@
                     ${ordIn('paid', 'المدفوع', p.paid, canPay, 'number')}
                     ${ordIn('dueDate', 'تاريخ الاستحقاق', p.dueDate, canPay, 'date')}
                 </div>`) : '';
+            const imgEditable = canOrdImages();
+            const imagesCard = ordCard('صورة الفاتورة والمرفقات', 'fa-file-image', `
+                <p class="text-xs text-slate-600">ارفق صورة الفاتورة أو أي مستند (PNG، لحد ${ORDER_IMG_MAX} صور). التطبيق بيضغط الصورة تلقائياً.</p>
+                <div id="orderImgBox" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">${isNew ? '' : '<p class="text-sm text-slate-500">جاري تحميل الصور...</p>'}</div>
+                ${imgEditable ? `<label class="${BTN_PRIMARY} cursor-pointer w-fit"><i class="fa-solid fa-plus"></i> إضافة صورة الفاتورة<input type="file" accept="image/*" class="hidden" onchange="onOrderImagePicked(this, ${isNew ? "''" : `'${esc(o.id)}'`})"></label>` : ''}`);
             return `<form id="orderForm" onsubmit="saveOrderForm(event, ${isNew ? "''" : `'${esc(o.id)}'`})" class="space-y-4">
-                ${headerCard}${schedCard}${transportCard}${itemsCard}${payCard}
+                ${imagesCard}${headerCard}${schedCard}${transportCard}${itemsCard}${payCard}
                 <div class="flex flex-wrap gap-2 justify-end sticky bottom-2">
                     ${btn("navigate('orders')", 'رجوع', 'fa-arrow-right', BTN_SECONDARY)}
                     <button type="submit" class="${BTN_PRIMARY} whitespace-nowrap"><i class="fa-solid fa-floppy-disk"></i><span>${isNew ? 'حفظ الطلبية' : 'حفظ التعديلات'}</span></button>
@@ -3635,6 +3641,7 @@
             pendingOrderError.delete(draft.id);
             savePendingLocal();
             saveState().then(ok => { if (ok) toast(isNew ? 'تم حفظ الطلبية على السيرفر' : 'تم حفظ التعديلات على السيرفر', 'success'); });
+            if (isNew) commitPendingOrderImages(draft.id);
             log(isNew ? 'إضافة طلبية' : 'تعديل طلبية', orderNoLabel(draft));
             navigate(`orders/${draft.id}`);
         }
@@ -3672,7 +3679,7 @@
                 appData.orders.splice(Math.min(idx, appData.orders.length), 0, o);
                 log('استعادة طلبية', orderNoLabel(o));
                 render();
-            }, () => {});
+            }, () => dropOrderImages(o.id));
         }
 
         // A copy starts as a new draft: same parties, items and prices; dates and history are cleared.
@@ -3694,6 +3701,139 @@
             log('نسخ طلبية', `${orderNoLabel(src)} → ${orderNoLabel(copy)}`);
             navigate(`orders/edit/${copy.id}`);
         }
+        // ---- order photos (PNG): one node per photo under orderImages/{orderId}/{photoId} ----
+        const ORDER_IMG_MAX = 5;
+        const ORDER_IMG_MAX_CHARS = 900000;     // one database node; the rules check the same limit
+        let pendingNewOrderImages = [];         // photos of a new order: uploaded after the order is saved
+        let orderImgView = [];                  // the photos on screen (for the viewer)
+        const canOrdImages = () => canOrd('edit') || canOrd('create');
+
+        // resize and convert to PNG until the data fits in one database node
+        async function orderImageDataUrl(file) {
+            if (!file.type.startsWith('image/')) throw userError('اختار ملف صورة');
+            for (const max of [1600, 1200, 900, 700, 500]) {
+                const url = await processImage(file, max);
+                if (url.length <= ORDER_IMG_MAX_CHARS) return url;
+            }
+            throw userError('الصورة كبيرة قوي حتى بعد الضغط. اختار صورة أصغر');
+        }
+
+        async function loadOrderImages(orderId) {
+            const v = (await rtdb.ref('orderImages/' + orderId).once('value')).val() || {};
+            return Object.keys(v).map(k => ({ key: k, name: v[k].name || '', data: v[k].data || '' })).filter(x => x.data);
+        }
+
+        function paintOrderImageTiles(boxId, items, editable, removeFn) {
+            const box = el(boxId);
+            if (!box) return;
+            orderImgView = items;
+            box.innerHTML = items.length ? items.map((x, i) => `<div class="rounded-xl border-2 border-slate-200 bg-white p-1.5 space-y-1">
+                    <button type="button" onclick="openOrderImageAt(${i})" class="block w-full" title="فتح الصورة">
+                        <img src="${x.data}" alt="${esc(x.name)}" class="w-full h-28 object-contain rounded-lg bg-slate-50">
+                    </button>
+                    <div class="flex items-center justify-between gap-1">
+                        <span class="text-[11px] text-slate-600 truncate">${esc(x.name)}</span>
+                        ${editable ? `<button type="button" onclick="${removeFn(i, x)}" class="${BTN_ICON} w-8 h-8 text-rose-600 hover:bg-rose-50" aria-label="حذف الصورة"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                    </div>
+                </div>`).join('') : '<p class="text-sm text-slate-500 col-span-full">مفيش صور مرفقة</p>';
+        }
+
+        async function paintOrderImages(boxId, orderId, editable) {
+            let list;
+            try {
+                list = await loadOrderImages(orderId);
+            } catch (err) {
+                console.error(err);
+                const box = el(boxId);
+                if (box) box.innerHTML = '<p class="text-sm text-rose-600 col-span-full">تعذر تحميل الصور من السيرفر</p>';
+                return;
+            }
+            paintOrderImageTiles(boxId, list, editable, (i, x) => `removeOrderImage('${esc(orderId)}', '${esc(x.key)}')`);
+        }
+
+        function paintPendingOrderImages() {
+            paintOrderImageTiles('orderImgBox', pendingNewOrderImages, canOrdImages(), i => `removePendingOrderImage(${i})`);
+        }
+
+        function removePendingOrderImage(i) {
+            pendingNewOrderImages.splice(i, 1);
+            paintPendingOrderImages();
+        }
+
+        async function onOrderImagePicked(input, orderId) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            if (!canOrdImages()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            try {
+                const dataUrl = await orderImageDataUrl(file);
+                const name = String(file.name || 'صورة').slice(0, 200);
+                if (!orderId) {
+                    if (pendingNewOrderImages.length >= ORDER_IMG_MAX) return toast(`الحد ${ORDER_IMG_MAX} صور للطلبية`, 'error');
+                    pendingNewOrderImages.push({ name, data: dataUrl });
+                    return paintPendingOrderImages();
+                }
+                const current = await loadOrderImages(orderId);
+                if (current.length >= ORDER_IMG_MAX) return toast(`الحد ${ORDER_IMG_MAX} صور للطلبية`, 'error');
+                await rtdb.ref('orderImages/' + orderId).push({ name, type: 'image/png', data: dataUrl });
+                toast('تمت إضافة الصورة', 'success');
+                paintOrderImages('orderImgBox', orderId, true);
+            } catch (err) {
+                console.error(err);
+                toast(err.userMessage || 'تعذر حفظ الصورة على السيرفر. تأكد من الإنترنت، ولو المشكلة مستمرة اتأكد إن قواعد قاعدة البيانات متنشرة', 'error', null, 8000);
+            }
+        }
+
+        async function removeOrderImage(orderId, key) {
+            if (!canOrdImages()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (!confirm('حذف الصورة من الطلبية؟')) return;
+            try {
+                await rtdb.ref(`orderImages/${orderId}/${key}`).remove();
+                toast('تم حذف الصورة', 'success');
+                paintOrderImages('orderImgBox', orderId, true);
+            } catch (err) {
+                console.error(err);
+                toast('تعذر حذف الصورة من السيرفر', 'error');
+            }
+        }
+
+        // opens the photo in a new tab (a blob address works where a data address is blocked)
+        function openOrderImageAt(i) {
+            const x = orderImgView[i];
+            if (!x) return;
+            const b64 = x.data.split(',')[1] || '';
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+            const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+            window.open(url, '_blank');
+            setTimeout(() => URL.revokeObjectURL(url), 120000);
+        }
+
+        // called right after a new order is saved (it has its id now)
+        async function commitPendingOrderImages(orderId) {
+            const list = pendingNewOrderImages.splice(0);
+            if (!list.length) return;
+            try {
+                for (const x of list) {
+                    await rtdb.ref('orderImages/' + orderId).push({ name: x.name, type: 'image/png', data: x.data });
+                }
+            } catch (err) {
+                console.error(err);
+                toast('الطلبية اتحفظت لكن تعذر رفع بعض الصور. ضيفها تاني من تعديل الطلبية', 'error', null, 8000);
+            }
+        }
+
+        // a deleted order takes its photos with it (rules allow removing each photo node, not the whole folder)
+        async function dropOrderImages(orderId) {
+            try {
+                const v = (await rtdb.ref('orderImages/' + orderId).once('value')).val() || {};
+                await Promise.all(Object.keys(v).map(k => rtdb.ref(`orderImages/${orderId}/${k}`).remove()));
+            } catch (err) {
+                console.warn('order photos not removed:', err && err.code);
+            }
+        }
+
         // ---- pages: list (with tabs), schedule, reports, form, detail ----
         function ordersTabs(tab) {
             const tabBtn = (route, label, icon, key) => `<button type="button" onclick="navigate('${route}')" class="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 ${tab === key ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 border-2 border-slate-300 hover:bg-slate-50'}"><i class="fa-solid ${icon}"></i>${label}</button>`;
@@ -3715,17 +3855,17 @@
             if (parts[0] === 'new') {
                 if (!canOrd('create')) return { title: 'طلبية جديدة', html: noOrderAccessHtml() };
                 const o = keptOrderDraft('new') || { kind: 'supply', items: [], prices: {}, schedule: {}, transport: { type: 'truck' }, payment: { terms: 'نقدي', paid: 0, dueDate: '' } };
-                return { title: 'طلبية جديدة', actions: btn("navigate('orders')", 'رجوع', 'fa-arrow-right', BTN_SECONDARY), html: ordersFormHtml(o, true), after: addFirstItemIfEmpty };
+                return { title: 'طلبية جديدة', actions: btn("navigate('orders')", 'رجوع', 'fa-arrow-right', BTN_SECONDARY), html: ordersFormHtml(o, true), after: () => { addFirstItemIfEmpty(); paintPendingOrderImages(); } };
             }
             if (parts[0] === 'edit' && parts[1]) {
                 const o = keptOrderDraft('edit/' + parts[1]) || appData.orders.find(x => x.id === parts[1]);
                 if (!o) return { title: 'الطلبيات', html: notFoundOrderHtml() };
-                return { title: `تعديل ${orderNoLabel(o)}`, actions: btn(`navigate('orders/${esc(o.id)}')`, 'رجوع', 'fa-arrow-right', BTN_SECONDARY), html: ordersFormHtml(o, false) };
+                return { title: `تعديل ${orderNoLabel(o)}`, actions: btn(`navigate('orders/${esc(o.id)}')`, 'رجوع', 'fa-arrow-right', BTN_SECONDARY), html: ordersFormHtml(o, false), after: () => paintOrderImages('orderImgBox', o.id, canOrdImages()) };
             }
             if (parts[0] && !['schedule', 'reports'].includes(parts[0])) {
                 const o = appData.orders.find(x => x.id === parts[0]);
                 if (!o) return { title: 'الطلبيات', html: notFoundOrderHtml() };
-                return { title: orderNoLabel(o), actions: orderDetailActions(o), html: pendingOrderBanner(o) + orderDetailHtml(o) };
+                return { title: orderNoLabel(o), actions: orderDetailActions(o), html: pendingOrderBanner(o) + orderDetailHtml(o), after: () => paintOrderImages('ordDetailImgs', o.id, false) };
             }
             const tab = parts[0] === 'schedule' ? 'schedule' : (parts[0] === 'reports' ? 'reports' : 'list');
             if (tab === 'reports' && !canOrd('reports')) return { title: 'التقارير', html: noOrderAccessHtml() };
@@ -3825,6 +3965,7 @@
                     ${card('الوسيلة والنقل', 'fa-truck', transportBody)}
                     ${canOrd('payment') ? card('الدفع', 'fa-wallet', payBody) : ''}
                 </div>
+                ${card('صور الطلبية', 'fa-image', '<div id="ordDetailImgs" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-sm text-slate-500">جاري تحميل الصور...</div>')}
                 ${card('الأصناف', 'fa-boxes-stacked', itemsTable)}
                 ${card('سجل الحركات', 'fa-clock-rotate-left', `<ul class="space-y-1">${histBody || '<li class="text-sm text-slate-500">مفيش حركات</li>'}</ul>`)}
             </div>`;
@@ -5818,5 +5959,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a595b8d46f370ba3',t:'MTc5NDQ4ODQ1MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a595b8d46f370ba3',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a59620027af7e280',t:'MTc5NDQ5MjY3Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a59620027af7e280',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
