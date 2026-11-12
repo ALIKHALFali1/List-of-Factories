@@ -3158,12 +3158,11 @@
             const m2 = it.unit === 'م²' ? q : (it.unit === 'كرتونة' ? q * numOr0(it.m2PerBox) : 0);
             return {
                 subtotal, discount, net: r2(subtotal - discount), m2: r2(m2),
-                boxes: it.unit === 'كرتونة' ? q : 0, pieces: it.unit === 'قطعة' ? q : 0,
-                kg: r2(it.unit === 'طن' ? q * 1000 : (it.unit === 'كجم' ? q : q * numOr0(it.weightPerUnit)))
+                boxes: it.unit === 'كرتونة' ? q : 0, pieces: it.unit === 'قطعة' ? q : 0
             };
         }
         function orderTotals(o) {
-            const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0, kg: 0 };
+            const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0 };
             (o.items || []).forEach(it => {
                 const l = lineCalc(it, priceOf(o, it.id));
                 Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); });
@@ -3184,7 +3183,6 @@
             if (ordIsOpen(o) && s.plannedDate && s.plannedDate < todayISO() && ['draft', 'confirmed', 'loading'].includes(o.status)) w.push('متأخرة عن موعدها');
             if (s.timeFrom && s.timeTo && s.timeFrom >= s.timeTo) w.push('ساعة النهاية قبل البداية');
             if (s.arrivalDate && s.plannedDate && s.arrivalDate < s.plannedDate) w.push('الوصول قبل الشحن');
-            if (numOr0(t.capacityKg) > 0 && orderTotals(o).kg > numOr0(t.capacityKg)) w.push('الحمولة أكبر من السعة');
             return w;
         }
 
@@ -3228,7 +3226,7 @@
                 ${canOrd('prices') ? card('صافي القيمة', fmtMoney(r2(act.reduce((s, o) => s + orderTotals(o).net, 0))), 'text-emerald-700') : ''}
                 ${card('مجدولة النهارده', act.filter(o => orderDateOf(o) === today).length, 'text-brand-700')}
                 ${card('متأخرة عن موعدها', rows.filter(o => orderWarnings(o, appData.orders).includes('متأخرة عن موعدها')).length, 'text-rose-700')}
-                ${card('م² / كرتونة / كجم', `${fmtDigits(sum('m2'))} / ${fmtDigits(sum('boxes'))} / ${fmtDigits(sum('kg'))}`)}
+                ${card('م² / كرتونة', `${fmtDigits(sum('m2'))} / ${fmtDigits(sum('boxes'))}`)}
             </div>`;
         }
 
@@ -3303,7 +3301,7 @@
                             <td class="py-3 px-3 font-semibold">${esc(orderPartyText(o))}${o.kind === 'supply' && o.customerName ? `<br><span class="text-xs text-slate-500">${esc(o.customerName)}</span>` : ''}</td>
                             <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(orderDateOf(o)) || '—')}<br><span class="text-xs text-slate-500">${esc(orderTimeText(o))}</span></td>
                             <td class="py-3 px-3">${vehicleText(o)}</td>
-                            <td class="py-3 px-3 text-xs whitespace-nowrap">${t.m2 ? fmtDigits(t.m2) + ' م²' : ''}${t.boxes ? ' · ' + fmtDigits(t.boxes) + ' كرتونة' : ''}${t.pieces ? ' · ' + fmtDigits(t.pieces) + ' قطعة' : ''}${t.kg ? ' · ' + fmtDigits(t.kg) + ' كجم' : ''}</td>
+                            <td class="py-3 px-3 text-xs whitespace-nowrap">${t.m2 ? fmtDigits(t.m2) + ' م²' : ''}${t.boxes ? ' · ' + fmtDigits(t.boxes) + ' كرتونة' : ''}${t.pieces ? ' · ' + fmtDigits(t.pieces) + ' قطعة' : ''}</td>
                             <td class="py-3 px-3 font-bold whitespace-nowrap">${canOrd('prices') ? fmtMoney(t.net) : '<span class="text-slate-400">—</span>'}</td>
                             <td class="py-3 px-3">${orderStatusBadge(o)}</td>
                             <td class="py-3 px-3">${orderWarnBadges(o)}</td>
@@ -3355,14 +3353,12 @@
             const dayCards = days.map(d => {
                 const list = open.filter(o => orderDateOf(o) === d)
                     .sort((a, b) => ((a.schedule && a.schedule.timeFrom) || '99:99').localeCompare((b.schedule && b.schedule.timeFrom) || '99:99'));
-                const kg = r2(list.reduce((s, o) => s + orderTotals(o).kg, 0));
                 const rows = list.length ? list.map(o => {
                     const t = o.transport || {};
                     return `<div class="rounded-xl border-2 border-slate-200 bg-white p-3 flex flex-wrap items-center justify-between gap-2">
                         <div class="min-w-0">
                             <p class="font-bold text-slate-800"><span class="font-mono">${orderNoLabel(o)}</span> — ${esc(orderPartyText(o))}</p>
-                            <p class="text-xs text-slate-600">${esc(orderTimeText(o) || 'طول اليوم')} · ${esc(ORDER_TRANSPORT[t.type] || 'بدون وسيلة')}
-                                · ${fmtDigits(orderTotals(o).kg)} كجم${t.capacityKg ? ' / سعة ' + fmtDigits(t.capacityKg) : ''}</p>
+                            <p class="text-xs text-slate-600">${esc(orderTimeText(o) || 'طول اليوم')} · ${esc(ORDER_TRANSPORT[t.type] || 'بدون وسيلة')}</p>
                         </div>
                         <div class="flex flex-wrap items-center gap-1">${orderStatusBadge(o)} ${orderWarnBadges(o)}
                             <button type="button" onclick="navigate('orders/${esc(o.id)}')" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50" aria-label="فتح"><i class="fa-solid fa-eye"></i></button></div>
@@ -3371,7 +3367,7 @@
                 return `<section class="bg-slate-50 rounded-2xl border-2 border-slate-300 p-3 space-y-2">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h3 class="font-bold text-slate-800">${esc(WEEKDAY_AR[new Date(d + 'T00:00:00').getDay()])} ${esc(fmtDateAr(d))}</h3>
-                        <p class="text-xs font-bold text-slate-700">${list.length} طلبية · ${fmtDigits(kg)} كجم</p>
+                        <p class="text-xs font-bold text-slate-700">${list.length} طلبية</p>
                     </div>${rows}</section>`;
             }).join('');
             const unscheduled = open.filter(o => !orderDateOf(o));
@@ -3395,8 +3391,8 @@
         // Fields the user cannot change are disabled. Prices are not rendered at all without orders.prices.
         const ORDER_TRANSPORT_FIELDS = {
             truck: [],
-            car: ['capacityKg'],
-            other: ['company', 'description', 'capacityKg', 'cost']
+            car: [],
+            other: ['company', 'description', 'cost']
         };
 
         function ordIn(name, label, value, ok = true, type = 'text', extra = '') {
@@ -3425,7 +3421,7 @@
                     ${sel}${f('code', 'الكود', it.code)}${f('name', 'الاسم / الموديل', it.name)}${f('size', 'المقاس', it.size)}${f('shade', 'الدرجة / اللون', it.shade)}${unit}
                 </div>
                 <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
-                    ${f('qty', 'الكمية', it.qty, 'number')}${f('m2PerBox', 'م² في الكرتونة', it.m2PerBox, 'number')}${f('weightPerUnit', 'وزن الوحدة (كجم)', it.weightPerUnit, 'number')}
+                    ${f('qty', 'الكمية', it.qty, 'number')}${f('m2PerBox', 'م² في الكرتونة', it.m2PerBox, 'number')}
                     ${prices}
                     <div class="flex items-center justify-end">${canEdit ? `<button type="button" onclick="removeOrderItemRow(this)" class="${BTN_ICON} text-rose-600 hover:bg-rose-50" aria-label="حذف الصنف"><i class="fa-solid fa-trash-can"></i></button>` : ''}</div>
                 </div>
@@ -3435,7 +3431,7 @@
         function addOrderItemRow() {
             const holder = el('orderItems');
             if (!holder) return;
-            const it = { id: uid('it-'), product: ORDER_PRODUCTS[0], code: '', name: '', size: '', shade: '', unit: 'م²', qty: '', m2PerBox: '', weightPerUnit: '' };
+            const it = { id: uid('it-'), product: ORDER_PRODUCTS[0], code: '', name: '', size: '', shade: '', unit: 'م²', qty: '', m2PerBox: '' };
             holder.insertAdjacentHTML('beforeend', orderItemRowHtml(it, { unitPrice: '', discount: '' }, true, canOrd('prices')));
             recalcOrderTotals();
         }
@@ -3451,7 +3447,7 @@
                 const g = n => { const x = row.querySelector(`[data-f="${n}"]`); return x ? x.value : ''; };
                 const it = {
                     id: row.dataset.iid, product: g('product'), code: g('code').trim(), name: g('name').trim(), size: g('size').trim(),
-                    shade: g('shade').trim(), unit: g('unit'), qty: numOr0(g('qty')), m2PerBox: numOr0(g('m2PerBox')), weightPerUnit: numOr0(g('weightPerUnit'))
+                    shade: g('shade').trim(), unit: g('unit'), qty: numOr0(g('qty')), m2PerBox: numOr0(g('m2PerBox'))
                 };
                 if (!it.code && !it.name && !it.qty) return;
                 items.push(it);
@@ -3465,10 +3461,10 @@
             const box = el('orderTotals');
             if (!box) return;
             const { items, prices } = readOrderItems({ prices: {} });
-            const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0, kg: 0 };
+            const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0 };
             items.forEach(it => { const l = lineCalc(it, prices[it.id] || { unitPrice: 0, discount: 0 }); Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); }); });
             const cell = (label, value, cls = '') => `<div class="rounded-xl bg-white border border-slate-200 p-2"><p class="text-[11px] font-bold text-slate-500">${label}</p><p class="font-bold ${cls}">${value}</p></div>`;
-            box.innerHTML = `${cell('م²', fmtDigits(t.m2))}${cell('كرتونة', fmtDigits(t.boxes))}${cell('قطعة', fmtDigits(t.pieces))}${cell('كجم', fmtDigits(t.kg))}`
+            box.innerHTML = `${cell('م²', fmtDigits(t.m2))}${cell('كرتونة', fmtDigits(t.boxes))}${cell('قطعة', fmtDigits(t.pieces))}`
                 + (canOrd('prices') ? `${cell('الإجمالي', fmtMoney(t.subtotal))}${cell('الخصم', fmtMoney(t.discount))}${cell('الصافي', fmtMoney(t.net), 'text-emerald-700')}` : '');
         }
 
@@ -3534,7 +3530,6 @@
             const transportCard = ordCard('الوسيلة والنقل', 'fa-truck', `
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     ${ordSel('transportType', 'نوع الوسيلة', Object.entries(ORDER_TRANSPORT), type, true).replace('<select ', '<select onchange="transportTypeChanged(this)" ')}
-                    ${tf('capacityKg', 'السعة (كجم)', t.capacityKg, 'car other', 'number')}
                     ${tf('company', 'شركة النقل', t.company, 'other')}
                     ${tf('description', 'وصف الوسيلة', t.description, 'other')}
                     ${tf('cost', 'تكلفة النقل', t.cost, 'other', 'number')}
@@ -3572,7 +3567,6 @@
             const { items, prices } = readOrderItems(o);
             const transport = { type };
             ORDER_TRANSPORT_FIELDS[type].forEach(k => { transport[k] = v(k).trim(); });
-            transport.capacityKg = type === 'truck' ? 0 : numOr0(v('capacityKg'));
             if (type === 'other') transport.cost = numOr0(v('cost'));
             return {
                 ...o,
@@ -3920,7 +3914,6 @@
                     <td class="py-2 px-2">${esc(it.name)}</td><td class="py-2 px-2">${esc(it.size)}</td><td class="py-2 px-2">${esc(it.shade)}</td>
                     <td class="py-2 px-2">${esc(it.unit)}</td><td class="py-2 px-2">${fmtDigits(numOr0(it.qty))}</td>
                     <td class="py-2 px-2">${l.m2 ? fmtDigits(l.m2) : ''}${l.boxes ? ' ' + fmtDigits(l.boxes) + ' كرتونة' : ''}</td>
-                    <td class="py-2 px-2">${fmtDigits(l.kg)}</td>
                     ${canOrd('prices') ? `<td class="py-2 px-2">${fmtDigits(numOr0(priceOf(o, it.id).unitPrice))}</td><td class="py-2 px-2">${fmtDigits(numOr0(priceOf(o, it.id).discount))}%</td><td class="py-2 px-2 font-bold">${fmtMoney(l.net)}</td>` : ''}
                 </tr>`;
             }).join('');
@@ -3928,10 +3921,10 @@
                 <thead class="bg-slate-50 font-bold text-slate-700"><tr>
                     <th class="py-2 px-2 text-start">م</th><th class="py-2 px-2 text-start">النوع</th><th class="py-2 px-2 text-start">الكود</th>
                     <th class="py-2 px-2 text-start">الاسم</th><th class="py-2 px-2 text-start">المقاس</th><th class="py-2 px-2 text-start">الدرجة</th>
-                    <th class="py-2 px-2 text-start">الوحدة</th><th class="py-2 px-2 text-start">الكمية</th><th class="py-2 px-2 text-start">م² / كرتونة</th><th class="py-2 px-2 text-start">كجم</th>
+                    <th class="py-2 px-2 text-start">الوحدة</th><th class="py-2 px-2 text-start">الكمية</th><th class="py-2 px-2 text-start">م² / كرتونة</th>
                     ${canOrd('prices') ? '<th class="py-2 px-2 text-start">السعر</th><th class="py-2 px-2 text-start">الخصم</th><th class="py-2 px-2 text-start">الصافي</th>' : ''}
                 </tr></thead><tbody>${itemRows}</tbody>
-                <tfoot class="bg-slate-50 font-bold"><tr><td colspan="9" class="py-2 px-2">الإجمالي</td><td class="py-2 px-2">${fmtDigits(t.kg)}</td>
+                <tfoot class="bg-slate-50 font-bold"><tr><td colspan="9" class="py-2 px-2">الإجمالي</td>
                     ${canOrd('prices') ? `<td colspan="2"></td><td class="py-2 px-2 text-emerald-700">${fmtMoney(t.net)}</td>` : ''}</tr></tfoot>
             </table></div>` : '<p class="text-slate-500 text-sm">مفيش أصناف</p>';
             const schedBody = `${row(o.kind === 'supply' ? 'تاريخ الشحن المخطط' : 'تاريخ التسليم المخطط', fmtDateAr(s.plannedDate))}
@@ -3940,14 +3933,13 @@
                 ${row('تاريخ التنفيذ الفعلي', fmtDateAr(s.actualDate))}`;
             const transportBody = canSeeVehicle(o) ? `${row('نوع الوسيلة', ORDER_TRANSPORT[tr.type])}
                 ${tr.type === 'other' ? row('شركة النقل', esc(tr.company)) + row('وصف الوسيلة', esc(tr.description)) : ''}
-                ${tr.type !== 'truck' ? row('السعة (كجم)', tr.capacityKg ? fmtDigits(tr.capacityKg) : '') : ''}
                 ${tr.type === 'other' && canOrd('prices') ? row('تكلفة النقل', tr.cost ? fmtMoney(numOr0(tr.cost)) : '') : ''}`
                 : `<p class="text-sm text-slate-600">${tr.type ? 'نوع الوسيلة: ' + esc(ORDER_TRANSPORT[tr.type]) + ' — تفاصيلها مش متاحة لصلاحياتك' : 'لسه مش متسجلة وسيلة'}</p>`;
             const payBody = canOrd('payment') ? `${row('شروط الدفع', esc(pay.terms))}${row('المدفوع', fmtMoney(numOr0(pay.paid)))}${row('المتبقي', fmtMoney(orderBalance(o)))}${row('تاريخ الاستحقاق', fmtDateAr(pay.dueDate))}` : '';
             const histBody = (o.history || []).slice().reverse().map(h => `<li class="text-sm"><span class="font-mono text-xs text-slate-500">${esc(new Date(h.at).toLocaleString('ar-EG'))}</span> — ${esc(h.text)} <span class="text-slate-500">(${esc(h.by || '')})</span></li>`).join('');
             const summary = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الحالة</p><div class="mt-1">${orderStatusBadge(o)}</div></div>
-                <div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الكميات</p><p class="font-bold text-sm">${fmtDigits(t.m2)} م² · ${fmtDigits(t.boxes)} كرتونة · ${fmtDigits(t.kg)} كجم</p></div>
+                <div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الكميات</p><p class="font-bold text-sm">${fmtDigits(t.m2)} م² · ${fmtDigits(t.boxes)} كرتونة</p></div>
                 ${canOrd('prices') ? `<div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">الصافي</p><p class="font-bold text-emerald-700">${fmtMoney(t.net)}</p></div>` : ''}
                 ${canOrd('payment') ? `<div class="bg-white rounded-2xl border-2 border-slate-300 p-3"><p class="text-xs font-bold text-slate-600">المتبقي</p><p class="font-bold text-rose-700">${fmtMoney(orderBalance(o))}</p></div>` : ''}
             </div>`;
@@ -3993,7 +3985,7 @@
             const rows = (o.items || []).map((it, i) => {
                 const l = lineCalc(it, priceOf(o, it.id));
                 return `<tr><td>${i + 1}</td><td>${esc(it.product)}</td><td>${esc(it.code)}</td><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.shade)}</td>
-                    <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td><td>${fmtDigits(l.kg)}</td>
+                    <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td>
                     ${showPrice ? `<td>${fmtDigits(numOr0(priceOf(o, it.id).unitPrice))}</td><td>${fmtDigits(numOr0(priceOf(o, it.id).discount))}%</td><td>${fmtMoney(l.net)}</td>` : ''}</tr>`;
             }).join('');
             const s = o.schedule || {}, tr = canSeeVehicle(o) ? (o.transport || {}) : {};
@@ -4004,10 +3996,10 @@
                 <b>${o.kind === 'supply' ? 'شحن' : 'تسليم'}:</b> ${esc(fmtDateAr(s.plannedDate) || '—')} ${esc(orderTimeText(o))}
                 ${o.kind === 'supply' ? ` · <b>وصول للمخزن:</b> ${esc(fmtDateAr(s.arrivalDate) || '—')}` : ` · <b>المسار:</b> ${esc(s.route || '—')}`}
                 ${tr.type ? `<br><b>الوسيلة:</b> ${esc(ORDER_TRANSPORT[tr.type])}` : ''}</div>
-                <table><thead><tr><th>م</th><th>النوع</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th><th>كجم</th>
+                <table><thead><tr><th>م</th><th>النوع</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th>
                 ${showPrice ? '<th>السعر</th><th>خصم</th><th>الصافي</th>' : ''}</tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes || t.pieces || '')}</td><td>${fmtDigits(t.kg)}</td>${showPrice ? `<td colspan="2"></td><td>${fmtMoney(t.net)}</td>` : ''}</tr></tfoot></table>
+                <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes || t.pieces || '')}</td>${showPrice ? `<td colspan="2"></td><td>${fmtMoney(t.net)}</td>` : ''}</tr></tfoot></table>
                 ${showPrice && canOrd('payment') ? `<div class="box"><b>شروط الدفع:</b> ${esc(o.payment && o.payment.terms)} · <b>المتبقي:</b> ${fmtMoney(orderBalance(o))}</div>` : ''}
                 ${o.notes ? `<div class="box"><b>ملاحظات:</b> ${esc(o.notes)}</div>` : ''}
                 <div class="sign"><div>المستلم</div><div>المندوب</div><div>الإدارة</div></div>`);
@@ -4019,15 +4011,15 @@
             const rows = (o.items || []).map((it, i) => {
                 const l = lineCalc(it, priceOf(o, it.id));
                 return `<tr><td>${i + 1}</td><td>${esc(it.code)}</td><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.shade)}</td>
-                    <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td><td>${fmtDigits(l.boxes || '')}</td><td>${fmtDigits(l.kg)}</td><td></td></tr>`;
+                    <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td><td>${fmtDigits(l.boxes || '')}</td><td></td></tr>`;
             }).join('');
             return orderPrintShell(`إذن تحميل ${orderNoLabel(o)}`, `${printHead('إذن تحميل', o)}
                 <div class="box"><b>${o.kind === 'supply' ? 'من المصنع:' : 'تسليم للعميل:'}</b> ${esc(orderPartyText(o))}
                 · <b>التاريخ:</b> ${esc(fmtDateAr(s.plannedDate) || '—')} ${esc(orderTimeText(o))}<br>
                 <b>الوسيلة:</b> ${esc(tr.type ? ORDER_TRANSPORT[tr.type] : '—')}</div>
-                <table><thead><tr><th>م</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th><th>كرتونة</th><th>كجم</th><th>ملاحظة</th></tr></thead>
+                <table><thead><tr><th>م</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th><th>كرتونة</th><th>ملاحظة</th></tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes)}</td><td>${fmtDigits(t.kg)}</td><td></td></tr></tfoot></table>
+                <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes)}</td><td></td></tr></tfoot></table>
                 <div class="sign"><div>أمين المخزن</div><div>السائق</div><div>المستلم</div></div>`);
         }
         function printOrderDoc(id) {
@@ -4045,11 +4037,11 @@
             const rows = filteredOrders();
             const showPrice = canOrd('prices');
             const body = `${printHead('قائمة الطلبيات', null)}
-                <table><thead><tr><th>الرقم</th><th>النوع</th><th>المصنع / العميل</th><th>التاريخ</th><th>الوقت</th><th>الوسيلة</th><th>م²</th><th>كرتونة</th><th>كجم</th>
+                <table><thead><tr><th>الرقم</th><th>النوع</th><th>المصنع / العميل</th><th>التاريخ</th><th>الوقت</th><th>الوسيلة</th><th>م²</th><th>كرتونة</th>
                 ${showPrice ? '<th>الصافي</th>' : ''}<th>الحالة</th></tr></thead><tbody>
                 ${rows.map(o => { const t = orderTotals(o); return `<tr><td>${orderNoLabel(o)}</td><td>${esc(ORDER_KIND[o.kind] || '')}</td><td>${esc(orderPartyText(o))}</td>
                     <td>${esc(fmtDateAr(orderDateOf(o)) || '—')}</td><td>${esc(orderTimeText(o))}</td><td>${esc(ORDER_TRANSPORT[(o.transport || {}).type] || '')}</td>
-                    <td>${fmtDigits(t.m2)}</td><td>${fmtDigits(t.boxes)}</td><td>${fmtDigits(t.kg)}</td>
+                    <td>${fmtDigits(t.m2)}</td><td>${fmtDigits(t.boxes)}</td>
                     ${showPrice ? `<td>${fmtMoney(t.net)}</td>` : ''}<td>${esc(ORDER_STATUS[o.status] || '')}</td></tr>`; }).join('')}
                 </tbody></table>`;
             printHtml(orderPrintShell('قائمة الطلبيات', body));
@@ -4069,9 +4061,9 @@
             const map = new Map();
             rows.forEach(o => {
                 const k = keyOf(o);
-                if (!map.has(k)) map.set(k, { label: labelOf(o, k), count: 0, m2: 0, boxes: 0, kg: 0, net: 0 });
+                if (!map.has(k)) map.set(k, { label: labelOf(o, k), count: 0, m2: 0, boxes: 0, net: 0 });
                 const g = map.get(k), t = orderTotals(o);
-                g.count++; g.m2 = r2(g.m2 + t.m2); g.boxes = r2(g.boxes + t.boxes); g.kg = r2(g.kg + t.kg); g.net = r2(g.net + t.net);
+                g.count++; g.m2 = r2(g.m2 + t.m2); g.boxes = r2(g.boxes + t.boxes); g.net = r2(g.net + t.net);
             });
             return [...map.values()].sort((a, b) => b.count - a.count);
         }
@@ -4080,9 +4072,9 @@
             const table = (title, groups) => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 overflow-x-auto">
                 <h3 class="font-bold text-slate-800 mb-2">${title}</h3>
                 <table class="w-full text-sm"><thead class="bg-slate-50 font-bold"><tr><th class="py-2 px-2 text-start">البند</th><th class="py-2 px-2 text-start">عدد</th>
-                <th class="py-2 px-2 text-start">م²</th><th class="py-2 px-2 text-start">كرتونة</th><th class="py-2 px-2 text-start">كجم</th>${showPrice ? '<th class="py-2 px-2 text-start">الصافي</th>' : ''}</tr></thead>
+                <th class="py-2 px-2 text-start">م²</th><th class="py-2 px-2 text-start">كرتونة</th>${showPrice ? '<th class="py-2 px-2 text-start">الصافي</th>' : ''}</tr></thead>
                 <tbody>${groups.map(g => `<tr class="border-t border-slate-200"><td class="py-2 px-2">${esc(g.label)}</td><td class="py-2 px-2">${g.count}</td>
-                <td class="py-2 px-2">${fmtDigits(g.m2)}</td><td class="py-2 px-2">${fmtDigits(g.boxes)}</td><td class="py-2 px-2">${fmtDigits(g.kg)}</td>
+                <td class="py-2 px-2">${fmtDigits(g.m2)}</td><td class="py-2 px-2">${fmtDigits(g.boxes)}</td>
                 ${showPrice ? `<td class="py-2 px-2 font-bold">${fmtMoney(g.net)}</td>` : ''}</tr>`).join('') || '<tr><td colspan="6" class="py-2 px-2 text-slate-500">لا توجد بيانات</td></tr>'}</tbody></table></div>`;
             return table('حسب الحالة', groupRows(rows, o => o.status, (o, k) => ORDER_STATUS[k] || k))
                 + table('حسب المصنع / العميل', groupRows(rows, o => (o.kind === 'supply' ? 'f:' + (o.factoryName || '—') : 'c:' + (o.customerName || '—')), (o, k) => (o.kind === 'supply' ? 'مصنع: ' : 'عميل: ') + k.slice(2)))
@@ -4113,7 +4105,7 @@
                 'الرقم': orderNoLabel(o), 'النوع': ORDER_KIND[o.kind] || '', 'المصنع': o.factoryName || '', 'العميل': o.customerName || '',
                 'تاريخ الجدولة': s.plannedDate || '', 'من': s.timeFrom || '', 'إلى': s.timeTo || '', 'تاريخ الوصول': s.arrivalDate || '',
                 'الوسيلة': o.transport && o.transport.type ? ORDER_TRANSPORT[o.transport.type] : '', 'الحالة': ORDER_STATUS[o.status] || '',
-                'م²': t.m2, 'كرتونة': t.boxes, 'قطعة': t.pieces, 'كجم': t.kg
+                'م²': t.m2, 'كرتونة': t.boxes, 'قطعة': t.pieces
             };
             if (canOrd('prices')) { row['الإجمالي'] = t.subtotal; row['الخصم'] = t.discount; row['الصافي'] = t.net; }
             if (canOrd('payment')) { row['المدفوع'] = numOr0(o.payment && o.payment.paid); row['المتبقي'] = orderBalance(o); }
@@ -4130,7 +4122,7 @@
             const rows = filteredOrders();
             const items = rows.flatMap(o => (o.items || []).map(it => {
                 const l = lineCalc(it, priceOf(o, it.id));
-                const r = { 'الرقم': orderNoLabel(o), 'النوع': it.product, 'الكود': it.code, 'الاسم': it.name, 'المقاس': it.size, 'الدرجة': it.shade, 'الوحدة': it.unit, 'الكمية': numOr0(it.qty), 'م²': l.m2, 'كجم': l.kg };
+                const r = { 'الرقم': orderNoLabel(o), 'النوع': it.product, 'الكود': it.code, 'الاسم': it.name, 'المقاس': it.size, 'الدرجة': it.shade, 'الوحدة': it.unit, 'الكمية': numOr0(it.qty), 'م²': l.m2 };
                 if (canOrd('prices')) { r['السعر'] = numOr0(priceOf(o, it.id).unitPrice); r['خصم %'] = numOr0(priceOf(o, it.id).discount); r['الصافي'] = l.net; }
                 return r;
             }));
@@ -4140,7 +4132,7 @@
             if (!canOrd('export')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const rows = ordersReportRows();
             const f = ordersRepFilter;
-            const sheet = (groups, label) => groups.map(g => ({ [label]: g.label, 'عدد': g.count, 'م²': g.m2, 'كرتونة': g.boxes, 'كجم': g.kg, ...(canOrd('prices') ? { 'الصافي': g.net } : {}) }));
+            const sheet = (groups, label) => groups.map(g => ({ [label]: g.label, 'عدد': g.count, 'م²': g.m2, 'كرتونة': g.boxes, ...(canOrd('prices') ? { 'الصافي': g.net } : {}) }));
             writeXlsx([
                 ['الطلبيات', rows.map(orderExportRow)],
                 ['حسب الحالة', sheet(groupRows(rows, o => o.status, (o, k) => ORDER_STATUS[k] || k), 'الحالة')],
@@ -5959,5 +5951,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a59620027af7e280',t:'MTc5NDQ5MjY3Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a59620027af7e280',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a59645307eca5321',t:'MTc5NDQ5NDIwMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a59645307eca5321',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
