@@ -59,6 +59,11 @@
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <body class="text-slate-800 min-h-screen">
 
@@ -210,6 +215,7 @@
                 ['orders.transport_other', 'بيانات النقل: وسيلة أخرى'],
                 ['orders.payment', 'الدفع والمدفوع والمتبقي'],
                 ['orders.confirm', 'تأكيد وإلغاء وإعادة فتح الطلبيات'],
+                ['orders.status_override', 'تعديل الحالة بحرية (أي حالة) مع سبب'],
                 ['orders.execute', 'بدء التحميل وخروج الشحنة وتسجيل التسليم'],
                 ['orders.delete', 'حذف الطلبيات'],
                 ['orders.print', 'طباعة الطلبية وإذن التحميل والقوائم'],
@@ -3107,7 +3113,7 @@
             view: 'orders.view', create: 'orders.create', addSupplier: 'orders.add_supplier', edit: 'orders.edit', prices: 'orders.prices', schedule: 'orders.schedule',
             truck: 'orders.transport_truck', car: 'orders.transport_car', other: 'orders.transport_other', payment: 'orders.payment',
             confirm: 'orders.confirm', execute: 'orders.execute', delete: 'orders.delete', print: 'orders.print',
-            export: 'orders.export', reports: 'orders.reports'
+            export: 'orders.export', reports: 'orders.reports', status_override: 'orders.status_override'
         };
         const canOrd = key => can(ORDER_PERM[key]);
         const orderUserName = () => { const u = currentUser(); return u ? u.name : ''; };
@@ -3147,6 +3153,78 @@
             delivered: [],
             cancelled: [['draft', 'confirm', 'إعادة فتح كمسودة']]
         };
+
+        // ---- order status: stages (loading, transit, delivered) keep a date and a note ----
+        const ORDER_STAGES = ['loading', 'transit', 'delivered'];
+        const stageDateOf = (o, st) => (((o.stages || {})[st]) || {}).date || '';
+        const deliveredDateOf = o => stageDateOf(o, 'delivered') || (o.schedule || {}).actualDate || '';
+        const stageValueOf = (o, st) => (st === 'delivered' ? deliveredDateOf(o) : stageDateOf(o, st));
+        const stagesText = o => ORDER_STAGES.filter(st => stageValueOf(o, st))
+            .map(st => `${ORDER_STATUS[st]}: ${fmtDateAr(stageValueOf(o, st))}`).join(' · ');
+        // stage dates need the matching flow permission; the status override covers every status
+        const stageAllowed = (st) => canOrd('status_override') || canOrd(ORDER_STAGES.includes(st) ? 'execute' : 'confirm');
+        const canAnyStatusAction = () => canOrd('status_override') || canOrd('confirm') || canOrd('execute');
+
+        function openOrderStatusModal(id, presetTo = '') {
+            const o = appData.orders.find(x => x.id === id);
+            if (!o) return;
+            if (!canAnyStatusAction()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const cur = presetTo || o.status;
+            const opts = Object.keys(ORDER_STATUS).map(k => `<option value="${k}" ${k === cur ? 'selected' : ''}>${ORDER_STATUS[k]}</option>`).join('');
+            const dateFor = st => stageValueOf(o, st) || (ORDER_STAGES.includes(st) ? todayISO() : '');
+            openModal({
+                title: `حالة ${orderNoLabel(o)}`,
+                submitText: 'حفظ',
+                body: `<label class="block text-xs font-bold text-slate-600 mb-1">الحالة
+                        <select name="to" onchange="orderStatusPick(this, '${esc(id)}')" class="${INPUT_CLS}">${opts}</select></label>
+                    <label class="block text-xs font-bold text-slate-600 mb-1">تاريخ المرحلة
+                        <input name="date" type="date" value="${esc(dateFor(cur))}" class="${INPUT_CLS}"></label>
+                    <label class="block text-xs font-bold text-slate-600 mb-1">ملاحظة المرحلة
+                        <textarea name="note" rows="2" class="${INPUT_CLS}">${esc(((o.stages || {})[cur] || {}).note || '')}</textarea></label>
+                    <label class="block text-xs font-bold text-slate-600 mb-1">سبب تغيير الحالة (مطلوب لو الحالة اتغيرت)
+                        <textarea name="reason" rows="2" class="${INPUT_CLS}"></textarea></label>
+                    <p class="text-xs text-slate-500">التاريخ والملاحظة بيتحفظوا للمراحل بس (جاري التحميل، في الطريق، تم التسليم).</p>`,
+                onSubmit: fd => submitOrderStatus(id, fd)
+            });
+        }
+
+        // picking a stage in the modal shows that stage's saved date and note
+        function orderStatusPick(sel, id) {
+            const o = appData.orders.find(x => x.id === id);
+            const form = sel.form;
+            if (!o || !form) return;
+            const st = sel.value;
+            form.elements.date.value = ORDER_STAGES.includes(st) ? (stageValueOf(o, st) || todayISO()) : '';
+            form.elements.note.value = ((o.stages || {})[st] || {}).note || '';
+        }
+
+        function submitOrderStatus(id, fd) {
+            const o = appData.orders.find(x => x.id === id);
+            if (!o) return false;
+            const to = String(fd.get('to') || o.status);
+            const date = String(fd.get('date') || '').trim() || todayISO();
+            const note = String(fd.get('note') || '').trim();
+            const reason = String(fd.get('reason') || '').trim();
+            const changed = to !== o.status;
+            if (changed) {
+                if (!canOrd('status_override')) { toast('ليس لديك صلاحية تعديل الحالة بحرية', 'error'); return false; }
+                if (!reason) { toast('اكتب سبب تغيير الحالة', 'error'); return false; }
+            } else if (!ORDER_STAGES.includes(to)) {
+                toast('الحالة دي مالهاش مراحل تتعدل', 'info');
+                return false;
+            }
+            if (ORDER_STAGES.includes(to) && !stageAllowed(to)) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const from = o.status;
+            if (changed) o.status = to;
+            if (ORDER_STAGES.includes(to)) o.stages = { ...(o.stages || {}), [to]: { date, note } };
+            const text = changed ? `تعديل الحالة من ${ORDER_STATUS[from]} إلى ${ORDER_STATUS[to]} — السبب: ${reason}` : `تعديل مرحلة ${ORDER_STATUS[to]}`;
+            o.history = [...(o.history || []), { at: new Date().toISOString(), by: orderUserName(), text }];
+            saveState();
+            log('تعديل حالة طلبية', `${orderNoLabel(o)} — ${text}`);
+            toast('تم حفظ التعديل', 'success');
+            render();
+            return true;
+        }
 
         const orderNoLabel = o => `طلبية ${String(o.no).padStart(4, '0')}`;
         const orderDateOf = o => (o.schedule && o.schedule.plannedDate) || '';
@@ -3540,7 +3618,6 @@
                     ${ordIn('timeTo', 'إلى الساعة', s.timeTo, canSched, 'time')}
                     ${ordIn('arrivalDate', 'تاريخ الوصول للمخزن (توريد)', s.arrivalDate, canSched, 'date')}
                     ${ordIn('route', 'المسار / المنطقة (تسليم)', s.route, canSched)}
-                    ${ordIn('actualDate', 'تاريخ التنفيذ الفعلي', s.actualDate, canSched, 'date')}
                 </div>`);
             const transportCard = ordCard('الوسيلة والنقل', 'fa-truck', `
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -3592,7 +3669,7 @@
                 ref: v('ref').trim(), notes: v('notes').trim(),
                 schedule: {
                     plannedDate: v('plannedDate'), timeFrom: v('timeFrom'), timeTo: v('timeTo'), arrivalDate: v('arrivalDate'),
-                    route: v('route').trim(), actualDate: v('actualDate')
+                    route: v('route').trim(), actualDate: (o.schedule || {}).actualDate || ''
                 },
                 transport,
                 payment: canOrd('payment') ? { terms: v('terms') || 'نقدي', paid: numOr0(v('paid')), dueDate: v('dueDate') } : (o.payment || { terms: 'نقدي', paid: 0, dueDate: '' }),
@@ -3666,6 +3743,7 @@
             const problem = orderProblem(o, to);
             if (problem) return toast(problem, 'error', null, 5000);
             o.status = to;
+            if (ORDER_STAGES.includes(to)) o.stages = { ...(o.stages || {}), [to]: { date: todayISO(), note: (((o.stages || {})[to]) || {}).note || '' } };
             o.history = [...(o.history || []), { at: new Date().toISOString(), by: orderUserName(), text: `الحالة: ${ORDER_STATUS[to]}` }];
             saveState();
             log('حالة طلبية', `${orderNoLabel(o)} — ${ORDER_STATUS[to]}`);
@@ -3921,6 +3999,11 @@
             const moves = (ORDER_NEXT[o.status] || []).filter(m => canOrd(m[1]));
             const moveBtns = moves.map(([to, perm, label]) => `<button type="button" onclick="changeOrderStatus('${esc(o.id)}', '${to}')" class="${to === 'cancelled' ? 'px-4 py-2 rounded-lg text-sm font-bold bg-rose-600 hover:bg-rose-700 text-white' : BTN_PRIMARY} whitespace-nowrap">${label}</button>`).join('');
             const warn = orderWarnBadges(o);
+            const statusBtn = canAnyStatusAction() ? `<button type="button" onclick="openOrderStatusModal('${esc(o.id)}')" class="${BTN_SECONDARY} whitespace-nowrap"><i class="fa-solid fa-arrows-rotate"></i> الحالة والمراحل</button>` : '';
+            const stagesBody = ORDER_STAGES.map(st => {
+                const sd = stageValueOf(o, st), note = ((o.stages || {})[st] || {}).note || '';
+                return `<div class="flex flex-wrap justify-between items-center gap-2 py-2 border-b border-slate-200 text-sm"><div class="min-w-0"><span class="font-bold text-slate-700">${ORDER_STATUS[st]}</span> <span class="text-slate-600">${sd ? esc(fmtDateAr(sd)) : '—'}</span>${note ? `<p class="text-xs text-slate-500">${esc(note)}</p>` : ''}</div>${stageAllowed(st) ? `<button type="button" onclick="openOrderStatusModal('${esc(o.id)}', '${st}')" class="${BTN_SECONDARY} text-xs">تعديل</button>` : ''}</div>`;
+            }).join('');
             const row = (label, value) => `<div class="flex justify-between gap-3 py-2 border-b border-slate-200 text-sm"><span class="text-slate-600 font-bold">${label}</span><span class="text-slate-900 text-end">${value || '—'}</span></div>`;
             const card = (title, icon, body) => `<section class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 sm:p-5"><h3 class="font-bold text-slate-800 mb-2"><i class="fa-solid ${icon} text-brand-600"></i> ${title}</h3>${body}</section>`;
             const itemRows = (o.items || []).map((it, i) => {
@@ -3946,7 +4029,7 @@
             const schedBody = `${row(o.kind === 'supply' ? 'تاريخ الشحن المخطط' : 'تاريخ التسليم المخطط', fmtDateAr(s.plannedDate))}
                 ${row('نافذة الساعات', orderTimeText(o))}
                 ${o.kind === 'supply' ? row('تاريخ الوصول للمخزن', fmtDateAr(s.arrivalDate)) : row('المسار / المنطقة', esc(s.route))}
-                ${row('تاريخ التنفيذ الفعلي', fmtDateAr(s.actualDate))}`;
+                ${row('تاريخ التسليم الفعلي', fmtDateAr(deliveredDateOf(o)))}`;
             const transportBody = canSeeVehicle(o) ? `${row('نوع الوسيلة', ORDER_TRANSPORT[tr.type])}
                 ${tr.type === 'other' ? row('شركة النقل', esc(tr.company)) + row('وصف الوسيلة', esc(tr.description)) : ''}
                 ${tr.type === 'other' && canOrd('prices') ? row('تكلفة النقل', tr.cost ? fmtMoney(numOr0(tr.cost)) : '') : ''}`
@@ -3964,7 +4047,7 @@
                     <div><p class="font-bold text-lg text-slate-800">${orderNoLabel(o)} — ${esc(ORDER_KIND[o.kind] || '')}</p>
                         <p class="text-sm text-slate-700">${esc(orderPartyText(o))}${o.ref ? ' · مرجع: ' + esc(o.ref) : ''}</p>
                         <div class="flex flex-wrap gap-1 mt-1">${orderWarnBadges(o)}</div></div>
-                    <div class="flex flex-wrap gap-2 items-center">${moveBtns}</div>
+                    <div class="flex flex-wrap gap-2 items-center">${moveBtns}${statusBtn}</div>
                 </div>
                 ${summary}
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -3973,6 +4056,7 @@
                     ${card('الوسيلة والنقل', 'fa-truck', transportBody)}
                     ${canOrd('payment') ? card('الدفع', 'fa-wallet', payBody) : ''}
                 </div>
+                ${card('مراحل الطلبية', 'fa-route', stagesBody)}
                 ${card('صور الطلبية', 'fa-image', '<div id="ordDetailImgs" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-sm text-slate-500">جاري تحميل الصور...</div>')}
                 ${card('الأصناف', 'fa-boxes-stacked', itemsTable)}
                 ${card('سجل الحركات', 'fa-clock-rotate-left', `<ul class="space-y-1">${histBody || '<li class="text-sm text-slate-500">مفيش حركات</li>'}</ul>`)}
@@ -4011,7 +4095,8 @@
                 ${o.ref ? ` · <b>المرجع:</b> ${esc(o.ref)}` : ''}<br>
                 <b>${o.kind === 'supply' ? 'شحن' : 'تسليم'}:</b> ${esc(fmtDateAr(s.plannedDate) || '—')} ${esc(orderTimeText(o))}
                 ${o.kind === 'supply' ? ` · <b>وصول للمخزن:</b> ${esc(fmtDateAr(s.arrivalDate) || '—')}` : ` · <b>المسار:</b> ${esc(s.route || '—')}`}
-                ${tr.type ? `<br><b>الوسيلة:</b> ${esc(ORDER_TRANSPORT[tr.type])}` : ''}</div>
+                ${tr.type ? `<br><b>الوسيلة:</b> ${esc(ORDER_TRANSPORT[tr.type])}` : ''}
+                ${stagesText(o) ? `<br><b>المراحل:</b> ${esc(stagesText(o))}` : ''}</div>
                 <table><thead><tr><th>م</th><th>النوع</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th>
                 ${showPrice ? '<th>السعر</th><th>خصم</th><th>الصافي</th>' : ''}</tr></thead>
                 <tbody>${rows}</tbody>
@@ -4032,7 +4117,7 @@
             return orderPrintShell(`إذن تحميل ${orderNoLabel(o)}`, `${printHead('إذن تحميل', o)}
                 <div class="box"><b>${o.kind === 'supply' ? 'من المصنع:' : 'تسليم للعميل:'}</b> ${esc(orderPartyText(o))}
                 · <b>التاريخ:</b> ${esc(fmtDateAr(s.plannedDate) || '—')} ${esc(orderTimeText(o))}<br>
-                <b>الوسيلة:</b> ${esc(tr.type ? ORDER_TRANSPORT[tr.type] : '—')}</div>
+                <b>الوسيلة:</b> ${esc(tr.type ? ORDER_TRANSPORT[tr.type] : '—')}${stagesText(o) ? ` · <b>المراحل:</b> ${esc(stagesText(o))}` : ''}</div>
                 <table><thead><tr><th>م</th><th>الكود</th><th>الاسم</th><th>المقاس</th><th>الدرجة</th><th>الوحدة</th><th>الكمية</th><th>كرتونة</th><th>ملاحظة</th></tr></thead>
                 <tbody>${rows}</tbody>
                 <tfoot><tr class="tot"><td colspan="7">الإجمالي</td><td>${fmtDigits(t.boxes)}</td><td></td></tr></tfoot></table>
@@ -4184,7 +4269,7 @@
                     ref: o.ref || '', notes: o.notes || '', createdAt: o.createdAt || '', createdBy: o.createdBy || '',
                     ...(o.priceBasis ? { priceBasis: o.priceBasis } : {})
                 });
-                if (usable('orderStatus', 'orders.view')) out.set('orderStatus/' + o.id, { status: o.status });
+                if (usable('orderStatus', 'orders.view')) out.set('orderStatus/' + o.id, { status: o.status, stages: o.stages || {} });
                 if (usable('orderItems', 'orders.view') && (o.items || []).length) out.set('orderItems/' + o.id, { items: o.items });
                 if (usable('orderHistory', 'orders.view') && (o.history || []).length) out.set('orderHistory/' + o.id, { history: o.history });
                 if (usable('orderPrices', 'orders.prices') && nz(o.prices)) out.set('orderPrices/' + o.id, { prices: o.prices });
@@ -4199,14 +4284,14 @@
             const ord = c.ord || {};
             const part = (coll, key) => { const m = {}; Object.values(ord[coll] || {}).forEach(d => { m[d.id] = d[key]; }); return m; };
             const headers = Object.values(ord.orders || {});
-            const status = part('orderStatus', 'status'), items = part('orderItems', 'items'), prices = part('orderPrices', 'prices'),
+            const status = part('orderStatus', 'status'), stagesOf = part('orderStatus', 'stages'), items = part('orderItems', 'items'), prices = part('orderPrices', 'prices'),
                 sched = part('orderSchedule', 'schedule'), pay = part('orderPayment', 'payment'), hist = part('orderHistory', 'history');
             const transport = {};
             ['truck', 'car', 'other'].forEach(tp => Object.values(ord['orderTransport/' + tp] || {}).forEach(d => { transport[d.id] = d.transport; }));
             return headers.map(h => {
                 const { pos, ...rest } = h;
                 return {
-                    ...rest, status: status[h.id], items: items[h.id] || [], prices: prices[h.id] || {}, schedule: sched[h.id] || {},
+                    ...rest, status: status[h.id], stages: stagesOf[h.id] || {}, items: items[h.id] || [], prices: prices[h.id] || {}, schedule: sched[h.id] || {},
                     payment: pay[h.id] || {}, history: hist[h.id] || [], transport: transport[h.id] || { type: 'truck' }
                 };
             });
@@ -5968,5 +6053,12 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a596a7a3bb644777',t:'MTc5NDQ5ODIzMg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a596a7a3bb644777',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/sw.js').catch(function () {});
+            });
+        }
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a596ca506a4b4777',t:'MTc5NDQ5OTY1Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a596ca506a4b4777',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
