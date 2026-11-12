@@ -3130,6 +3130,9 @@
         const ORDER_KIND = { supply: 'توريد من مصنع', delivery: 'تسليم لعميل' };
         const ORDER_PRODUCTS = ['سيراميك', 'بورسلين', 'أدوات صحية', 'مكملات', 'أخرى'];
         const ORDER_UNITS = ['م²', 'كرتونة', 'قطعة', 'طن', 'كجم', 'طقم', 'متر طولي', 'كيس', 'أخرى'];
+        // the quantity label follows the unit (form only: one table can hold rows with different units)
+        const ORDER_QTY_LABEL = { 'م²': 'عدد الأمتار المربعة', 'متر طولي': 'عدد الأمتار الطولية', 'كرتونة': 'عدد الكراتين', 'قطعة': 'عدد القطع', 'طن': 'عدد الأطنان', 'كجم': 'عدد الكيلوجرامات', 'طقم': 'عدد الأطقم', 'كيس': 'عدد الأكياس', 'أخرى': 'الكمية' };
+        const qtyLabelFor = unit => ORDER_QTY_LABEL[unit] || 'الكمية';
         const ORDER_TRANSPORT = { truck: 'جرار / تريلا', car: 'عربية نقل', other: 'وسيلة أخرى' };
         const ORDER_TERMS = ['نقدي', 'شيك', 'أجل', 'تحويل بنكي', 'مختلط'];
         // allowed moves: from -> [to, permission key, button label]
@@ -3414,14 +3417,16 @@
             const sel = `<label class="block text-xs font-bold text-slate-600 mb-1">نوع الصنف
                 <select data-f="product" ${dis} class="${INPUT_CLS}">${ORDER_PRODUCTS.map(p => `<option ${it.product === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>`;
             const unit = `<label class="block text-xs font-bold text-slate-600 mb-1">وحدة القياس
-                <select data-f="unit" ${dis} onchange="recalcOrderTotals()" class="${INPUT_CLS}">${ORDER_UNITS.map(u => `<option ${it.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></label>`;
+                <select data-f="unit" ${dis} onchange="syncQtyLabel(this); recalcOrderTotals()" class="${INPUT_CLS}">${ORDER_UNITS.map(u => `<option ${it.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></label>`;
             const prices = canPrice ? `${f('unitPrice', 'سعر الوحدة', pr.unitPrice, 'number', 'text-start')}${f('discount', 'خصم %', pr.discount, 'number')}` : '';
             return `<div data-item-row data-iid="${esc(it.id)}" class="rounded-xl border-2 border-slate-200 bg-slate-50 p-3 space-y-3">
                 <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
                     ${sel}${f('code', 'الكود', it.code)}${f('name', 'الاسم / الموديل', it.name)}${f('size', 'المقاس', it.size)}${f('shade', 'الدرجة / اللون', it.shade)}${unit}
                 </div>
                 <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
-                    ${f('qty', 'الكمية', it.qty, 'number')}${f('m2PerBox', 'م² في الكرتونة', it.m2PerBox, 'number')}
+                    <label class="block text-xs font-bold text-slate-600 mb-1"><span data-qty-text>${qtyLabelFor(it.unit)}</span>
+                        <input data-f="qty" type="number" value="${esc(it.qty ?? '')}" ${dis} oninput="recalcOrderTotals()" class="${INPUT_CLS}"></label>
+                    ${f('m2PerBox', 'م² في الكرتونة', it.m2PerBox, 'number')}
                     ${prices}
                     <div class="flex items-center justify-end">${canEdit ? `<button type="button" onclick="removeOrderItemRow(this)" class="${BTN_ICON} text-rose-600 hover:bg-rose-50" aria-label="حذف الصنف"><i class="fa-solid fa-trash-can"></i></button>` : ''}</div>
                 </div>
@@ -3455,6 +3460,12 @@
                 else if (existing && existing.prices && existing.prices[it.id]) prices[it.id] = existing.prices[it.id];
             });
             return { items, prices };
+        }
+
+        function syncQtyLabel(unitSelect) {
+            const row = unitSelect.closest('[data-item-row]');
+            const span = row && row.querySelector('[data-qty-text]');
+            if (span) span.textContent = qtyLabelFor(unitSelect.value);
         }
 
         function recalcOrderTotals() {
@@ -5951,5 +5962,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a59645307eca5321',t:'MTc5NDQ5NDIwMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a59645307eca5321',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5966051fc25a9cc',t:'MTc5NDQ5NTMxMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5966051fc25a9cc',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
