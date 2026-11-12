@@ -3133,6 +3133,9 @@
         // the quantity label follows the unit (form only: one table can hold rows with different units)
         const ORDER_QTY_LABEL = { 'م²': 'عدد الأمتار المربعة', 'متر طولي': 'عدد الأمتار الطولية', 'كرتونة': 'عدد الكراتين', 'قطعة': 'عدد القطع', 'طن': 'عدد الأطنان', 'كجم': 'عدد الكيلوجرامات', 'طقم': 'عدد الأطقم', 'كيس': 'عدد الأكياس', 'أخرى': 'الكمية' };
         const qtyLabelFor = unit => ORDER_QTY_LABEL[unit] || 'الكمية';
+        // pricing basis: 'm2' = a carton row is priced per m2 (boxes x m2 per box x price per m2).
+        // Orders saved before this change have no basis and keep the old per-box price.
+        const M2_BASIS = 'm2';
         const ORDER_TRANSPORT = { truck: 'جرار / تريلا', car: 'عربية نقل', other: 'وسيلة أخرى' };
         const ORDER_TERMS = ['نقدي', 'شيك', 'أجل', 'تحويل بنكي', 'مختلط'];
         // allowed moves: from -> [to, permission key, button label]
@@ -3154,11 +3157,12 @@
 
         // ---- totals (per item, then per order) ----
         const priceOf = (o, itemId) => ((o.prices || {})[itemId]) || { unitPrice: 0, discount: 0 };
-        function lineCalc(it, pr) {
+        function lineCalc(it, pr, basis) {
             const q = numOr0(it.qty), price = numOr0(pr.unitPrice);
             const disc = Math.min(100, Math.max(0, numOr0(pr.discount)));
-            const subtotal = r2(q * price), discount = r2(subtotal * disc / 100);
             const m2 = it.unit === 'م²' ? q : (it.unit === 'كرتونة' ? q * numOr0(it.m2PerBox) : 0);
+            const priced = basis === M2_BASIS && it.unit === 'كرتونة' ? m2 : q;
+            const subtotal = r2(priced * price), discount = r2(subtotal * disc / 100);
             return {
                 subtotal, discount, net: r2(subtotal - discount), m2: r2(m2),
                 boxes: it.unit === 'كرتونة' ? q : 0, pieces: it.unit === 'قطعة' ? q : 0
@@ -3167,7 +3171,7 @@
         function orderTotals(o) {
             const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0 };
             (o.items || []).forEach(it => {
-                const l = lineCalc(it, priceOf(o, it.id));
+                const l = lineCalc(it, priceOf(o, it.id), o.priceBasis);
                 Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); });
             });
             return t;
@@ -3473,7 +3477,7 @@
             if (!box) return;
             const { items, prices } = readOrderItems({ prices: {} });
             const t = { subtotal: 0, discount: 0, net: 0, m2: 0, boxes: 0, pieces: 0 };
-            items.forEach(it => { const l = lineCalc(it, prices[it.id] || { unitPrice: 0, discount: 0 }); Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); }); });
+            items.forEach(it => { const l = lineCalc(it, prices[it.id] || { unitPrice: 0, discount: 0 }, M2_BASIS); Object.keys(t).forEach(k => { t[k] = r2(t[k] + l[k]); }); });
             const cell = (label, value, cls = '') => `<div class="rounded-xl bg-white border border-slate-200 p-2"><p class="text-[11px] font-bold text-slate-500">${label}</p><p class="font-bold ${cls}">${value}</p></div>`;
             box.innerHTML = `${cell('م²', fmtDigits(t.m2))}${cell('كرتونة', fmtDigits(t.boxes))}${cell('قطعة', fmtDigits(t.pieces))}`
                 + (canOrd('prices') ? `${cell('الإجمالي', fmtMoney(t.subtotal))}${cell('الخصم', fmtMoney(t.discount))}${cell('الصافي', fmtMoney(t.net), 'text-emerald-700')}` : '');
@@ -3593,7 +3597,8 @@
                 transport,
                 payment: canOrd('payment') ? { terms: v('terms') || 'نقدي', paid: numOr0(v('paid')), dueDate: v('dueDate') } : (o.payment || { terms: 'نقدي', paid: 0, dueDate: '' }),
                 items,
-                prices
+                prices,
+                priceBasis: (canOrd('prices') || !appData.orders.some(x => x.id === o.id)) ? M2_BASIS : o.priceBasis
             };
         }
 
@@ -3919,7 +3924,7 @@
             const row = (label, value) => `<div class="flex justify-between gap-3 py-2 border-b border-slate-200 text-sm"><span class="text-slate-600 font-bold">${label}</span><span class="text-slate-900 text-end">${value || '—'}</span></div>`;
             const card = (title, icon, body) => `<section class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 sm:p-5"><h3 class="font-bold text-slate-800 mb-2"><i class="fa-solid ${icon} text-brand-600"></i> ${title}</h3>${body}</section>`;
             const itemRows = (o.items || []).map((it, i) => {
-                const l = lineCalc(it, priceOf(o, it.id));
+                const l = lineCalc(it, priceOf(o, it.id), o.priceBasis);
                 return `<tr class="border-t border-slate-200">
                     <td class="py-2 px-2">${i + 1}</td><td class="py-2 px-2">${esc(it.product)}</td><td class="py-2 px-2 font-mono">${esc(it.code)}</td>
                     <td class="py-2 px-2">${esc(it.name)}</td><td class="py-2 px-2">${esc(it.size)}</td><td class="py-2 px-2">${esc(it.shade)}</td>
@@ -3994,7 +3999,7 @@
             const showPrice = canOrd('prices');
             const t = orderTotals(o);
             const rows = (o.items || []).map((it, i) => {
-                const l = lineCalc(it, priceOf(o, it.id));
+                const l = lineCalc(it, priceOf(o, it.id), o.priceBasis);
                 return `<tr><td>${i + 1}</td><td>${esc(it.product)}</td><td>${esc(it.code)}</td><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.shade)}</td>
                     <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td>
                     ${showPrice ? `<td>${fmtDigits(numOr0(priceOf(o, it.id).unitPrice))}</td><td>${fmtDigits(numOr0(priceOf(o, it.id).discount))}%</td><td>${fmtMoney(l.net)}</td>` : ''}</tr>`;
@@ -4020,7 +4025,7 @@
         function loadingSlipHtml(o) {
             const t = orderTotals(o), s = o.schedule || {}, tr = canSeeVehicle(o) ? (o.transport || {}) : {};
             const rows = (o.items || []).map((it, i) => {
-                const l = lineCalc(it, priceOf(o, it.id));
+                const l = lineCalc(it, priceOf(o, it.id), o.priceBasis);
                 return `<tr><td>${i + 1}</td><td>${esc(it.code)}</td><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.shade)}</td>
                     <td>${esc(it.unit)}</td><td>${fmtDigits(numOr0(it.qty))}</td><td>${fmtDigits(l.boxes || '')}</td><td></td></tr>`;
             }).join('');
@@ -4132,7 +4137,7 @@
             if (!canOrd('export')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const rows = filteredOrders();
             const items = rows.flatMap(o => (o.items || []).map(it => {
-                const l = lineCalc(it, priceOf(o, it.id));
+                const l = lineCalc(it, priceOf(o, it.id), o.priceBasis);
                 const r = { 'الرقم': orderNoLabel(o), 'النوع': it.product, 'الكود': it.code, 'الاسم': it.name, 'المقاس': it.size, 'الدرجة': it.shade, 'الوحدة': it.unit, 'الكمية': numOr0(it.qty), 'م²': l.m2 };
                 if (canOrd('prices')) { r['السعر'] = numOr0(priceOf(o, it.id).unitPrice); r['خصم %'] = numOr0(priceOf(o, it.id).discount); r['الصافي'] = l.net; }
                 return r;
@@ -4176,7 +4181,8 @@
                 if (usable('orders', 'orders.view')) out.set('orders/' + o.id, {
                     id: o.id, no: o.no, kind: o.kind, factoryId: o.factoryId || '', factoryName: o.factoryName || '',
                     customerName: o.customerName || '', customerPhone: o.customerPhone || '', customerAddress: o.customerAddress || '',
-                    ref: o.ref || '', notes: o.notes || '', createdAt: o.createdAt || '', createdBy: o.createdBy || ''
+                    ref: o.ref || '', notes: o.notes || '', createdAt: o.createdAt || '', createdBy: o.createdBy || '',
+                    ...(o.priceBasis ? { priceBasis: o.priceBasis } : {})
                 });
                 if (usable('orderStatus', 'orders.view')) out.set('orderStatus/' + o.id, { status: o.status });
                 if (usable('orderItems', 'orders.view') && (o.items || []).length) out.set('orderItems/' + o.id, { items: o.items });
@@ -5962,5 +5968,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5966051fc25a9cc',t:'MTc5NDQ5NTMxMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5966051fc25a9cc',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a596a7a3bb644777',t:'MTc5NDQ5ODIzMg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a596a7a3bb644777',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
