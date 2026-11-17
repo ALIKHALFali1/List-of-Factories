@@ -59,11 +59,6 @@
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
-    <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
-    <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <body class="text-slate-800 min-h-screen">
 
@@ -222,6 +217,11 @@
                 ['orders.export', 'تصدير Excel'],
                 ['orders.reports', 'عرض التقارير']
             ] },
+            { title: 'طلبيات العملاء', items: [
+                ['custorders.view', 'عرض طلبيات العملاء وطباعتها'],
+                ['custorders.manage', 'إضافة وتعديل طلبيات العملاء وإدارة المندوبين'],
+                ['custorders.delete', 'حذف طلبيات العملاء']
+            ] },
             { title: 'النظام', items: [
                 ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
@@ -238,11 +238,12 @@
             lists: { title: 'كل اللستات', icon: 'fa-file-invoice-dollar', perm: 'lists.view' },
             checks: { title: 'الشيكات', icon: 'fa-money-check-dollar', perm: 'checks.view' },
             orders: { title: 'الطلبيات', icon: 'fa-truck-ramp-box', perm: 'orders.view' },
+            customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'checks', 'orders', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -572,7 +573,8 @@
                     roleId: roles[u.roleId] ? u.roleId : 'viewer',
                     active: u.active !== false,
                     createdAt: u.createdAt || new Date().toISOString(),
-                    lastLoginAt: u.lastLoginAt || null
+                    lastLoginAt: u.lastLoginAt || null,
+                    repId: String(u.repId || '')
                 }));
 
             d.companies = (Array.isArray(d.companies) ? d.companies : []).filter(c => c && typeof c === 'object').map(c => ({
@@ -596,6 +598,17 @@
                 }))
             }));
 
+            d.custReps = (Array.isArray(d.custReps) ? d.custReps : Object.values(d.custReps || {}))
+                .filter(x => x && typeof x === 'object' && x.id)
+                .map(x => ({ id: String(x.id), name: String(x.name || '').trim() }));
+            d.custOrders = (Array.isArray(d.custOrders) ? d.custOrders : Object.values(d.custOrders || {}))
+                .filter(c => c && typeof c === 'object' && c.id)
+                .map(c => ({
+                    ...c, id: String(c.id), no: Number(c.no) || 0, amount: numOr0(c.amount), paid: numOr0(c.paid),
+                    date: String(c.date || ''), customer: String(c.customer || ''), repId: String(c.repId || ''), repName: String(c.repName || ''),
+                    category: String(c.category || ''), completeness: String(c.completeness || ''), validUntil: String(c.validUntil || ''),
+                    delivery: CUST_DELIVERY.includes(c.delivery) ? c.delivery : 'لم تُسلم', booking: String(c.booking || ''), notes: String(c.notes || '')
+                }));
             d.logs = (Array.isArray(d.logs) ? d.logs : []).slice(0, LOG_LIMIT);
             return d;
         }
@@ -675,11 +688,13 @@
         class DbCollection {
             constructor(name, q = {}) { this.name = name; this.q = q; }
             doc(id) { return new DbDoc(this.name + '/' + id); }
+            where(field, op, value) { if (op !== '==') throw new Error('where: only == is supported'); return new DbCollection(this.name, { ...this.q, eq: { field, value } }); }
             orderBy(field, dir = 'asc') { return new DbCollection(this.name, { ...this.q, order: field, dir }); }
             limit(n) { return new DbCollection(this.name, { ...this.q, limit: n }); }
             _ref() {
                 let r = rtdb.ref(this.name);
-                if (this.q.order) r = r.orderByChild(this.q.order);
+                if (this.q.eq) r = r.orderByChild(this.q.eq.field).equalTo(this.q.eq.value);
+                else if (this.q.order) r = r.orderByChild(this.q.order);
                 if (this.q.limit) r = this.q.order ? r.limitToLast(this.q.limit) : r.limitToFirst(this.q.limit);
                 return r;
             }
@@ -723,6 +738,7 @@
         let fbUnsubs = [];
         let fbLogsUnsub = null;
         let fbChecksUnsubs = [];           // partners + checks listeners (checks.view only)
+        let fbCustUnsubs = [];             // customer orders + sales reps listeners (custorders.view only)
         let fbBusy = false;                // login/setup in progress: the auth-state handler waits
         let appEntered = false;
         let pendingLoginLog = false;
@@ -758,9 +774,11 @@
             (d.partners || []).forEach(p => out.set('partners/' + p.id, { ...p }));
             (d.checks || []).forEach(c => out.set('checks/' + c.id, { ...c }));
             orderDocsFor(d.orders || [], out);
+            (d.custReps || []).forEach(x => out.set('custReps/' + x.id, { ...x }));
+            (d.custOrders || []).forEach(c => out.set('custOrders/' + c.id, { ...c }));
             d.users.forEach(u => out.set('users/' + u.id, {
                 name: u.name, email: u.email, roleId: u.roleId, active: u.active,
-                createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null
+                createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, repId: u.repId || null
             }));
             Object.values(d.roles).forEach(r => out.set('roles/' + r.id, {
                 name: r.name, permissions: [...(r.permissions || [])].sort(), locked: !!r.locked
@@ -901,7 +919,7 @@
         // One entry is written for every saved change (and every PDF change), by the user who made it.
         // Everyone else who is signed in sees it in the bell. The activity log (logs) stays limited to logs.view.
         const NOTIF_LIMIT = 50;
-        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام' };
+        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
         let notifs = [];                 // newest first, as the database sends them (all users)
         let notifUnsub = null;
@@ -1081,11 +1099,14 @@
                 partners: Object.values(c.partners || {}),
                 checks: Object.values(c.checks || {}),
                 orders: buildOrdersFromCache(c),
+                custOrders: Object.values(c.custOrders || {}),
+                custReps: Object.values(c.custReps || {}),
                 logs: c.logs || []
             });
             fbBaseline = new Map();
             desiredDocs(appData).forEach((data, key) => fbBaseline.set(key, { data, sig: canon(data) }));
             applyPendingOrders();   // not in the baseline: they are still to be sent
+            syncCustListener();     // customer-order listeners need the signed-in user (rep or not)
         }
 
         function rebuildFromCache() {
@@ -1094,7 +1115,7 @@
 
         function startSync(uid) {
             stopSync();
-            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, ord: {}, settings: null, logs: [] };
+            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, ord: {}, settings: null, logs: [], custOrders: {}, custReps: {} };
             fbLoaded = {};
             fbSynced = false;
             loadPendingLocal(uid);
@@ -1119,6 +1140,8 @@
             fbUnsubs = [];
             fbChecksUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbChecksUnsubs = [];
+            fbCustUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            fbCustUnsubs = [];
             fbOrdLive.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbOrdLive.clear();
             fbOrdErr.clear();
@@ -1220,6 +1243,7 @@
             if (pendingOrderCopies.size || unsavedChanges) saveState();
             syncLogsListener();
             setTimeout(syncChecksListener, 0);
+            setTimeout(syncCustListener, 0);
             setTimeout(syncOrdersListener, 0);
             if (!appEntered) {
                 appEntered = true;
@@ -2798,7 +2822,7 @@
                   + field('البريد الإلكتروني *', `<input name="email" type="email" required dir="ltr" autocomplete="email" class="${INPUT_CLS}" placeholder="name@company.com">`)
                   + field('كلمة المرور *', `<input name="password" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`, '6 أحرف على الأقل')
                   + field('تأكيد كلمة المرور *', `<input name="password2" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`)
-                : field('البريد الإلكتروني', `<input name="email" type="email" required dir="ltr" autocomplete="username" class="${INPUT_CLS}">`)
+                : field('البريد الإلكتروني أو اسم الدخول', `<input name="email" type="text" required dir="ltr" autocomplete="username" class="${INPUT_CLS}">`)
                   + field('كلمة المرور', `<input name="password" type="password" required autocomplete="current-password" class="${INPUT_CLS}">`);
             if (setup) {
                 const hasLocal = !!readLocalSeed();
@@ -2823,8 +2847,9 @@
                 if (mode === 'setup') {
                     await runSetup(fd, email, password);
                 } else {
-                    if (!EMAIL_RE.test(email)) throw userError('اكتب بريد إلكتروني صحيح');
-                    await runLogin(email, password);
+                    const loginAddr = loginAddressFor(email);
+                    if (!EMAIL_RE.test(loginAddr)) throw userError('اكتب بريد إلكتروني أو اسم دخول صحيح');
+                    await runLogin(loginAddr, password);
                 }
             } catch (err) {
                 console.error(err);
@@ -3134,7 +3159,7 @@
             transit: 'bg-indigo-100 text-indigo-800', delivered: 'bg-emerald-100 text-emerald-800', cancelled: 'bg-rose-100 text-rose-800'
         };
         const ORDER_KIND = { supply: 'توريد من مصنع', delivery: 'تسليم لعميل' };
-        const ORDER_PRODUCTS = ['سيراميك', 'بورسلين', 'أدوات صحية', 'ابواب', 'أخرى'];
+        const ORDER_PRODUCTS = ['سيراميك', 'بورسلين', 'أدوات صحية', 'مكملات', 'أخرى'];
         const ORDER_UNITS = ['م²', 'كرتونة', 'قطعة', 'طن', 'كجم', 'طقم', 'متر طولي', 'كيس', 'أخرى'];
         // the quantity label follows the unit (form only: one table can hold rows with different units)
         const ORDER_QTY_LABEL = { 'م²': 'عدد الأمتار المربعة', 'متر طولي': 'عدد الأمتار الطولية', 'كرتونة': 'عدد الكراتين', 'قطعة': 'عدد القطع', 'طن': 'عدد الأطنان', 'كجم': 'عدد الكيلوجرامات', 'طقم': 'عدد الأطقم', 'كيس': 'عدد الأكياس', 'أخرى': 'الكمية' };
@@ -3929,6 +3954,7 @@
                 ${tabBtn('orders', 'الطلبيات', 'fa-list', 'list')}
                 ${tabBtn('orders/schedule', 'لوحة الجدولة', 'fa-calendar-days', 'schedule')}
                 ${canOrd('reports') ? tabBtn('orders/reports', 'التقارير', 'fa-chart-column', 'reports') : ''}
+                ${canCust('view') ? tabBtn('customers', 'طلبيات العملاء', 'fa-user-tie', 'customers') : ''}
             </div>`;
         }
 
@@ -4348,8 +4374,397 @@
             if (changed) onCacheChanged();
         }
 
+        // ============ CUSTOMER ORDERS (طلبيات العملاء) ============
+        // A section inside the orders page. Stored in custOrders/{id}; sales reps in custReps/{id}.
+        // Permissions: custorders.view (see and print), custorders.manage (add, edit, reps), custorders.delete (remove).
+        const CUST_PERM = { view: 'custorders.view', manage: 'custorders.manage', delete: 'custorders.delete' };
+        const canCust = key => can(CUST_PERM[key]);
+        const CUST_CATEGORIES = ['سيراميك', 'صحي', 'أبواب'];
+        const CUST_COMPLETENESS = ['كاملة', 'ناقصة'];
+        const CUST_DELIVERY = ['لم تُسلم', 'تم التسليم', 'مؤجل', 'ملغي', 'مرتجع'];
+        const CUST_DELIVERY_CLS = {
+            'لم تُسلم': 'bg-slate-100 text-slate-700', 'تم التسليم': 'bg-emerald-100 text-emerald-800', 'مؤجل': 'bg-amber-100 text-amber-800',
+            'ملغي': 'bg-rose-100 text-rose-800', 'مرتجع': 'bg-violet-100 text-violet-800'
+        };
+        const CUST_FILTER_DEFAULT = { q: '', rep: '', category: '', delivery: 'all', from: '', to: '' };
+        let custFilter = { ...CUST_FILTER_DEFAULT };
+
+        const custNoLabel = c => String(c.no || 0).padStart(4, '0');
+        const custRemaining = c => r2(numOr0(c.amount) - numOr0(c.paid));
+        const custSorted = list => [...list].sort((a, b) => (b.no || 0) - (a.no || 0));
+        function nextCustNo() { return Math.max(0, ...appData.custOrders.map(c => Number(c.no) || 0)) + 1; }
+
+        // Listens only when the user may see the section (a denied listener would sign the user out).
+        // A full viewer listens to every order. A sales rep listens only to his own orders and his own rep record;
+        // the database rules refuse anything else.
+        function syncCustListener() {
+            if (!fbCache || !fbUser || !appData || !currentUser()) return;
+            const canSee = canCust('view');
+            if (canSee && !fbCustUnsubs.length) {
+                const onErr = err => console.error('customer orders listener', err);
+                const myRep = currentRepId();
+                const ordersRef = myRep ? fbDb.collection('custOrders').where('repId', '==', myRep) : fbDb.collection('custOrders');
+                fbCustUnsubs.push(ordersRef.onSnapshot(snap => {
+                    if (!fbCache) return;
+                    fbCache.custOrders = mapDocs(snap);
+                    onCacheChanged();
+                }, onErr));
+                if (myRep) {
+                    fbCustUnsubs.push(fbDb.collection('custReps').doc(myRep).onSnapshot(snap => {
+                        if (!fbCache) return;
+                        fbCache.custReps = snap.exists ? { [myRep]: { id: myRep, ...snap.data() } } : {};
+                        onCacheChanged();
+                    }, onErr));
+                } else {
+                    fbCustUnsubs.push(fbDb.collection('custReps').onSnapshot(snap => {
+                        if (!fbCache) return;
+                        fbCache.custReps = mapDocs(snap);
+                        onCacheChanged();
+                    }, onErr));
+                }
+            } else if (!canSee && fbCustUnsubs.length) {
+                fbCustUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+                fbCustUnsubs = [];
+                if (fbCache) { fbCache.custOrders = {}; fbCache.custReps = {}; }
+                if (appData) { appData.custOrders = []; appData.custReps = []; }
+                fbBaseline.forEach((b, key) => { if (/^(custOrders|custReps)\//.test(key)) fbBaseline.delete(key); });
+            }
+        }
+
+        function filteredCustOrders() {
+            const f = custFilter, q = f.q.trim().toLowerCase();
+            return custSorted(appData.custOrders.filter(c => {
+                if (f.rep && c.repId !== f.rep) return false;
+                if (f.category && c.category !== f.category) return false;
+                if (f.delivery !== 'all' && c.delivery !== f.delivery) return false;
+                if (f.from && (!c.date || c.date < f.from)) return false;
+                if (f.to && (!c.date || c.date > f.to)) return false;
+                if (q && !`${custNoLabel(c)} ${c.customer} ${c.repName} ${c.booking} ${c.notes}`.toLowerCase().includes(q)) return false;
+                return true;
+            }));
+        }
+
+        function custSummaryCards(rows) {
+            const sum = k => r2(rows.reduce((s, c) => s + numOr0(c[k]), 0));
+            const card = (label, value, cls = 'text-slate-800') => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-3">
+                <p class="text-xs font-bold text-slate-600">${label}</p><p class="text-base font-bold ${cls} whitespace-nowrap">${value}</p></div>`;
+            return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                ${card('عدد الطلبيات', rows.length)}
+                ${card('إجمالي الطلبيات', fmtMoney(sum('amount')), 'text-brand-700')}
+                ${card('المدفوع', fmtMoney(sum('paid')), 'text-emerald-700')}
+                ${card('الباقي', fmtMoney(r2(sum('amount') - sum('paid'))), 'text-rose-700')}
+            </div>`;
+        }
+
+        const custDeliveryBadge = c => `<span class="px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${CUST_DELIVERY_CLS[c.delivery] || ''}">${esc(c.delivery || '—')}</span>`;
+
+        function custActionsHtml(c) {
+            const id = esc(c.id);
+            return `<div class="flex items-center justify-center gap-1">
+                <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
+                ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+            </div>`;
+        }
+
+        function custTableHtml(rows) {
+            if (!rows.length) return '<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-6 text-center text-slate-600 font-bold">مفيش طلبيات مطابقة للفلاتر</div>';
+            return `<div class="hidden md:block bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                        <th class="py-3 px-3 text-start">الرقم</th><th class="py-3 px-3 text-start">التاريخ</th><th class="py-3 px-3 text-start">العميل</th>
+                        <th class="py-3 px-3 text-start">المندوب</th><th class="py-3 px-3 text-start">الصنف</th><th class="py-3 px-3 text-start">الحالة</th>
+                        <th class="py-3 px-3 text-start">المبلغ</th><th class="py-3 px-3 text-start">المدفوع</th><th class="py-3 px-3 text-start">الباقي</th>
+                        <th class="py-3 px-3 text-start">مدة الطلبية</th><th class="py-3 px-3 text-start">التسليم</th><th class="py-3 px-3 text-start">موعد الحجز</th>
+                        <th class="py-3 px-3 text-center">إجراءات</th></tr></thead>
+                    <tbody class="divide-y divide-slate-200">${rows.map(c => `<tr class="hover:bg-slate-50">
+                        <td class="py-3 px-3 font-mono font-bold">${custNoLabel(c)}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.date) || '—')}</td>
+                        <td class="py-3 px-3 font-semibold">${esc(c.customer)}</td>
+                        <td class="py-3 px-3">${esc(c.repName || '—')}</td>
+                        <td class="py-3 px-3">${esc(c.category || '—')}</td>
+                        <td class="py-3 px-3">${esc(c.completeness || '—')}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${fmtMoney(numOr0(c.amount))}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${fmtMoney(numOr0(c.paid))}</td>
+                        <td class="py-3 px-3 whitespace-nowrap font-bold ${custRemaining(c) > 0 ? 'text-rose-700' : ''}">${fmtMoney(custRemaining(c))}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.validUntil) || '—')}</td>
+                        <td class="py-3 px-3">${custDeliveryBadge(c)}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.booking) || '—')}</td>
+                        <td class="py-3 px-3">${custActionsHtml(c)}</td>
+                    </tr>`).join('')}</tbody>
+                </table>
+            </div>
+            <div class="md:hidden space-y-3">
+                ${rows.map(c => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-1">
+                    <div class="flex items-start justify-between gap-2"><p class="font-bold text-slate-800">${esc(c.customer)}</p>${custDeliveryBadge(c)}</div>
+                    <p class="text-sm font-mono">${custNoLabel(c)} · ${esc(fmtDateAr(c.date) || '—')}</p>
+                    <p class="text-sm">المندوب: ${esc(c.repName || '—')} · ${esc(c.category || '—')} · ${esc(c.completeness || '—')}</p>
+                    <p class="text-sm">المبلغ ${fmtMoney(numOr0(c.amount))} · المدفوع ${fmtMoney(numOr0(c.paid))} · <b class="${custRemaining(c) > 0 ? 'text-rose-700' : ''}">الباقي ${fmtMoney(custRemaining(c))}</b></p>
+                    ${c.validUntil ? `<p class="text-sm">مدة الطلبية حتى ${esc(fmtDateAr(c.validUntil))}</p>` : ''}
+                    ${c.booking ? `<p class="text-sm">موعد الحجز: ${esc(fmtDateAr(c.booking))}</p>` : ''}
+                    <div class="flex justify-end">${custActionsHtml(c)}</div>
+                </div>`).join('')}
+            </div>`;
+        }
+
+        function custBodyHtml() {
+            if (!appData.custOrders.length) {
+                return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center">
+                    <i class="fa-solid fa-user-tie text-4xl text-slate-300 mb-3"></i>
+                    <p class="text-slate-700 font-bold mb-4">مفيش طلبيات عملاء لسه</p>
+                    ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
+                </div>`;
+            }
+            const rows = filteredCustOrders();
+            return `${custSummaryCards(rows)}${custTableHtml(rows)}`;
+        }
+
+        function updateCustBody() {
+            const body = el('custBody');
+            if (body) body.innerHTML = custBodyHtml();
+        }
+
+        function custFilterBar() {
+            const f = custFilter;
+            const opt = (cur, v, l) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`;
+            const reps = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(r => opt(f.rep, r.id, r.name)).join('');
+            const cats = CUST_CATEGORIES.map(c => opt(f.category, c, c)).join('');
+            const dels = CUST_DELIVERY.map(d => opt(f.delivery, d, d)).join('');
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="sm:col-span-2">${field('بحث', `<input type="search" value="${esc(f.q)}" oninput="custFilter.q = this.value; updateCustBody()" placeholder="اسم العميل، رقم الطلب، المندوب، الحجز" class="${INPUT_CLS}">`)}</div>
+                    ${currentRepId() ? '' : field('المندوب', `<select onchange="custFilter.rep = this.value; updateCustBody()" class="${INPUT_CLS}"><option value="">كل المندوبين</option>${reps}</select>`)}
+                    ${field('الصنف', `<select onchange="custFilter.category = this.value; updateCustBody()" class="${INPUT_CLS}"><option value="">كل الأصناف</option>${cats}</select>`)}
+                    ${field('حالة التسليم', `<select onchange="custFilter.delivery = this.value; updateCustBody()" class="${INPUT_CLS}"><option value="all" ${f.delivery === 'all' ? 'selected' : ''}>الكل</option>${dels}</select>`)}
+                    ${field('التاريخ (من - إلى)', `<div class="grid grid-cols-2 gap-2 min-w-0"><input type="date" value="${esc(f.from)}" onchange="custFilter.from = this.value; updateCustBody()" class="${INPUT_CLS}"><input type="date" value="${esc(f.to)}" onchange="custFilter.to = this.value; updateCustBody()" class="${INPUT_CLS}"></div>`)}
+                </div>
+                <div class="flex flex-wrap gap-2 justify-end">
+                    ${btn('clearCustFilter()', 'مسح الفلاتر', 'fa-filter-circle-xmark', BTN_SECONDARY)}
+                    ${canCust('view') ? btn('printCustList()', 'طباعة القائمة', 'fa-print', BTN_SECONDARY) : ''}
+                </div>
+            </div>`;
+        }
+
+        function clearCustFilter() {
+            custFilter = { ...CUST_FILTER_DEFAULT };
+            render();
+        }
+
+        function viewCustomerOrders() {
+            if (!canCust('view')) return { title: 'طلبيات العملاء', html: noOrderAccessHtml() };
+            const tools = `<div class="flex flex-wrap gap-2 justify-end">
+                ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
+                ${canCust('manage') ? btn('openCustRepsModal()', 'إدارة المندوبين', 'fa-user-tie', BTN_SECONDARY) : ''}
+                ${currentRepId() ? btn('openRepPinModal()', 'تغيير الرقم السري', 'fa-key', BTN_SECONDARY) : ''}
+            </div>`;
+            return {
+                title: 'طلبيات العملاء',
+                actions: '',
+                html: `<div class="space-y-4">${canOrd('view') ? ordersTabs('customers') : ''}${tools}${custFilterBar()}<div id="custBody" class="space-y-4">${custBodyHtml()}</div></div>`
+            };
+        }
+
+        // ---- add / edit (modal) ----
+        function custRemainingPreview() {
+            const f = el('modalForm'), box = el('custRemainPreview');
+            if (!f || !box || !f.elements.amount) return;
+            const rem = r2(numOr0(f.elements.amount.value) - numOr0(f.elements.paid.value));
+            box.textContent = fmtMoney(rem);
+            box.classList.toggle('text-rose-700', rem > 0);
+        }
+
+        function openCustModal(id = null) {
+            if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = id ? appData.custOrders.find(x => x.id === id) : null;
+            if (id && !c) return;
+            const reps = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            const repOpts = [['', '— اختر المندوب —'], ...reps.map(r => [r.id, r.name])];
+            // a rep removed from the list stays selectable on the orders he was given
+            if (c && c.repId && !reps.some(r => r.id === c.repId)) repOpts.push([c.repId, c.repName || 'مندوب محذوف']);
+            const sel = (name, label, options, value) => field(label, `<select name="${name}" class="${INPUT_CLS}">${options.map(o => {
+                const [v, l] = Array.isArray(o) ? o : [o, o];
+                return `<option value="${esc(v)}" ${String(value ?? '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
+            }).join('')}</select>`);
+            openModal({
+                title: c ? `تعديل طلبية العميل ${custNoLabel(c)}` : 'طلبية عميل جديدة',
+                size: 'lg',
+                submitText: c ? 'حفظ التعديلات' : 'إضافة الطلبية',
+                body: `
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('التاريخ *', `<input name="date" type="date" required value="${esc(c ? c.date : todayISO())}" class="${INPUT_CLS}">`)}
+                        ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" class="${INPUT_CLS}">`)}
+                        ${sel('repId', 'اسم المندوب', repOpts, c ? c.repId : '')}
+                        ${sel('category', 'الصنف', [['', '— اختر الصنف —'], ...CUST_CATEGORIES], c ? c.category : '')}
+                        ${sel('completeness', 'حالة الطلبية', CUST_COMPLETENESS, c ? c.completeness : 'كاملة')}
+                        ${sel('delivery', 'حالة التسليم', CUST_DELIVERY, c ? c.delivery : 'لم تُسلم')}
+                        ${field('مبلغ الطلبية (ج.م) *', `<input name="amount" type="number" step="0.01" min="0" required value="${c ? esc(c.amount) : ''}" oninput="custRemainingPreview()" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                        ${field('المدفوع (ج.م)', `<input name="paid" type="number" step="0.01" min="0" value="${c ? esc(c.paid) : ''}" oninput="custRemainingPreview()" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                        ${field('الباقي (ج.م)', `<div id="custRemainPreview" class="${INPUT_CLS} bg-slate-50 font-bold">0.00 ج.م</div>`)}
+                        ${field('مدة الطلبية (تاريخ الانتهاء)', `<input name="validUntil" type="date" value="${esc(c?.validUntil)}" class="${INPUT_CLS}">`, 'اختياري')}
+                    </div>
+                    ${field('موعد الحجز', `<input name="booking" type="date" value="${esc(c?.booking)}" class="${INPUT_CLS}">`)}
+                    ${field('ملاحظات', `<textarea name="notes" rows="2" class="${INPUT_CLS}">${esc(c?.notes)}</textarea>`)}`,
+                onOpen: custRemainingPreview,
+                onSubmit: fd => saveCustFromForm(fd, c)
+            });
+        }
+
+        function saveCustFromForm(fd, c) {
+            if (!canCust('manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const date = String(fd.get('date') || '');
+            const customer = String(fd.get('customer') || '').trim();
+            const amount = r2(Number(fd.get('amount')));
+            const paid = r2(Number(fd.get('paid') || 0));
+            const validUntil = String(fd.get('validUntil') || '');
+            const repId = String(fd.get('repId') || '');
+            const category = String(fd.get('category') || '');
+            const completeness = String(fd.get('completeness') || '');
+            const delivery = String(fd.get('delivery') || '');
+            if (!date || !customer) return toast('اكتب التاريخ واسم العميل', 'error'), false;
+            if (!(amount >= 0) || amount > 999999999999.99) return toast('اكتب مبلغ الطلبية', 'error'), false;
+            if (!(paid >= 0)) return toast('المدفوع مش ممكن يكون سالب', 'error'), false;
+            if (paid > amount) return toast('المدفوع أكبر من مبلغ الطلبية', 'error'), false;
+            if (validUntil && validUntil < date) return toast('مدة الطلبية لازم تكون بعد التاريخ', 'error'), false;
+            const booking = String(fd.get('booking') || '').trim();
+            if (booking && !/^\d{4}-\d{2}-\d{2}$/.test(booking)) return toast('اختار موعد الحجز من التقويم', 'error'), false;
+            if (category && !CUST_CATEGORIES.includes(category)) return toast('اختر الصنف من القائمة', 'error'), false;
+            if (!CUST_COMPLETENESS.includes(completeness)) return toast('اختر حالة الطلبية', 'error'), false;
+            if (!CUST_DELIVERY.includes(delivery)) return toast('اختر حالة التسليم', 'error'), false;
+            const rep = appData.custReps.find(r => r.id === repId);
+            const keepOld = !rep && c && c.repId && c.repId === repId;
+            const data = {
+                date, customer, category, completeness, amount, paid, validUntil, delivery,
+                repId: rep ? rep.id : (keepOld ? repId : ''),
+                repName: rep ? rep.name : (keepOld ? c.repName : ''),
+                booking,
+                notes: String(fd.get('notes') || '').trim()
+            };
+            if (c) {
+                Object.assign(c, data, { updatedAt: new Date().toISOString(), updatedBy: orderUserName() });
+                log('تعديل طلبية عميل', `${custNoLabel(c)} — ${customer}`);
+                toast('تم حفظ التعديلات', 'success');
+            } else {
+                const n = { id: uid('CUST-'), no: nextCustNo(), ...data, createdAt: new Date().toISOString(), createdBy: orderUserName(), updatedAt: '', updatedBy: '' };
+                appData.custOrders.push(n);
+                log('إضافة طلبية عميل', `${custNoLabel(n)} — ${customer}`);
+                toast('تمت إضافة الطلبية', 'success');
+            }
+            saveState();
+            render();
+            return true;
+        }
+
+        // soft delete with undo (same as the other sections)
+        function deleteCustOrder(id) {
+            if (!canCust('delete')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const idx = appData.custOrders.findIndex(c => c.id === id);
+            if (idx < 0) return;
+            finalizePendingUndo();
+            const c = appData.custOrders[idx];
+            appData.custOrders.splice(idx, 1);
+            log('حذف طلبية عميل', `${custNoLabel(c)} — ${c.customer}`);
+            render();
+            scheduleUndo(`تم حذف طلبية العميل ${c.customer}`, () => {
+                appData.custOrders.splice(Math.min(idx, appData.custOrders.length), 0, c);
+                log('استعادة طلبية عميل', `${custNoLabel(c)} — ${c.customer}`);
+                render();
+            }, () => {});
+        }
+
+        // ---- sales reps ----
+        function openCustRepsModal() {
+            if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const list = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            openModal({
+                title: 'إدارة المندوبين',
+                submitText: 'إضافة مندوب',
+                body: `${field('اسم المندوب الجديد', `<input name="repName" class="${INPUT_CLS}" placeholder="اكتب الاسم واضغط إضافة مندوب">`)}
+                    <div class="space-y-2">${list.length ? list.map(r => `<div class="flex items-center justify-between gap-2 rounded-xl border-2 border-slate-200 p-2">
+                        <span class="font-semibold">${esc(r.name)}</span>
+                        <button type="button" onclick="deleteCustRep('${esc(r.id)}')" class="${BTN_ICON} text-rose-600 hover:bg-rose-50" aria-label="حذف المندوب"><i class="fa-solid fa-trash-can"></i></button>
+                    </div>`).join('') : '<p class="text-sm text-slate-500">مفيش مندوبين لسه</p>'}</div>`,
+                onSubmit: fd => {
+                    const name = String(fd.get('repName') || '').trim();
+                    if (!name) return toast('اكتب اسم المندوب', 'error'), false;
+                    if (name.length > 100) return toast('الاسم طويل قوي', 'error'), false;
+                    if (appData.custReps.some(r => r.name === name)) return toast('الاسم ده موجود قبل كده', 'error'), false;
+                    appData.custReps.push({ id: uid('REP-'), name });
+                    log('إضافة مندوب', name);
+                    render();
+                    openCustRepsModal();   // refresh the list in the same window
+                    return false;
+                }
+            });
+        }
+
+        // the rep changes his own PIN (Firebase lets a signed-in user change only his own password)
+        function openRepPinModal() {
+            if (!currentRepId()) return;
+            openModal({
+                title: 'تغيير الرقم السري',
+                submitText: 'حفظ الرقم السري',
+                body: `${field('الرقم السري الجديد *', `<input name="pin" type="password" inputmode="numeric" required autocomplete="new-password" dir="ltr" class="${INPUT_CLS}">`, '6 أرقام على الأقل')}
+                    ${field('تأكيد الرقم السري *', `<input name="pin2" type="password" inputmode="numeric" required autocomplete="new-password" dir="ltr" class="${INPUT_CLS}">`)}`,
+                onSubmit: async fd => {
+                    const pin = String(fd.get('pin') || '');
+                    if (!REP_PIN_RE.test(pin)) return toast('الرقم السري لازم يكون 6 أرقام على الأقل', 'error'), false;
+                    if (pin !== String(fd.get('pin2') || '')) return toast('الرقمين مش متطابقين', 'error'), false;
+                    try {
+                        await fbAuth.currentUser.updatePassword(pin);
+                        toast('تم تغيير الرقم السري', 'success');
+                        return true;
+                    } catch (err) {
+                        console.error(err);
+                        toast(err && err.code === 'auth/requires-recent-login' ? 'سجّل خروج وادخل تاني، وبعدين غيّر الرقم السري' : 'تعذر تغيير الرقم السري، حاول تاني', 'error', null, 6000);
+                        return false;
+                    }
+                }
+            });
+        }
+
+        function deleteCustRep(id) {
+            if (!canCust('manage')) return;
+            const r = appData.custReps.find(x => x.id === id);
+            if (r && appData.users.some(u => u.repId === id)) return toast('المندوب ده مربوط بحساب دخول. افصل الحساب من إدارة المستخدمين الأول', 'error');
+            if (!r || !confirm(`حذف المندوب "${r.name}"؟ الطلبيات القديمة هتفضل باسمه.`)) return;
+            appData.custReps = appData.custReps.filter(x => x.id !== id);
+            log('حذف مندوب', r.name);
+            render();
+            openCustRepsModal();
+        }
+
+        // ---- print: one order, or the filtered list (landscape) ----
+        function custPrintHtml(rows, title, meta) {
+            const sum = k => r2(rows.reduce((s, c) => s + numOr0(c[k]), 0));
+            const body = `<style>@page { size: A4 landscape; margin: 8mm; } table { font-size: 9pt; }</style>
+                <h1>${esc(title)}</h1><div class="meta">${esc(meta)} · ${esc(fmtDateAr(todayISO()))}</div>
+                <table><thead><tr><th>الرقم</th><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>الصنف</th><th>الحالة</th>
+                <th>المبلغ</th><th>المدفوع</th><th>الباقي</th><th>مدة الطلبية</th><th>التسليم</th><th>موعد الحجز</th></tr></thead>
+                <tbody>${rows.map(c => `<tr><td>${custNoLabel(c)}</td><td>${esc(fmtDateAr(c.date) || '')}</td><td>${esc(c.customer)}</td>
+                    <td>${esc(c.repName || '')}</td><td>${esc(c.category || '')}</td><td>${esc(c.completeness || '')}</td>
+                    <td>${fmtDigits(numOr0(c.amount))}</td><td>${fmtDigits(numOr0(c.paid))}</td><td>${fmtDigits(custRemaining(c))}</td>
+                    <td>${esc(fmtDateAr(c.validUntil) || '')}</td><td>${esc(c.delivery || '')}</td><td>${esc(fmtDateAr(c.booking) || '')}</td></tr>`).join('')
+                    || '<tr><td colspan="12">مفيش طلبيات</td></tr>'}</tbody>
+                ${rows.length ? `<tfoot><tr class="tot"><td colspan="6">الإجمالي (${rows.length})</td><td>${fmtDigits(sum('amount'))}</td>
+                    <td>${fmtDigits(sum('paid'))}</td><td>${fmtDigits(r2(sum('amount') - sum('paid')))}</td><td colspan="3"></td></tr></tfoot>` : ''}
+                </table>`;
+            return orderPrintShell(title, body);
+        }
+
+        function printCustOrder(id) {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = appData.custOrders.find(x => x.id === id);
+            if (c) printHtml(custPrintHtml([c], `طلبية عميل ${custNoLabel(c)}`, c.customer));
+        }
+
+        function printCustList() {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            printHtml(custPrintHtml(filteredCustOrders(), 'طلبيات العملاء', 'قائمة مفلترة'));
+        }
+
         const VIEWS = {
             orders: param => viewOrders(param),
+            customers: () => viewCustomerOrders(),
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
             lists: () => viewLists(),
@@ -4996,13 +5411,42 @@
             render();
         }
 
+        // ============ SALES REP LOGIN (دور مندوب) ============
+        // A rep signs in with a login name (letters, digits, . _ -) and a PIN of 6+ digits.
+        // The login name becomes an internal address on this domain; it is never shown as a real mailbox.
+        const REP_EMAIL_DOMAIN = '@reps.factory-app.com';
+        const REP_LOGIN_RE = /^[a-z0-9._-]{3,30}$/i;
+        const REP_PIN_RE = /^\d{6,}$/;
+        const REP_ROLE_ID = 'rep';
+        function repRoleDef() { return { id: REP_ROLE_ID, name: 'مندوب', locked: false, permissions: ['custorders.view'] }; }
+        // the role is created the first time an admin opens the user form (older systems do not have it yet)
+        function ensureRepRole() { if (appData && !appData.roles[REP_ROLE_ID]) appData.roles[REP_ROLE_ID] = repRoleDef(); }
+        function loginAddressFor(v) { const t = String(v || '').trim().toLowerCase(); return (!t || t.includes('@')) ? t : t + REP_EMAIL_DOMAIN; }
+        // the rep this signed-in account is linked to ('' for everyone else)
+        function currentRepId() { const u = currentUser(); return u && u.repId ? u.repId : ''; }
+        // shows the rep dropdown and the login-name field only for the rep role; the normal email is off for reps
+        function onUserRoleChange(roleId) {
+            const isRep = roleId === REP_ROLE_ID;
+            el('uRepBox') && el('uRepBox').classList.toggle('hidden', !isRep);
+            el('uEmailBox') && el('uEmailBox').classList.toggle('hidden', isRep);
+            const f = el('modalForm');
+            if (!f) return;
+            const em = f.elements.email, ln = f.elements.loginName, rp = f.elements.repId;
+            if (em) { em.disabled = isRep; em.required = !isRep; }
+            if (ln) { ln.disabled = !isRep; ln.required = isRep; }
+            if (rp) { rp.disabled = !isRep; rp.required = isRep; }
+        }
+
         function openUserModal(userId = null) {
             if (!can('users.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
             const user = userId ? appData.users.find(u => u.id === userId) : null;
             if (userId && !user) return;
+            ensureRepRole();
             editingUserId = userId;
             const me = currentUser();
             const isSelf = !!user && user.id === me?.id;
+            const repOptsHtml = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+                .map(r => `<option value="${esc(r.id)}" ${user && user.repId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
             const roleOpts = Object.values(appData.roles).map(r =>
                 `<option value="${esc(r.id)}" ${user && user.roleId === r.id ? 'selected' : (!user && r.id === 'viewer' ? 'selected' : '')}>${esc(r.name)}</option>`).join('');
 
@@ -5013,8 +5457,12 @@
                     ${field('الاسم الكامل *', `<input name="name" required value="${esc(user?.name)}" class="${INPUT_CLS}">`)}
                     ${user
                         ? field('البريد الإلكتروني', `<input value="${esc(user.email)}" disabled dir="ltr" class="${INPUT_CLS} bg-slate-50">`)
-                        : field('البريد الإلكتروني *', `<input name="email" type="email" required dir="ltr" class="${INPUT_CLS}">`, 'يُستخدم لتسجيل الدخول')}
-                    ${field('الدور *', `<select name="roleId" required ${isSelf ? 'disabled' : ''} class="${INPUT_CLS}">${roleOpts}</select>`)}
+                        : `<div id="uEmailBox">${field('البريد الإلكتروني *', `<input name="email" type="email" required dir="ltr" class="${INPUT_CLS}">`, 'يُستخدم لتسجيل الدخول')}</div>`}
+                    ${field('الدور *', `<select name="roleId" required ${isSelf ? 'disabled' : ''} onchange="onUserRoleChange(this.value)" class="${INPUT_CLS}">${roleOpts}</select>`)}
+                    <div id="uRepBox" class="hidden space-y-3 rounded-xl border-2 border-brand-200 bg-brand-50/40 p-3">
+                        ${field('المندوب *', `<select name="repId" class="${INPUT_CLS}"><option value="">— اختر المندوب —</option>${repOptsHtml}</select>`, 'الحساب ده هيشوف طلبيات المندوب ده بس')}
+                        ${user ? '' : field('اسم الدخول *', `<input name="loginName" dir="ltr" autocomplete="off" class="${INPUT_CLS}" placeholder="ahmed1">`, 'حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30 حرف)')}
+                    </div>
                     <label class="flex items-center gap-2 text-sm">
                         <input type="checkbox" name="active" ${!user || user.active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} class="w-4 h-4 accent-brand-600"> الحساب فعّال
                     </label>
@@ -5025,9 +5473,12 @@
                         ${field('كلمة المرور المؤقتة *', `<input name="password" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`, '6 أحرف على الأقل. المستخدم يغيّرها من "حسابي"')}
                         ${field('تأكيد كلمة المرور *', `<input name="password2" type="password" required minlength="6" autocomplete="new-password" class="${INPUT_CLS}">`)}`}
                     ${isSelf ? '<p class="text-xs text-slate-500">لا يمكنك تعطيل حسابك أو تغيير دورك بنفسك.</p>' : ''}`,
+                onOpen: () => onUserRoleChange(el('modalForm')?.elements.roleId?.value || ''),
                 onSubmit: async fd => {
                     const name = String(fd.get('name') || '').trim();
-                    const email = user ? user.email : String(fd.get('email') || '').trim().toLowerCase();
+                    const roleSel = String(fd.get('roleId') || '');
+                    const isRepNew = !user && roleSel === REP_ROLE_ID;
+                    const email = user ? user.email : (isRepNew ? loginAddressFor(fd.get('loginName')) : String(fd.get('email') || '').trim().toLowerCase());
                     const roleId = isSelf ? user.roleId : String(fd.get('roleId') || '');
                     const active = isSelf ? true : fd.get('active') === 'on';
                     const pw = String(fd.get('password') || '');
@@ -5037,6 +5488,13 @@
                     if (!user && !EMAIL_RE.test(email)) return toast('اكتب بريد إلكتروني صحيح', 'error'), false;
                     if (!user && appData.users.some(u => u.email === email)) return toast('البريد ده مستخدم قبل كده', 'error'), false;
                     if (!appData.roles[roleId]) return toast('اختر دوراً صحيحاً', 'error'), false;
+                    const repId = roleId === REP_ROLE_ID ? String(fd.get('repId') || '') : '';
+                    if (roleId === REP_ROLE_ID) {
+                        if (!repId || !appData.custReps.some(x => x.id === repId)) return toast('اختار المندوب من القايمة', 'error'), false;
+                        if (appData.users.some(u => u.id !== userId && u.repId === repId)) return toast('المندوب ده مربوط بحساب دخول تاني', 'error'), false;
+                        if (!user && !REP_LOGIN_RE.test(String(fd.get('loginName') || '').trim())) return toast('اسم الدخول: حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30 حرف)', 'error'), false;
+                        if (!user && !REP_PIN_RE.test(pw)) return toast('الرقم السري للمندوب لازم يكون 6 أرقام على الأقل', 'error'), false;
+                    }
                     if (!user && pw.length < 6) return toast('كلمة المرور لازم تكون 6 أحرف على الأقل', 'error'), false;
                     if (!user && pw !== pw2) return toast('كلمتا المرور غير متطابقتين', 'error'), false;
 
@@ -5047,7 +5505,7 @@
                     }
 
                     if (user) {
-                        Object.assign(user, { name, roleId, active });
+                        Object.assign(user, { name, roleId, active, repId });
                         log('تعديل مستخدم', name);
                     } else {
                         let uid;
@@ -5057,7 +5515,7 @@
                             console.error(err);
                             return toast(authErrorMessage(err), 'error', null, 5000), false;
                         }
-                        appData.users.push({ id: uid, name, email, roleId, active, createdAt: new Date().toISOString(), lastLoginAt: null });
+                        appData.users.push({ id: uid, name, email, roleId, active, createdAt: new Date().toISOString(), lastLoginAt: null, repId });
                         log('إضافة مستخدم', `${name} (${roleName(roleId)})`);
                     }
                     saveState();
@@ -6053,12 +6511,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function () {
-                navigator.serviceWorker.register('/sw.js').catch(function () {});
-            });
-        }
-    </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a596ca506a4b4777',t:'MTc5NDQ5OTY1Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a596ca506a4b4777',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c006d81fa581a6',t:'MTc5NDkzMjA0OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c006d81fa581a6',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
