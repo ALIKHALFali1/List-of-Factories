@@ -781,7 +781,8 @@
                 createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, repId: u.repId || null
             }));
             Object.values(d.roles).forEach(r => out.set('roles/' + r.id, {
-                name: r.name, permissions: [...(r.permissions || [])].sort(), locked: !!r.locked
+                name: r.name, permissions: [...(r.permissions || [])].sort(), locked: !!r.locked,
+                ...(r.repRole ? { repRole: true } : {})
             }));
             out.set('settings/main', {
                 systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays
@@ -3099,6 +3100,7 @@
 
         let ordersMenuOpen = true;
         function toggleOrdersMenu() { ordersMenuOpen = !ordersMenuOpen; renderChrome(parseRoute().name); }
+        function openOrdersGroup() { ordersMenuOpen = true; }
 
         function renderChrome(activeName) {
             const u = currentUser();
@@ -3120,11 +3122,16 @@
             const ordersOpen = ordersMenuOpen;
             const links = ROUTE_ORDER.filter(canAccessRoute).filter(name => !(groupCustomers && name === 'customers')).map(name => {
                 if (!(groupCustomers && name === 'orders')) return navLink(name, false);
-                return `<button type="button" onclick="toggleOrdersMenu()" aria-expanded="${ordersOpen}"
-                           class="nav-link w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${(activeName === 'orders' || activeName === 'customers') ? 'active' : ''}">
+                return `<div class="flex items-center gap-1">
+                        <a href="#/orders" onclick="openOrdersGroup()"
+                           class="nav-link flex-1 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${(activeName === 'orders' || activeName === 'customers') ? 'active' : ''}">
                             <i class="fa-solid ${ROUTES.orders.icon} w-5 text-center"></i> ${ROUTES.orders.title}
-                            <i class="fa-solid fa-chevron-down ms-auto text-xs transition-transform ${ordersOpen ? 'rotate-180' : ''}"></i>
-                        </button>` + (ordersOpen ? navLink('customers', true) : '');
+                        </a>
+                        <button type="button" onclick="toggleOrdersMenu()" aria-expanded="${ordersOpen}" aria-label="فتح وقفل قائمة الطلبيات"
+                           class="p-2 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white">
+                            <i class="fa-solid fa-chevron-down text-xs transition-transform ${ordersOpen ? 'rotate-180' : ''}"></i>
+                        </button>
+                    </div>` + (ordersOpen ? navLink('customers', true) : '');
             });
             el('sideNav').innerHTML = links.join('') || '<p class="text-sm text-slate-400 p-3">لا توجد أقسام متاحة</p>';
 
@@ -3969,7 +3976,6 @@
                 ${tabBtn('orders', 'الطلبيات', 'fa-list', 'list')}
                 ${tabBtn('orders/schedule', 'لوحة الجدولة', 'fa-calendar-days', 'schedule')}
                 ${canOrd('reports') ? tabBtn('orders/reports', 'التقارير', 'fa-chart-column', 'reports') : ''}
-                ${canCust('view') ? tabBtn('customers', 'طلبيات العملاء', 'fa-user-tie', 'customers') : ''}
             </div>`;
         }
 
@@ -4549,7 +4555,7 @@
 
         function updateCustBody() {
             const body = el('custBody');
-            if (body) body.innerHTML = custBodyHtml();
+            if (body) body.innerHTML = custTabBody();
         }
 
         function custFilterBar() {
@@ -4578,8 +4584,106 @@
             render();
         }
 
-        function viewCustomerOrders() {
+        // customer orders has its own dashboard: list, schedule (by delivery status) and reports
+        let custTab = 'list';
+        function custTabsBar() {
+            const tabBtn = (route, label, icon, key) => `<button type="button" onclick="navigate('${route}')" class="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 ${custTab === key ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 border-2 border-slate-300 hover:bg-slate-50'}"><i class="fa-solid ${icon}"></i>${label}</button>`;
+            return `<div class="flex flex-wrap gap-2">
+                ${tabBtn('customers', 'الطلبيات', 'fa-list', 'list')}
+                ${tabBtn('customers/schedule', 'لوحة الجدولة', 'fa-calendar-days', 'schedule')}
+                ${tabBtn('customers/reports', 'التقارير', 'fa-chart-column', 'reports')}
+            </div>`;
+        }
+
+        function custTabBody() {
+            if (custTab === 'schedule') return custScheduleHtml();
+            if (custTab === 'reports') return custReportsHtml();
+            return custBodyHtml();
+        }
+
+        // one column per delivery status; each column lists its orders and their total
+        function custScheduleHtml() {
+            const rows = filteredCustOrders();
+            const cols = CUST_DELIVERY.map(d => {
+                const list = rows.filter(c => c.delivery === d);
+                const total = r2(list.reduce((s, c) => s + numOr0(c.amount), 0));
+                const items = list.length ? list.map(c => `<div class="rounded-xl border border-slate-200 p-2 text-sm">
+                        <p class="font-bold">${custNoLabel(c)} · ${esc(c.customer)}</p>
+                        <p class="text-xs text-slate-600">${esc(c.repName || '—')} · ${esc(c.category || '—')} · ${fmtMoney(numOr0(c.amount))}</p>
+                    </div>`).join('') : '<p class="text-xs text-slate-400 text-center py-4">لا توجد طلبيات</p>';
+                return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow p-3 flex flex-col gap-2 min-w-0">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="px-2 py-0.5 rounded-full text-xs font-bold ${CUST_DELIVERY_CLS[d]}">${esc(d)}</span>
+                        <span class="text-xs font-bold text-slate-600">${list.length} طلبية</span>
+                    </div>
+                    <p class="text-sm font-bold text-slate-800 whitespace-nowrap">${fmtMoney(total)}</p>
+                    <div class="space-y-2 max-h-[60vh] overflow-y-auto">${items}</div>
+                </div>`;
+            }).join('');
+            return `<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">${cols}</div>`;
+        }
+
+        const CUST_REPORT_HEAD = ['الرقم', 'التاريخ', 'العميل', 'المندوب', 'الصنف', 'الحالة', 'المبلغ', 'المدفوع', 'الباقي', 'مدة الطلبية', 'التسليم', 'موعد الحجز'];
+
+        function custReportsHtml() {
+            const rows = filteredCustOrders();
+            const sumOf = (list, k) => r2(list.reduce((s, c) => s + numOr0(c[k]), 0));
+            const statRow = (label, list) => {
+                const rem = r2(sumOf(list, 'amount') - sumOf(list, 'paid'));
+                return `<tr class="hover:bg-slate-50">
+                    <td class="py-2 px-3 font-semibold">${esc(label)}</td>
+                    <td class="py-2 px-3">${list.length}</td>
+                    <td class="py-2 px-3 whitespace-nowrap">${fmtMoney(sumOf(list, 'amount'))}</td>
+                    <td class="py-2 px-3 whitespace-nowrap">${fmtMoney(sumOf(list, 'paid'))}</td>
+                    <td class="py-2 px-3 whitespace-nowrap font-bold ${rem > 0 ? 'text-rose-700' : ''}">${fmtMoney(rem)}</td>
+                </tr>`;
+            };
+            const table = (title, body) => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow overflow-x-auto">
+                <h3 class="px-4 pt-4 font-bold text-slate-800">${title}</h3>
+                <table class="w-full text-sm mt-2">
+                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                        <th class="py-2 px-3 text-start">البند</th><th class="py-2 px-3 text-start">عدد الطلبيات</th>
+                        <th class="py-2 px-3 text-start">الإجمالي</th><th class="py-2 px-3 text-start">المدفوع</th><th class="py-2 px-3 text-start">الباقي</th></tr></thead>
+                    <tbody class="divide-y divide-slate-200">${body}</tbody>
+                </table></div>`;
+            const byCat = CUST_CATEGORIES.map(c => statRow(c, rows.filter(r => r.category === c))).join('')
+                + statRow('بدون صنف', rows.filter(r => !r.category));
+            const byRep = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+                .map(r => statRow(r.name, rows.filter(c => c.repId === r.id))).join('')
+                + statRow('بدون مندوب', rows.filter(c => !c.repId));
+            const byDel = CUST_DELIVERY.map(d => statRow(d, rows.filter(c => c.delivery === d))).join('');
+            return `<div class="space-y-4">
+                <div class="flex flex-wrap gap-2 justify-end">
+                    ${canCust('view') ? btn('printCustReport()', 'طباعة التقرير', 'fa-print', BTN_SECONDARY) : ''}
+                    ${canCust('view') ? btn('exportCustReport()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY) : ''}
+                </div>
+                ${custSummaryCards(rows)}
+                ${table('حسب الصنف', byCat)}
+                ${table('حسب المندوب', byRep)}
+                ${table('حسب حالة التسليم', byDel)}
+            </div>`;
+        }
+
+        function printCustReport() {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            printHtml(custPrintHtml(filteredCustOrders(), 'تقرير طلبيات العملاء', 'تقرير مفلتر'));
+        }
+
+        function exportCustReport() {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const rows = filteredCustOrders();
+            const data = [CUST_REPORT_HEAD, ...rows.map(c => [
+                custNoLabel(c), fmtDateAr(c.date), c.customer, c.repName || '', c.category || '', c.completeness || '',
+                numOr0(c.amount), numOr0(c.paid), custRemaining(c), fmtDateAr(c.validUntil) || '', c.delivery || '', fmtDateAr(c.booking) || ''
+            ])];
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(data), 'طلبيات العملاء');
+            XLSX.writeFile(wb, `طلبيات-العملاء-${todayISO()}.xlsx`);
+        }
+
+        function viewCustomerOrders(param = '') {
             if (!canCust('view')) return { title: 'طلبيات العملاء', html: noOrderAccessHtml() };
+            custTab = param === 'schedule' || param === 'reports' ? param : 'list';
             const tools = `<div class="flex flex-wrap gap-2 justify-end">
                 ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
                 ${canCust('manage') ? btn('openCustRepsModal()', 'إدارة المندوبين', 'fa-user-tie', BTN_SECONDARY) : ''}
@@ -4589,7 +4693,7 @@
             return {
                 title: 'طلبيات العملاء',
                 actions: '',
-                html: `<div class="space-y-4">${canOrd('view') ? ordersTabs('customers') : ''}${tools}${repBannerHtml()}${custFilterBar()}<div id="custBody" class="space-y-4">${custBodyHtml()}</div></div>`
+                html: `<div class="space-y-4">${custTabsBar()}${tools}${repBannerHtml()}${custFilterBar()}<div id="custBody" class="space-y-4">${custTabBody()}</div></div>`
             };
         }
 
@@ -4622,6 +4726,7 @@
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('التاريخ *', `<input name="date" type="date" required value="${esc(c ? c.date : todayISO())}" class="${INPUT_CLS}">`)}
                         ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" class="${INPUT_CLS}">`)}
+                        ${field('رقم الطلب *', `<input name="no" type="number" min="1" step="1" required value="${c ? esc(c.no) : nextCustNo()}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'بياخد رقم تلقائي، وتقدر تكتب غيره')}
                         ${sel('repId', 'اسم المندوب', repOpts, c ? c.repId : '')}
                         ${sel('category', 'الصنف', [['', '— اختر الصنف —'], ...CUST_CATEGORIES], c ? c.category : '')}
                         ${sel('completeness', 'حالة الطلبية', CUST_COMPLETENESS, c ? c.completeness : 'كاملة')}
@@ -4659,10 +4764,13 @@
             if (category && !CUST_CATEGORIES.includes(category)) return toast('اختر الصنف من القائمة', 'error'), false;
             if (!CUST_COMPLETENESS.includes(completeness)) return toast('اختر حالة الطلبية', 'error'), false;
             if (!CUST_DELIVERY.includes(delivery)) return toast('اختر حالة التسليم', 'error'), false;
+            const no = Number(fd.get('no'));
+            if (!Number.isInteger(no) || no < 1 || no > 999999999) return toast('اكتب رقم طلب صحيح (1 أو أكتر)', 'error'), false;
+            if (appData.custOrders.some(x => Number(x.no) === no && (!c || x.id !== c.id))) return toast('رقم الطلب ده مستخدم قبل كده', 'error'), false;
             const rep = appData.custReps.find(r => r.id === repId);
             const keepOld = !rep && c && c.repId && c.repId === repId;
             const data = {
-                date, customer, category, completeness, amount, paid, validUntil, delivery,
+                no, date, customer, category, completeness, amount, paid, validUntil, delivery,
                 repId: rep ? rep.id : (keepOld ? repId : ''),
                 repName: rep ? rep.name : (keepOld ? c.repName : ''),
                 booking,
@@ -4793,7 +4901,7 @@
 
         const VIEWS = {
             orders: param => viewOrders(param),
-            customers: () => viewCustomerOrders(),
+            customers: param => viewCustomerOrders(param),
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
             lists: () => viewLists(),
@@ -5382,7 +5490,25 @@
                         <tbody class="divide-y divide-slate-200">${rows || '<tr><td colspan="3" class="py-4 px-3 text-center text-slate-500">مفيش مندوبين لسه</td></tr>'}</tbody>
                     </table>
                 </div>
+                ${repRoleCardsHtml()}
             </div>`;
+        }
+
+        // the rep roles, each with its own card (kept apart from the normal roles)
+        function repRoleCardsHtml() {
+            const roles = Object.values(appData.roles).filter(isRepRoleDef);
+            if (!roles.length) return '';
+            const cards = roles.map(r => {
+                const acc = appData.users.find(u => u.roleId === r.id);
+                return `<article class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col gap-2">
+                    <h4 class="font-bold truncate">${esc(r.name)}</h4>
+                    <p class="text-xs text-slate-500" dir="ltr">${esc(acc ? acc.email.split('@')[0] : 'بدون حساب دخول')}</p>
+                    <div class="flex flex-wrap gap-1.5">${r.permissions.map(p => `<span class="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">${esc(PERM_LABELS[p] || p)}</span>`).join('')}</div>
+                    ${can('users.manage') ? `<div class="mt-auto pt-2 border-t border-slate-100">${btnSmall(`openRoleModal('${esc(r.id)}')`, 'تعديل الصلاحيات', 'fa-shield-halved', BTN_SECONDARY)}</div>` : ''}
+                </article>`;
+            }).join('');
+            return `<div class="space-y-2"><h3 class="font-bold text-slate-800"><i class="fa-solid fa-id-badge me-1"></i> أدوار المندوبين</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">${cards}</div></div>`;
         }
 
         async function addRepFromForm(e) {
@@ -5409,7 +5535,7 @@
                 const roleId = uid('rep-');
                 const now = new Date().toISOString();
                 appData.custReps.push({ id: repId, name });
-                appData.roles[roleId] = { id: roleId, name: 'مندوب: ' + name, locked: false, permissions: ['custorders.view'] };
+                appData.roles[roleId] = { id: roleId, name: 'مندوب: ' + name, locked: false, permissions: ['custorders.view'], repRole: true };
                 appData.users.push({ id: authUid, name, email, roleId, active: true, createdAt: now, lastLoginAt: null, repId });
                 log('إضافة مندوب', name);
                 saveState();
@@ -5479,7 +5605,7 @@
         }
 
         function rolesHtml() {
-            const cards = Object.values(appData.roles).map(r => {
+            const cards = Object.values(appData.roles).filter(r => !isRepRoleDef(r)).map(r => {
                 const users = appData.users.filter(u => u.roleId === r.id).length;
                 return `<article class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col gap-3">
                     <div class="flex items-start justify-between gap-2">
@@ -5582,6 +5708,7 @@
         const REP_LOGIN_RE = /^[a-z0-9._-]{3,30}$/i;
         const REP_PIN_RE = /^\d{6,}$/;
         const REP_ROLE_ID = 'rep';
+        function isRepRoleDef(r) { return !!r && (r.repRole === true || r.id === REP_ROLE_ID); }
         function repRoleDef() { return { id: REP_ROLE_ID, name: 'مندوب', locked: false, permissions: ['custorders.view'] }; }
         // the role is created the first time an admin opens the user form (older systems do not have it yet)
         function ensureRepRole() { if (appData && !appData.roles[REP_ROLE_ID]) appData.roles[REP_ROLE_ID] = repRoleDef(); }
@@ -6675,5 +6802,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c032921f858bed',t:'MTc5NDkzMzgzOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c032921f858bed',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c066f8c8a8e208',t:'MTc5NDkzNTk4Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c066f8c8a8e208',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
