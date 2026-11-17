@@ -1143,6 +1143,7 @@
             fbCustUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbCustUnsubs = [];
             fbOrdLive.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            custRepView = '';
             fbOrdLive.clear();
             fbOrdErr.clear();
             clearTimeout(ordRetryTimer); ordRetryTimer = null; ordRetryDelay = 3000;
@@ -3096,6 +3097,9 @@
             renderChrome(null);
         }
 
+        let ordersMenuOpen = true;
+        function toggleOrdersMenu() { ordersMenuOpen = !ordersMenuOpen; renderChrome(parseRoute().name); }
+
         function renderChrome(activeName) {
             const u = currentUser();
             const sys = appData.settings;
@@ -3104,12 +3108,23 @@
                 ? `<img src="${esc(sys.logo)}" alt="" class="w-full h-full object-contain">`
                 : '<i class="fa-solid fa-industry text-white"></i>';
 
-            const links = ROUTE_ORDER.filter(canAccessRoute).map(name => {
+            const navLink = (name, indent) => {
                 const r = ROUTES[name];
                 return `<a href="#/${name}" onclick="toggleSidebar(false)"
-                           class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${activeName === name ? 'active' : ''}">
+                           class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${indent ? 'ps-10' : ''} ${activeName === name ? 'active' : ''}">
                             <i class="fa-solid ${r.icon} w-5 text-center"></i> ${r.title}
                         </a>`;
+            };
+            // "طلبيات العملاء" hangs under "الطلبيات" (a collapsible group) when the user may open both
+            const groupCustomers = canAccessRoute('orders') && canAccessRoute('customers');
+            const ordersOpen = ordersMenuOpen;
+            const links = ROUTE_ORDER.filter(canAccessRoute).filter(name => !(groupCustomers && name === 'customers')).map(name => {
+                if (!(groupCustomers && name === 'orders')) return navLink(name, false);
+                return `<button type="button" onclick="toggleOrdersMenu()" aria-expanded="${ordersOpen}"
+                           class="nav-link w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${(activeName === 'orders' || activeName === 'customers') ? 'active' : ''}">
+                            <i class="fa-solid ${ROUTES.orders.icon} w-5 text-center"></i> ${ROUTES.orders.title}
+                            <i class="fa-solid fa-chevron-down ms-auto text-xs transition-transform ${ordersOpen ? 'rotate-180' : ''}"></i>
+                        </button>` + (ordersOpen ? navLink('customers', true) : '');
             });
             el('sideNav').innerHTML = links.join('') || '<p class="text-sm text-slate-400 p-3">لا توجد أقسام متاحة</p>';
 
@@ -4431,9 +4446,22 @@
             }
         }
 
+        // the rep whose orders are open after his PIN was checked on the server ('' = none chosen)
+        let custRepView = '';
+        function repBannerHtml() {
+            if (!custRepView) return '';
+            const r = appData.custReps.find(x => x.id === custRepView);
+            return `<div class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border-2 border-brand-300 bg-brand-50 p-3">
+                <p class="font-bold text-brand-800"><i class="fa-solid fa-user-check me-1"></i> طلبيات المندوب: ${esc(r ? r.name : '')}</p>
+                ${btn('clearRepView()', 'إلغاء الاختيار', 'fa-xmark', BTN_SECONDARY)}
+            </div>`;
+        }
+        function clearRepView() { custRepView = ''; render(); }
+
         function filteredCustOrders() {
             const f = custFilter, q = f.q.trim().toLowerCase();
             return custSorted(appData.custOrders.filter(c => {
+                if (custRepView && c.repId !== custRepView) return false;
                 if (f.rep && c.repId !== f.rep) return false;
                 if (f.category && c.category !== f.category) return false;
                 if (f.delivery !== 'all' && c.delivery !== f.delivery) return false;
@@ -4556,11 +4584,12 @@
                 ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
                 ${canCust('manage') ? btn('openCustRepsModal()', 'إدارة المندوبين', 'fa-user-tie', BTN_SECONDARY) : ''}
                 ${currentRepId() ? btn('openRepPinModal()', 'تغيير الرقم السري', 'fa-key', BTN_SECONDARY) : ''}
+                ${currentRepId() ? '' : btn('openRepPicker()', custRepView ? 'اختار مندوب آخر' : 'اختار المندوب', 'fa-user-check', BTN_SECONDARY)}
             </div>`;
             return {
                 title: 'طلبيات العملاء',
                 actions: '',
-                html: `<div class="space-y-4">${canOrd('view') ? ordersTabs('customers') : ''}${tools}${custFilterBar()}<div id="custBody" class="space-y-4">${custBodyHtml()}</div></div>`
+                html: `<div class="space-y-4">${canOrd('view') ? ordersTabs('customers') : ''}${tools}${repBannerHtml()}${custFilterBar()}<div id="custBody" class="space-y-4">${custBodyHtml()}</div></div>`
             };
         }
 
@@ -5262,21 +5291,156 @@
         }
 
         // ---------- Users & roles ----------
+        // Signs the rep's own account in on a throw-away app and signs it out again.
+        // Resolves to the account's uid when the PIN is right, or '' when it is wrong (or the server is unreachable).
+        async function verifyRepPin(email, pin) {
+            const app3 = firebase.initializeApp(FIREBASE_CONFIG, 'rep-check-' + Date.now());
+            try {
+                const a3 = app3.auth();
+                if (FIREBASE_EMULATORS) a3.useEmulator(FIREBASE_EMULATORS.auth);
+                await a3.setPersistence(firebase.auth.Auth.Persistence.NONE);
+                const cred = await a3.signInWithEmailAndPassword(email, pin);
+                await a3.signOut();
+                return cred.user.uid;
+            } catch (err) {
+                console.warn('rep pin check failed', err && err.code);
+                return '';
+            } finally {
+                await app3.delete();
+            }
+        }
+
+        function openRepPicker() {
+            if (!canCust('view') || currentRepId()) return;
+            const reps = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            if (!reps.length) return toast('مفيش مندوبين لسه. أضف مندوب من قسم المندوب في المستخدمين والصلاحيات', 'error', null, 6000);
+            openModal({
+                title: 'اختار المندوب',
+                submitText: 'متابعة',
+                body: field('المندوب *', `<select name="repId" required class="${INPUT_CLS}"><option value="">— اختر المندوب —</option>${reps.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('')}</select>`),
+                onSubmit: fd => {
+                    const id = String(fd.get('repId') || '');
+                    if (!id) return toast('اختار المندوب من القايمة', 'error'), false;
+                    return openRepPinPrompt(id);
+                }
+            });
+            return false;
+        }
+
+        function openRepPinPrompt(repId) {
+            const rep = appData.custReps.find(x => x.id === repId);
+            const acc = rep ? appData.users.find(u => u.repId === repId) : null;
+            if (!rep) return toast('المندوب ده مش موجود', 'error'), false;
+            if (!acc || !acc.active) return toast('المندوب ده ماعندوش رقم سري. أنشئه من قسم المندوب في المستخدمين والصلاحيات', 'error', null, 6000), false;
+            openModal({
+                title: `الرقم السري للمندوب: ${rep.name}`,
+                submitText: 'فتح الطلبيات',
+                body: field('الرقم السري *', `<input name="pin" type="password" inputmode="numeric" required autocomplete="off" dir="ltr" class="${INPUT_CLS}">`, 'الطلبيات مش هتتفتح غير بالرقم الصح'),
+                onSubmit: async fd => {
+                    const pin = String(fd.get('pin') || '');
+                    if (!REP_PIN_RE.test(pin)) return toast('الرقم السري غلط', 'error'), false;
+                    const authUid = await verifyRepPin(acc.email, pin);
+                    if (!authUid || authUid !== acc.id) {
+                        toast('الرقم السري غلط أو مفيش اتصال بالسيرفر. الطلبيات مش هتتفتح', 'error', null, 5000);
+                        return false;
+                    }
+                    custRepView = repId;
+                    toast(`تم فتح طلبيات ${rep.name}`, 'success');
+                    render();
+                    return true;
+                }
+            });
+            return false;
+        }
+
+        // ---- permissions page: "المندوب" tab. Creates the rep, his role and his login (name + PIN) ----
+        function repsAdminHtml() {
+            if (!can('users.manage')) return '<div class="bg-white rounded-2xl border-2 border-slate-300 p-6 text-center font-bold text-slate-600">ليس لديك صلاحية لهذا القسم</div>';
+            const reps = [...appData.custReps].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            const rows = reps.map(r => {
+                const acc = appData.users.find(u => u.repId === r.id);
+                return `<tr class="hover:bg-slate-50">
+                    <td class="py-3 px-3 font-semibold">${esc(r.name)}</td>
+                    <td class="py-3 px-3 font-mono" dir="ltr">${esc(acc ? acc.email.split('@')[0] : '—')}</td>
+                    <td class="py-3 px-3">${acc ? (acc.active ? '<span class="text-emerald-700 font-bold">فعّال</span>' : '<span class="text-rose-700 font-bold">موقوف</span>') : '<span class="text-amber-700 font-bold">بدون رقم سري</span>'}</td>
+                </tr>`;
+            }).join('');
+            return `<div class="space-y-4">
+                <form id="repForm" onsubmit="addRepFromForm(event)" class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="sm:col-span-2"><h3 class="font-bold text-slate-800"><i class="fa-solid fa-user-tie me-1"></i> إضافة مندوب جديد</h3>
+                        <p class="text-xs text-slate-500">بيتعمل للمندوب دور باسمه وحساب دخول، والمندوب بيدخل بالاسم والرقم السري.</p></div>
+                    ${field('اسم المندوب *', `<input name="repName" required class="${INPUT_CLS}">`)}
+                    ${field('اسم الدخول *', `<input name="loginName" required dir="ltr" autocomplete="off" class="${INPUT_CLS}" placeholder="ahmed1">`, 'حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30)')}
+                    ${field('الرقم السري *', `<input name="pin" type="password" inputmode="numeric" required autocomplete="new-password" dir="ltr" class="${INPUT_CLS}">`, '6 أرقام على الأقل')}
+                    ${field('تأكيد الرقم السري *', `<input name="pin2" type="password" inputmode="numeric" required autocomplete="new-password" dir="ltr" class="${INPUT_CLS}">`)}
+                    <div class="sm:col-span-2 flex justify-end"><button type="submit" class="${BTN_PRIMARY}"><i class="fa-solid fa-user-plus"></i><span>إضافة المندوب</span></button></div>
+                </form>
+                <div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                            <th class="py-3 px-3 text-start">المندوب</th><th class="py-3 px-3 text-start">اسم الدخول</th><th class="py-3 px-3 text-start">الحالة</th></tr></thead>
+                        <tbody class="divide-y divide-slate-200">${rows || '<tr><td colspan="3" class="py-4 px-3 text-center text-slate-500">مفيش مندوبين لسه</td></tr>'}</tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        async function addRepFromForm(e) {
+            e.preventDefault();
+            if (!can('users.manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const f = e.target;
+            const submitBtn = f.querySelector('button[type=submit]');
+            const name = String(f.elements.repName.value || '').trim();
+            const login = String(f.elements.loginName.value || '').trim().toLowerCase();
+            const pin = String(f.elements.pin.value || '');
+            const pin2 = String(f.elements.pin2.value || '');
+            const email = loginAddressFor(login);
+            if (!name) return toast('اكتب اسم المندوب', 'error');
+            if (name.length > 100) return toast('الاسم طويل قوي', 'error');
+            if (appData.custReps.some(r => r.name === name)) return toast('اسم المندوب ده موجود قبل كده', 'error');
+            if (!REP_LOGIN_RE.test(login)) return toast('اسم الدخول: حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30 حرف)', 'error');
+            if (appData.users.some(u => u.email === email)) return toast('اسم الدخول ده مستخدم قبل كده', 'error');
+            if (!REP_PIN_RE.test(pin)) return toast('الرقم السري لازم يكون 6 أرقام على الأقل', 'error');
+            if (pin !== pin2) return toast('الرقمين مش متطابقين', 'error');
+            if (submitBtn) submitBtn.disabled = true;
+            try {
+                const authUid = await createAuthAccount(email, pin);
+                const repId = uid('REP-');
+                const roleId = uid('rep-');
+                const now = new Date().toISOString();
+                appData.custReps.push({ id: repId, name });
+                appData.roles[roleId] = { id: roleId, name: 'مندوب: ' + name, locked: false, permissions: ['custorders.view'] };
+                appData.users.push({ id: authUid, name, email, roleId, active: true, createdAt: now, lastLoginAt: null, repId });
+                log('إضافة مندوب', name);
+                saveState();
+                toast('تم إنشاء المندوب وحسابه', 'success');
+                render();
+            } catch (err) {
+                console.error(err);
+                toast(authErrorMessage(err), 'error', null, 5000);
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        }
+
         function viewUsers() {
             const tabs = `
                 <div class="inline-flex bg-white p-1 rounded-xl border border-slate-200">
                     <button type="button" onclick="setUsersTab('users')" class="px-4 py-2 rounded-lg text-sm font-semibold ${usersTab === 'users' ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100'}">
                         <i class="fa-solid fa-users me-1"></i> المستخدمون (${appData.users.length})
                     </button>
+                    <button type="button" onclick="setUsersTab('reps')" class="px-4 py-2 rounded-lg text-sm font-semibold ${usersTab === 'reps' ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100'}">
+                        <i class="fa-solid fa-user-tie me-1"></i> المندوب (${appData.custReps.length})
+                    </button>
                     <button type="button" onclick="setUsersTab('roles')" class="px-4 py-2 rounded-lg text-sm font-semibold ${usersTab === 'roles' ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100'}">
                         <i class="fa-solid fa-shield-halved me-1"></i> الأدوار والصلاحيات (${Object.keys(appData.roles).length})
                     </button>
                 </div>`;
 
-            const body = usersTab === 'users' ? usersTableHtml() : rolesHtml();
+            const body = usersTab === 'users' ? usersTableHtml() : (usersTab === 'reps' ? repsAdminHtml() : rolesHtml());
             const action = usersTab === 'users'
                 ? (can('users.manage') ? btn('openUserModal()', 'إضافة مستخدم', 'fa-user-plus') : '')
-                : (can('users.manage') ? btn('openRoleModal()', 'إضافة دور', 'fa-plus') : '');
+                : (usersTab === 'roles' && can('users.manage') ? btn('openRoleModal()', 'إضافة دور', 'fa-plus') : '');
 
             return {
                 title: 'المستخدمون والصلاحيات',
@@ -6511,5 +6675,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c006d81fa581a6',t:'MTc5NDkzMjA0OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c006d81fa581a6',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c032921f858bed',t:'MTc5NDkzMzgzOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c032921f858bed',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
