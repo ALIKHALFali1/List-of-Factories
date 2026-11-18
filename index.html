@@ -4495,6 +4495,7 @@
         function custActionsHtml(c) {
             const id = esc(c.id);
             return `<div class="flex items-center justify-center gap-1">
+                <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
                 <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
                 ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
@@ -4886,6 +4887,43 @@
                     <td>${fmtDigits(sum('paid'))}</td><td>${fmtDigits(r2(sum('amount') - sum('paid')))}</td><td colspan="3"></td></tr></tfoot>` : ''}
                 </table>`;
             return orderPrintShell(title, body);
+        }
+
+        function custDetailHtml(c) {
+            const row = (label, value) => `<div class="flex justify-between items-start gap-3 py-2 border-b border-slate-100 text-sm">
+                <span class="font-bold text-slate-600 shrink-0">${label}</span>
+                <span class="text-slate-900 text-end break-words min-w-0">${value}</span></div>`;
+            const rem = custRemaining(c);
+            const stamp = (by, at) => (at ? `${esc(fmtDateTime(at))}${by ? ' — ' + esc(by) : ''}` : '—');
+            return `<div>
+                ${row('الرقم', `<span class="font-mono font-bold">${esc(custNoLabel(c))}</span>`)}
+                ${row('التاريخ', esc(fmtDateAr(c.date) || '—'))}
+                ${row('العميل', `<b>${esc(c.customer || '—')}</b>`)}
+                ${row('المندوب', esc(c.repName || '—'))}
+                ${row('الصنف', esc(c.category || '—'))}
+                ${row('حالة الطلبية', esc(c.completeness || '—'))}
+                ${row('المبلغ', fmtMoney(numOr0(c.amount)))}
+                ${row('المدفوع', fmtMoney(numOr0(c.paid)))}
+                ${row('الباقي', `<b class="${rem > 0 ? 'text-rose-700' : ''}">${fmtMoney(rem)}</b>`)}
+                ${row('مدة الطلبية', esc(fmtDateAr(c.validUntil) || '—'))}
+                ${row('حالة التسليم', custDeliveryBadge(c))}
+                ${row('موعد الحجز', esc(fmtDateAr(c.booking) || '—'))}
+                ${row('الملاحظات', c.notes ? `<span class="whitespace-pre-wrap">${esc(c.notes)}</span>` : '—')}
+                ${row('أنشأها', stamp(c.createdBy, c.createdAt))}
+                ${row('آخر تعديل', stamp(c.updatedBy, c.updatedAt))}
+            </div>`;
+        }
+
+        function openCustDetail(id) {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c) return toast('الطلبية مش موجودة', 'error');
+            const cid = esc(c.id);
+            const actions = `<div class="flex flex-wrap gap-2 pt-2">
+                <button type="button" onclick="printCustOrder('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-print"></i> طباعة</button>
+                ${canCust('manage') ? `<button type="button" onclick="openCustModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
+            </div>`;
+            openModal({ title: `تفاصيل طلبية ${esc(custNoLabel(c))}`, body: custDetailHtml(c) + actions, size: 'lg' });
         }
 
         function printCustOrder(id) {
@@ -6802,5 +6840,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c066f8c8a8e208',t:'MTc5NDkzNTk4Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c066f8c8a8e208',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c6737c49a1b24a',t:'MTc5NDk5OTQxMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c6737c49a1b24a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
