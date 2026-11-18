@@ -5516,7 +5516,7 @@
                     <div class="sm:col-span-2"><h3 class="font-bold text-slate-800"><i class="fa-solid fa-user-tie me-1"></i> إضافة مندوب جديد</h3>
                         <p class="text-xs text-slate-500">بيتعمل للمندوب دور باسمه وحساب دخول، والمندوب بيدخل بالاسم والرقم السري.</p></div>
                     ${field('اسم المندوب *', `<input name="repName" required class="${INPUT_CLS}">`)}
-                    ${field('اسم الدخول *', `<input name="loginName" required dir="ltr" autocomplete="off" class="${INPUT_CLS}" placeholder="ahmed1">`, 'حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30)')}
+                    ${field('اسم الدخول *', `<input name="loginName" required dir="auto" autocomplete="off" class="${INPUT_CLS}" placeholder="ahmed1 أو أحمد">`, 'إنجليزي: حروف وأرقام و . _ - (3 لـ 30). عربي: حروف عربية (3 لـ 15)')}
                     ${field('الرقم السري *', `<input name="pin" type="password" inputmode="numeric" required autocomplete="new-password" dir="ltr" class="${INPUT_CLS}">`, '6 أرقام على الأقل')}
                     ${field('تأكيد الرقم السري *', `<input name="pin2" type="password" inputmode="numeric" required autocomplete="new-password" dir="ltr" class="${INPUT_CLS}">`)}
                     <div class="sm:col-span-2 flex justify-end"><button type="submit" class="${BTN_PRIMARY}"><i class="fa-solid fa-user-plus"></i><span>إضافة المندوب</span></button></div>
@@ -5555,14 +5555,14 @@
             const f = e.target;
             const submitBtn = f.querySelector('button[type=submit]');
             const name = String(f.elements.repName.value || '').trim();
-            const login = String(f.elements.loginName.value || '').trim().toLowerCase();
+            const login = repLoginNormalize(f.elements.loginName.value);
             const pin = String(f.elements.pin.value || '');
             const pin2 = String(f.elements.pin2.value || '');
             const email = loginAddressFor(login);
             if (!name) return toast('اكتب اسم المندوب', 'error');
             if (name.length > 100) return toast('الاسم طويل قوي', 'error');
             if (appData.custReps.some(r => r.name === name)) return toast('اسم المندوب ده موجود قبل كده', 'error');
-            if (!REP_LOGIN_RE.test(login)) return toast('اسم الدخول: حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30 حرف)', 'error');
+            if (!repLoginValid(login)) return toast('اسم الدخول: إنجليزي (حروف وأرقام و . _ - من 3 لـ 30) أو عربي (حروف عربية من 3 لـ 15)', 'error');
             if (appData.users.some(u => u.email === email)) return toast('اسم الدخول ده مستخدم قبل كده', 'error');
             if (!REP_PIN_RE.test(pin)) return toast('الرقم السري لازم يكون 6 أرقام على الأقل', 'error');
             if (pin !== pin2) return toast('الرقمين مش متطابقين', 'error');
@@ -5743,14 +5743,29 @@
         // A rep signs in with a login name (letters, digits, . _ -) and a PIN of 6+ digits.
         // The login name becomes an internal address on this domain; it is never shown as a real mailbox.
         const REP_EMAIL_DOMAIN = '@reps.factory-app.com';
-        const REP_LOGIN_RE = /^[a-z0-9._-]{3,30}$/i;
+        // login name: English (a-z 0-9 . _ -, 3 to 30) OR Arabic letters (3 to 15). Firebase only takes ASCII
+        // email addresses, so an Arabic name is turned into a fixed ASCII key: "ar-" + hex of its UTF-8 bytes.
+        // The same typed name always gives the same key, so the rep types the same Arabic text to sign in.
+        const REP_LOGIN_ASCII_RE = /^[a-z0-9._-]+$/i;
+        const REP_LOGIN_AR_RE = /^[\u0600-\u06FF\u0750-\u077F ]+$/;
+        function repLoginNormalize(v) { return String(v || '').trim().replace(/\s+/g, ' '); }
+        function repLoginValid(v) {
+            const t = repLoginNormalize(v);
+            if (REP_LOGIN_ASCII_RE.test(t)) return t.length >= 3 && t.length <= 30 && !/^ar-/i.test(t);
+            return REP_LOGIN_AR_RE.test(t) && t.length >= 3 && t.length <= 15;
+        }
+        function repLoginKey(v) {
+            const t = repLoginNormalize(v);
+            if (REP_LOGIN_ASCII_RE.test(t)) return t.toLowerCase();
+            return 'ar-' + encodeURIComponent(t).replace(/%/g, '').toLowerCase(); // hex of the UTF-8 bytes
+        }
         const REP_PIN_RE = /^\d{6,}$/;
         const REP_ROLE_ID = 'rep';
         function isRepRoleDef(r) { return !!r && (r.repRole === true || r.id === REP_ROLE_ID); }
         function repRoleDef() { return { id: REP_ROLE_ID, name: 'مندوب', locked: false, permissions: ['custorders.view'] }; }
         // the role is created the first time an admin opens the user form (older systems do not have it yet)
         function ensureRepRole() { if (appData && !appData.roles[REP_ROLE_ID]) appData.roles[REP_ROLE_ID] = repRoleDef(); }
-        function loginAddressFor(v) { const t = String(v || '').trim().toLowerCase(); return (!t || t.includes('@')) ? t : t + REP_EMAIL_DOMAIN; }
+        function loginAddressFor(v) { const t = String(v || '').trim(); if (!t) return ''; return t.includes('@') ? t.toLowerCase() : repLoginKey(t) + REP_EMAIL_DOMAIN; }
         // the rep this signed-in account is linked to ('' for everyone else)
         function currentRepId() { const u = currentUser(); return u && u.repId ? u.repId : ''; }
         // shows the rep dropdown and the login-name field only for the rep role; the normal email is off for reps
@@ -5790,7 +5805,7 @@
                     ${field('الدور *', `<select name="roleId" required ${isSelf ? 'disabled' : ''} onchange="onUserRoleChange(this.value)" class="${INPUT_CLS}">${roleOpts}</select>`)}
                     <div id="uRepBox" class="hidden space-y-3 rounded-xl border-2 border-brand-200 bg-brand-50/40 p-3">
                         ${field('المندوب *', `<select name="repId" class="${INPUT_CLS}"><option value="">— اختر المندوب —</option>${repOptsHtml}</select>`, 'الحساب ده هيشوف طلبيات المندوب ده بس')}
-                        ${user ? '' : field('اسم الدخول *', `<input name="loginName" dir="ltr" autocomplete="off" class="${INPUT_CLS}" placeholder="ahmed1">`, 'حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30 حرف)')}
+                        ${user ? '' : field('اسم الدخول *', `<input name="loginName" dir="auto" autocomplete="off" class="${INPUT_CLS}" placeholder="ahmed1 أو أحمد">`, 'إنجليزي: حروف وأرقام و . _ - (3 لـ 30). عربي: حروف عربية (3 لـ 15)')}
                     </div>
                     <label class="flex items-center gap-2 text-sm">
                         <input type="checkbox" name="active" ${!user || user.active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} class="w-4 h-4 accent-brand-600"> الحساب فعّال
@@ -5821,7 +5836,7 @@
                     if (roleId === REP_ROLE_ID) {
                         if (!repId || !appData.custReps.some(x => x.id === repId)) return toast('اختار المندوب من القايمة', 'error'), false;
                         if (appData.users.some(u => u.id !== userId && u.repId === repId)) return toast('المندوب ده مربوط بحساب دخول تاني', 'error'), false;
-                        if (!user && !REP_LOGIN_RE.test(String(fd.get('loginName') || '').trim())) return toast('اسم الدخول: حروف إنجليزية وأرقام و . _ - بس (من 3 لـ 30 حرف)', 'error'), false;
+                        if (!user && !repLoginValid(fd.get('loginName'))) return toast('اسم الدخول: إنجليزي (حروف وأرقام و . _ - من 3 لـ 30) أو عربي (حروف عربية من 3 لـ 15)', 'error'), false;
                         if (!user && !REP_PIN_RE.test(pw)) return toast('الرقم السري للمندوب لازم يكون 6 أرقام على الأقل', 'error'), false;
                     }
                     if (!user && pw.length < 6) return toast('كلمة المرور لازم تكون 6 أحرف على الأقل', 'error'), false;
@@ -6840,5 +6855,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c6737c49a1b24a',t:'MTc5NDk5OTQxMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c6737c49a1b24a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c686d66e6d9818',t:'MTc5NTAwMDIwNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c686d66e6d9818',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
