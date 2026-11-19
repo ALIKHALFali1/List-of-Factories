@@ -20,7 +20,7 @@
             theme: {
                 extend: {
                     colors: {
-                        brand: { 50: '#f0f7ff', 100: '#e0effe', 500: '#0284c7', 600: '#0284c7', 700: '#0369a1', 800: '#075985', 900: '#0c4a6e' }
+                        brand: { 50: 'rgb(var(--brand-50) / <alpha-value>)', 100: 'rgb(var(--brand-100) / <alpha-value>)', 500: 'rgb(var(--brand-500) / <alpha-value>)', 600: 'rgb(var(--brand-600) / <alpha-value>)', 700: 'rgb(var(--brand-700) / <alpha-value>)', 800: 'rgb(var(--brand-800) / <alpha-value>)', 900: 'rgb(var(--brand-900) / <alpha-value>)' }
                     },
                     fontFamily: { tajawal: ['Tajawal', 'sans-serif'] }
                 }
@@ -31,7 +31,16 @@
         /* fallback if the Tailwind CDN cannot load: keep hidden sections hidden */
         .hidden { display: none; }
         html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-        body { font-family: 'Tajawal', sans-serif; background-color: #f1f5f9; }
+        :root { --brand-50: 240 247 255; --brand-100: 224 239 254; --brand-500: 2 132 199; --brand-600: 2 132 199; --brand-700: 3 105 161; --brand-800: 7 89 133; --brand-900: 12 74 110; --accent: 201 169 97; --surface: 255 255 255; --page-bg: 241 245 249; --font-heading: 'Cairo', sans-serif; --font-body: 'Cairo', sans-serif; --font-scale: 1; }
+        html { font-size: calc(16px * var(--font-scale)); }
+        body { font-family: var(--font-body); background-color: rgb(var(--page-bg)); }
+        h1, h2, h3, #pageTitle { font-family: var(--font-heading); }
+        .bg-white { background-color: rgb(var(--surface)) !important; }
+        html[data-radius="sharp"] .rounded-2xl, html[data-radius="sharp"] .rounded-xl, html[data-radius="sharp"] .rounded-lg, html[data-radius="sharp"] .home-card, html[data-radius="sharp"] .home-hero { border-radius: 4px !important; }
+        html[data-radius="round"] .rounded-2xl, html[data-radius="round"] .home-card, html[data-radius="round"] .home-hero { border-radius: 28px !important; }
+        html[data-radius="round"] .rounded-xl { border-radius: 20px !important; }
+        html[data-shadow="flat"] .shadow, html[data-shadow="flat"] .shadow-sm, html[data-shadow="flat"] .shadow-md, html[data-shadow="flat"] .shadow-lg, html[data-shadow="flat"] .shadow-xl, html[data-shadow="flat"] .shadow-2xl, html[data-shadow="flat"] .home-card, html[data-shadow="flat"] .home-hero { box-shadow: none !important; }
+        html[data-shadow="strong"] .shadow-sm, html[data-shadow="strong"] .shadow, html[data-shadow="strong"] .shadow-lg { box-shadow: 0 12px 28px -10px rgba(15, 23, 42, .45) !important; }
         /* clearer, heavier text across the whole system (Tajawal has 500, 700 and 800 in the loaded request) */
         html, body { font-weight: 500; color: #0f172a; }
         .font-thin, .font-extralight, .font-light, .font-normal, .font-medium { font-weight: 500 !important; }
@@ -233,6 +242,7 @@
         const PERM_LABELS = Object.fromEntries(PERMISSION_GROUPS.flatMap(g => g.items));
 
         const ROUTES = {
+            home: { title: 'الرئيسية', icon: 'fa-house', perm: null },
             dashboard: { title: 'لوحة التحكم', icon: 'fa-gauge-high', perm: 'dashboard.view' },
             companies: { title: 'المصانع / الشركات', icon: 'fa-industry', perm: 'companies.view' },
             lists: { title: 'كل اللستات', icon: 'fa-file-invoice-dollar', perm: 'lists.view' },
@@ -243,7 +253,7 @@
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -360,7 +370,161 @@
             return n ? `${n}%` : '-';
         }
 
-        function fmtMoney(n) { return `${n.toFixed(2)} ج.م`; }
+        function fmtMoney(n) { return `${n.toFixed(themeState.decimals)} ${themeState.currency}`; }
+
+        // ============ THEME (saved on this device only: localStorage "factoryTheme") ============
+        const THEME_KEY = 'factoryTheme';
+        const THEME_FONTS = ['Cairo', 'Tajawal', 'Almarai', 'Changa', 'Amiri', 'Noto Naskh Arabic'];
+        const THEME_SIZES = { small: 0.92, medium: 1, large: 1.12 };
+        const THEME_PRESETS = {
+            blue:  { name: 'أزرق (الحالي)', primary: '#0284c7', accent: '#c9a961', surface: '#ffffff', page: '#f1f5f9' },
+            navy:  { name: 'كحلي وذهبي (كلاسيكي)', primary: '#1e3a5f', accent: '#c9a961', surface: '#fffdf7', page: '#f7f3ea' },
+            green: { name: 'أخضر مصنع', primary: '#15803d', accent: '#ca8a04', surface: '#ffffff', page: '#f1f5f1' }
+        };
+        const THEME_DEFAULT = { preset: 'blue', primary: '#0284c7', accent: '#c9a961', surface: '#ffffff', page: '#f1f5f9', headingFont: 'Cairo', bodyFont: 'Cairo', fontSize: 'medium', radius: 'normal', shadow: 'normal', digits: 'western', decimals: 2, currency: 'ج.م' };
+        let themeState = { ...THEME_DEFAULT };
+
+        // keeps only values this app understands; anything else is dropped
+        function themeClean(o) {
+            const out = {};
+            if (!o || typeof o !== 'object') return out;
+            const isHex = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+            for (const k of ['primary', 'accent', 'surface', 'page']) if (isHex(o[k])) out[k] = o[k].toLowerCase();
+            for (const k of ['headingFont', 'bodyFont']) if (THEME_FONTS.includes(o[k])) out[k] = o[k];
+            if (typeof o.fontSize === 'string' && Object.prototype.hasOwnProperty.call(THEME_SIZES, o.fontSize)) out.fontSize = o.fontSize;
+            if (['sharp', 'normal', 'round'].includes(o.radius)) out.radius = o.radius;
+            if (['flat', 'normal', 'strong'].includes(o.shadow)) out.shadow = o.shadow;
+            if (['western', 'arabic'].includes(o.digits)) out.digits = o.digits;
+            if (o.decimals === 0 || o.decimals === 2) out.decimals = o.decimals;
+            if (typeof o.currency === 'string' && o.currency.trim() && o.currency.trim().length <= 12) out.currency = o.currency.trim();
+            if (typeof o.preset === 'string' && (o.preset === 'custom' || Object.prototype.hasOwnProperty.call(THEME_PRESETS, o.preset))) out.preset = o.preset;
+            return out;
+        }
+        function themeLoad() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(THEME_KEY) || 'null');
+                themeState = { ...THEME_DEFAULT, ...themeClean(raw) };
+            } catch (e) { themeState = { ...THEME_DEFAULT }; }
+        }
+        function themeSave() { try { localStorage.setItem(THEME_KEY, JSON.stringify(themeState)); } catch (e) { /* storage blocked */ } }
+        const hexTriplet = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(' ');
+        // brand shades from one main colour: lighter for 50/100, darker for 700-900
+        function themeShades(hex) {
+            const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+            const mix = (t, target) => c.map(v => Math.round(v + (target - v) * t)).join(' ');
+            return { 50: mix(0.93, 255), 100: mix(0.85, 255), 500: mix(0, 0), 600: mix(0, 0), 700: mix(0.18, 0), 800: mix(0.35, 0), 900: mix(0.5, 0) };
+        }
+        function themeLoadFonts(names) {
+            const fams = [...new Set(names)].map(n => `family=${n.replace(/ /g, '+')}:wght@400;700`).join('&');
+            let link = document.getElementById('themeFonts');
+            if (!link) { link = document.createElement('link'); link.id = 'themeFonts'; link.rel = 'stylesheet'; document.head.appendChild(link); }
+            link.href = `https://fonts.googleapis.com/css2?${fams}&display=swap`;
+        }
+        function applyTheme() {
+            const t = themeState, root = document.documentElement;
+            const sh = themeShades(t.primary);
+            for (const k of Object.keys(sh)) root.style.setProperty('--brand-' + k, sh[k]);
+            root.style.setProperty('--accent', hexTriplet(t.accent));
+            root.style.setProperty('--surface', hexTriplet(t.surface));
+            root.style.setProperty('--page-bg', hexTriplet(t.page));
+            root.style.setProperty('--font-heading', `'${t.headingFont}', sans-serif`);
+            root.style.setProperty('--font-body', `'${t.bodyFont}', sans-serif`);
+            root.style.setProperty('--font-scale', String(THEME_SIZES[t.fontSize]));
+            root.dataset.radius = t.radius;
+            root.dataset.shadow = t.shadow;
+            themeLoadFonts([t.headingFont, t.bodyFont]);
+            if (document.body) applyDigitsTo(document.body, t.digits === 'arabic');
+        }
+        function themeSet(key, value) {
+            const patch = themeClean({ [key]: key === 'decimals' ? Number(value) : value });
+            if (!(key in patch)) return;
+            const colorKey = ['primary', 'accent', 'surface', 'page'].includes(key);
+            themeState = { ...themeState, ...patch, preset: colorKey ? 'custom' : themeState.preset };
+            themeSave(); applyTheme();
+            if (key === 'decimals' || key === 'currency') render();   // money text is built on render
+        }
+        function themePreset(name) {
+            const p = THEME_PRESETS[name];
+            if (!p) return;
+            themeState = { ...themeState, preset: name, primary: p.primary, accent: p.accent, surface: p.surface, page: p.page };
+            themeSave(); applyTheme(); render();
+        }
+        function themeReset() {
+            themeState = { ...THEME_DEFAULT };
+            try { localStorage.removeItem(THEME_KEY); } catch (e) { /* storage blocked */ }
+            applyTheme(); render();
+        }
+
+        // Arabic-Indic digits: converts the text on screen (inputs and attributes are not touched)
+        const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+        function convertDigits(str, toArabic) {
+            return toArabic ? str.replace(/[0-9]/g, d => AR_DIGITS[+d]) : str.replace(/[٠-٩]/g, d => String(AR_DIGITS.indexOf(d)));
+        }
+        function applyDigitsTo(root, toArabic) {
+            if (root.nodeType === 3) { const n = convertDigits(root.data, toArabic); if (n !== root.data) root.data = n; return; }
+            const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const list = [];
+            while (w.nextNode()) list.push(w.currentNode);
+            for (const tn of list) {
+                const p = tn.parentNode;
+                if (!p || ['SCRIPT', 'STYLE', 'TEXTAREA'].includes(p.nodeName)) continue;
+                const n = convertDigits(tn.data, toArabic);
+                if (n !== tn.data) tn.data = n;
+            }
+        }
+        let digitsObserver = null;
+        function startDigitsObserver() {
+            if (digitsObserver) return;
+            digitsObserver = new MutationObserver(muts => {
+                if (themeState.digits !== 'arabic') return;
+                for (const m of muts) for (const n of m.addedNodes) applyDigitsTo(n, true);
+            });
+            digitsObserver.observe(document.body, { childList: true, subtree: true });
+        }
+
+        // the theme section in الإعدادات
+        function themeSettingsHtml() {
+            const t = themeState;
+            const sel = (key, label, options, cur) => `<label class="block"><span class="block text-xs font-bold text-slate-700 mb-1">${label}</span>
+                <select onchange="themeSet('${key}', this.value)" class="${INPUT_CLS}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+            const color = (key, label, cur) => `<label class="block"><span class="block text-xs font-bold text-slate-700 mb-1">${label}</span>
+                <input type="color" value="${esc(cur)}" oninput="themeSet('${key}', this.value)" class="w-full h-10 rounded-lg border border-slate-300 bg-white cursor-pointer"></label>`;
+            const presets = Object.entries(THEME_PRESETS).map(([k, p]) => `<button type="button" onclick="themePreset('${k}')" class="px-3 py-2 rounded-lg border text-sm font-bold ${t.preset === k ? 'border-brand-600 bg-brand-50 text-brand-700' : 'border-slate-300 bg-white text-slate-700'}">${esc(p.name)}</button>`).join('');
+            const fontOpts = THEME_FONTS.map(f => [f, f]);
+            return `<section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm lg:col-span-2">
+                <h3 class="font-bold text-lg mb-1"><i class="fa-solid fa-palette text-brand-600"></i> المظهر والأرقام</h3>
+                <p class="text-xs text-slate-500 mb-4">الإعدادات دي على الجهاز ده بس، ومش بتأثر على باقي المستخدمين.</p>
+                <div class="flex flex-wrap gap-2 mb-4">${presets}</div>
+                <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    ${color('primary', 'اللون الأساسي', t.primary)}
+                    ${color('accent', 'اللون المميز', t.accent)}
+                    ${color('surface', 'لون الكروت', t.surface)}
+                    ${color('page', 'لون الخلفية', t.page)}
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mt-3">
+                    ${sel('headingFont', 'خط العناوين', fontOpts, t.headingFont)}
+                    ${sel('bodyFont', 'خط النص', fontOpts, t.bodyFont)}
+                    ${sel('fontSize', 'مقاس الخط', [['small', 'صغير'], ['medium', 'وسط'], ['large', 'كبير']], t.fontSize)}
+                    ${sel('radius', 'شكل الزوايا', [['sharp', 'حادة'], ['normal', 'عادية'], ['round', 'مستديرة']], t.radius)}
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mt-3">
+                    ${sel('shadow', 'الظلال', [['flat', 'بدون'], ['normal', 'عادية'], ['strong', 'قوية']], t.shadow)}
+                    ${sel('digits', 'شكل الأرقام', [['western', '123'], ['arabic', '١٢٣']], t.digits)}
+                    ${sel('decimals', 'الكسور العشرية للمبالغ', [[0, 'بدون'], [2, 'منزلتين']], t.decimals)}
+                    <label class="block"><span class="block text-xs font-bold text-slate-700 mb-1">رمز العملة</span>
+                        <input name="currency" maxlength="12" value="${esc(t.currency)}" onchange="themeSet('currency', this.value)" class="${INPUT_CLS}"></label>
+                </div>
+                <div class="mt-4 rounded-xl border border-slate-200 p-4" style="background: rgb(var(--page-bg))">
+                    <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                        <p style="font-family: var(--font-heading); color: rgb(var(--brand-800)); font-weight: 700; font-size: 1.25rem">معاينة: عنوان القسم</p>
+                        <p style="font-family: var(--font-body)" class="text-sm text-slate-700 mt-1">نص تجريبي: المبلغ ${esc(fmtMoney(1250.5))}</p>
+                        <button type="button" class="mt-3 px-4 py-2 rounded-lg text-white text-sm font-bold" style="background: rgb(var(--brand-600))">زرار</button>
+                        <span class="ms-2 px-3 py-1 rounded-full text-xs font-bold" style="background: rgb(var(--accent) / .25); color: rgb(var(--brand-800))">شارة مميزة</span>
+                    </div>
+                </div>
+                <div class="mt-4">${btn('themeReset()', 'رجوع للمظهر الأصلي', 'fa-rotate-left', BTN_SECONDARY)}</div>
+            </section>`;
+        }
 
         function initials(name) {
             return Array.from(String(name || '?').trim()).slice(0, 2).join('') || '?';
@@ -1282,8 +1446,8 @@
         function enterApp() {
             el('authScreen').classList.add('hidden');
             el('appShell').classList.remove('hidden');
-            // opening the app always starts on the companies page (or the first page the user may open)
-            const start = canAccessRoute('companies') ? 'companies' : (firstAllowedRoute() || 'dashboard');
+            // opening the app always starts on the home screen
+            const start = 'home';
             if (location.hash !== '#/' + start) location.hash = '#/' + start;
             render();
         }
@@ -2796,6 +2960,7 @@
         }
 
         function canAccessRoute(name) {
+            if (name === 'home') return true;
             if (name === 'settings') return can('settings.manage') || can('backup.manage');
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -3051,7 +3216,7 @@
         function parseRoute() {
             const h = location.hash.replace(/^#\/?/, '');
             const [name, ...rest] = h.split('/');
-            return { name: name || 'dashboard', param: rest.join('/') || null };
+            return { name: name || 'home', param: rest.join('/') || null };
         }
 
         function navigate(route) {
@@ -4940,6 +5105,7 @@
         const VIEWS = {
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
+            home: () => viewHome(),
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
             lists: () => viewLists(),
@@ -4977,6 +5143,58 @@
                 return { c, total, active, eff };
             }).sort((a, b) => b.total - a.total || a.c.name.localeCompare(b.c.name, 'ar'));
             return s;
+        }
+
+        // ============ HOME (landing screen): one big card per section this user may open ============
+        const HOME_DESC = {
+            dashboard: 'ملخص عام للمصنع والأرقام',
+            companies: 'المصانع والموردين وبياناتهم',
+            lists: 'كل اللستات والأسعار',
+            checks: 'الشيكات ومواعيد استحقاقها',
+            orders: 'طلبيات التوريد والتسليم',
+            customers: 'طلبيات العملاء والجدولة والتقارير',
+            users: 'المستخدمين والأدوار والمندوبين',
+            logs: 'سجل كل الأنشطة',
+            settings: 'إعدادات النظام والنسخ الاحتياطي'
+        };
+        function viewHome() {
+            const u = currentUser();
+            const cards = ROUTE_ORDER.filter(n => n !== 'home' && canAccessRoute(n)).map(n => {
+                const r = ROUTES[n];
+                return `<a href="#/${n}" class="home-card">
+                        <span class="home-card-icon"><i class="fa-solid ${r.icon}"></i></span>
+                        <span class="home-card-title">${esc(r.title)}</span>
+                        <span class="home-card-desc">${esc(HOME_DESC[n] || '')}</span>
+                    </a>`;
+            }).join('');
+            const style = `<style>
+                .home-hero { position: relative; background: linear-gradient(135deg, rgb(var(--surface)) 0%, rgb(var(--page-bg)) 100%); border: 1px solid rgb(var(--accent)); border-radius: 18px; padding: 22px 26px; box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 12px 24px -14px rgb(var(--brand-900) / .45); text-align: center; }
+                .home-hero::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .45); border-radius: 13px; pointer-events: none; }
+                .home-hero-greet { font-size: 14px; color: rgb(var(--brand-700)); }
+                .home-hero-name { font-family: var(--font-heading); font-weight: 700; font-size: 30px; color: rgb(var(--brand-800)); margin: 2px 0 6px; }
+                .home-hero-date { font-size: 14px; color: #475569; }
+                .home-rule { height: 2px; margin: 14px auto 0; width: 60%; background: linear-gradient(90deg, transparent, rgb(var(--accent)), transparent); }
+                .home-card { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; min-height: 176px; padding: 26px 18px 22px; background: rgb(var(--surface)); border: 1px solid rgb(var(--accent)); border-radius: 16px; box-shadow: 0 1px 0 rgb(var(--accent) / .3), 0 10px 20px -14px rgb(var(--brand-900) / .45); color: rgb(var(--brand-800)); text-decoration: none; transition: transform .2s ease, box-shadow .2s ease; }
+                .home-card::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .35); border-radius: 11px; pointer-events: none; }
+                .home-card:hover, .home-card:focus-visible { transform: translateY(-3px); box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 18px 30px -14px rgb(var(--brand-900) / .5); }
+                .home-card-icon { width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #fff; background: linear-gradient(145deg, rgb(var(--brand-600)), rgb(var(--brand-800))); box-shadow: 0 0 0 3px rgb(var(--surface)), 0 0 0 4px rgb(var(--accent)); }
+                .home-card-title { font-family: var(--font-heading); font-weight: 700; font-size: 21px; color: rgb(var(--brand-800)); }
+                .home-card-desc { font-size: 13px; line-height: 1.7; color: #475569; }
+            </style>`;
+            return {
+                title: 'الرئيسية',
+                html: `${style}<div class="space-y-6">
+                    <div class="home-hero">
+                        <p class="home-hero-greet">أهلاً بيك</p>
+                        <h2 class="home-hero-name">${esc(u ? u.name : '')}</h2>
+                        <p class="home-hero-date">${esc(fmtDateAr(todayISO()))}</p>
+                        <div class="home-rule"></div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+                        ${cards || '<p class="text-slate-600 font-bold text-center">مفيش أقسام متاحة لحسابك</p>'}
+                    </div>
+                </div>`
+            };
         }
 
         function viewDashboard() {
@@ -6003,7 +6221,7 @@
             return {
                 title: 'الإعدادات',
                 actions: '',
-                html: `<div class="grid gap-4 lg:grid-cols-2 items-start">${identity}${backup}${account}${logs}${danger}</div>`
+                html: `<div class="grid gap-4 lg:grid-cols-2 items-start">${identity}${themeSettingsHtml()}${backup}${account}${logs}${danger}</div>`
             };
         }
 
@@ -6799,6 +7017,7 @@
 
         // ============ INIT ============
         document.addEventListener('DOMContentLoaded', async () => {
+            themeLoad(); applyTheme(); startDigitsObserver();
             appData = normalizeData(defaultData());   // placeholder until the first sync
             window.addEventListener('hashchange', render);
 
@@ -6855,5 +7074,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5c686d66e6d9818',t:'MTc5NTAwMDIwNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5c686d66e6d9818',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5d08cf48c9ee1e4',t:'MTc5NTEwNTMxNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5d08cf48c9ee1e4',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
