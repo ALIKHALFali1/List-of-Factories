@@ -5157,6 +5157,115 @@
             logs: 'سجل كل الأنشطة',
             settings: 'إعدادات النظام والنسخ الاحتياطي'
         };
+        // ============ HOME: greeting card (time-of-day look, sun/moon arc, orders ticker) ============
+        const HOME_CFG_KEY = 'factoryHomeSettings';
+        const HOME_DEFAULT = { timeColors: true, sunArc: true, ticker: true, alertUndelivered: true, alertIncomplete: true, speed: 6 };
+        let homeCfg = { ...HOME_DEFAULT };
+        function homeCfgClean(o) {
+            const out = {};
+            if (!o || typeof o !== 'object') return out;
+            for (const k of ['timeColors', 'sunArc', 'ticker', 'alertUndelivered', 'alertIncomplete']) if (typeof o[k] === 'boolean') out[k] = o[k];
+            if ([4, 6, 10].includes(Number(o.speed))) out.speed = Number(o.speed);
+            return out;
+        }
+        function homeCfgLoad() {
+            try { homeCfg = { ...HOME_DEFAULT, ...homeCfgClean(JSON.parse(localStorage.getItem(HOME_CFG_KEY) || 'null')) }; }
+            catch (e) { homeCfg = { ...HOME_DEFAULT }; }
+        }
+        function homeSet(key, value) {
+            const patch = homeCfgClean({ [key]: key === 'speed' ? Number(value) : value });
+            if (!(key in patch)) return;
+            homeCfg = { ...homeCfg, ...patch };
+            try { localStorage.setItem(HOME_CFG_KEY, JSON.stringify(homeCfg)); } catch (e) { /* storage blocked */ }
+            render();
+        }
+
+        // 06:00-10:59 morning, 11:00-15:59 day, 16:00-18:59 dusk, 19:00-04:59 night
+        function homePeriod(hour) {
+            if (hour >= 5 && hour <= 10) return 'morning';
+            if (hour >= 11 && hour <= 15) return 'day';
+            if (hour >= 16 && hour <= 18) return 'dusk';
+            return 'night';
+        }
+        // the sun rises at 06:00 and sets at 18:00 on an arc; the moon follows the same arc at night
+        function homeSkyPos(date = new Date()) {
+            const m = date.getHours() * 60 + date.getMinutes();
+            const day = m >= 360 && m < 1080;
+            const t = Math.min(1, Math.max(0, day ? (m - 360) / 720 : ((m >= 1080 ? m - 1080 : m + 1440 - 1080) / 720)));
+            const lift = Math.sin(Math.PI * t);
+            // the sun goes from the right edge (sunrise) to the left edge (sunset); the moon starts where the sun set
+            return { icon: day ? 'fa-sun' : 'fa-moon', right: day ? 6 + 88 * t : 94 - 88 * t, top: 34 - lift * 26 };
+        }
+        function placeSun(el, pos) {
+            el.style.right = pos.right + '%';
+            el.style.top = pos.top + 'px';
+            el.innerHTML = `<i class="fa-solid ${pos.icon}"></i>`;
+        }
+
+        // orders that need a follow-up: not delivered, and/or incomplete (only the orders this user can see)
+        function homeAlertItems() {
+            const out = [];
+            for (const c of appData.custOrders) {
+                const reasons = [];
+                if (homeCfg.alertUndelivered && c.delivery === 'لم تُسلم') reasons.push('لم تُسلم');
+                if (homeCfg.alertIncomplete && c.completeness === 'ناقصة') reasons.push('ناقصة');
+                if (reasons.length) out.push({ id: c.id, no: Number(c.no) || 0, text: `${reasons.join(' · ')} — رقم الفاتورة ${custNoLabel(c)} — ${c.customer || ''}` });
+            }
+            return out.sort((x, y) => y.no - x.no);
+        }
+        let homeTickerIdx = 0;
+        const homeTickerItemHtml = (it, i, n) => `<button type="button" class="home-ticker-item" onclick="openCustDetail('${esc(it.id)}')">
+                <span class="home-ticker-count">${i + 1} / ${n}</span><span class="home-ticker-text">${esc(it.text)}</span></button>`;
+        function homeTickerHtml() {
+            if (!homeCfg.ticker || !canCust('view')) return '';
+            const items = homeAlertItems();
+            const body = items.length
+                ? homeTickerItemHtml(items[homeTickerIdx % items.length], homeTickerIdx % items.length, items.length)
+                : '<span class="home-ticker-ok"><i class="fa-solid fa-circle-check"></i> كل الطلبيات متسلمة ومكتملة</span>';
+            return `<div class="home-ticker"><span class="home-ticker-title"><i class="fa-solid fa-bell"></i> تنبيه للمتابعة</span>
+                <div id="homeTickerBox" class="home-ticker-box">${body}</div></div>`;
+        }
+        let homeTimer = null, homeSecs = 0;
+        function homeStartTicker() {
+            clearInterval(homeTimer);
+            homeSecs = 0;
+            homeTimer = setInterval(homeTick, 1000);
+        }
+        function homeTick() {
+            if (!document.querySelector('.home-hero') || parseRoute().name !== 'home') { clearInterval(homeTimer); homeTimer = null; return; }
+            homeSecs++;
+            if (homeSecs % 60 === 0) { const sun = document.getElementById('homeSun'); if (sun) placeSun(sun, homeSkyPos()); }
+            if (homeSecs % homeCfg.speed === 0) homeNextAlert();
+        }
+        function homeNextAlert() {
+            const box = document.getElementById('homeTickerBox');
+            const items = homeAlertItems();
+            if (!box || !items.length) return;
+            homeTickerIdx = (homeTickerIdx + 1) % items.length;
+            const show = () => { box.innerHTML = homeTickerItemHtml(items[homeTickerIdx], homeTickerIdx, items.length); };
+            if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { show(); return; }
+            box.classList.add('is-out');
+            setTimeout(() => { show(); box.classList.remove('is-out'); }, 400);
+        }
+
+        function homeSettingsHtml() {
+            const c = homeCfg;
+            const chk = (key, label) => `<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" class="w-4 h-4" ${c[key] ? 'checked' : ''} onchange="homeSet('${key}', this.checked)"> ${label}</label>`;
+            return `<section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                <h3 class="font-bold text-lg mb-1"><i class="fa-solid fa-house text-brand-600"></i> الشاشة الرئيسية</h3>
+                <p class="text-xs text-slate-500 mb-4">الإعدادات دي على الجهاز ده بس.</p>
+                <div class="grid gap-3">
+                    ${chk('timeColors', 'الكرت يتلون حسب وقت اليوم')}
+                    ${chk('sunArc', 'الشمس والقمر يتحركوا على القوس')}
+                    ${chk('ticker', 'شريط تنبيهات الطلبيات')}
+                    ${chk('alertUndelivered', 'تنبيه: طلبيات لم تُسلم')}
+                    ${chk('alertIncomplete', 'تنبيه: طلبيات ناقصة')}
+                    <label class="block"><span class="block text-xs font-bold text-slate-700 mb-1">سرعة تبديل التنبيهات</span>
+                        <select onchange="homeSet('speed', this.value)" class="${INPUT_CLS}">${[[4, '4 ثواني'], [6, '6 ثواني'], [10, '10 ثواني']].map(([v, l]) => `<option value="${v}" ${c.speed === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+                </div>
+            </section>`;
+        }
+
         function viewHome() {
             const u = currentUser();
             const cards = ROUTE_ORDER.filter(n => n !== 'home' && canAccessRoute(n)).map(n => {
@@ -5167,28 +5276,54 @@
                         <span class="home-card-desc">${esc(HOME_DESC[n] || '')}</span>
                     </a>`;
             }).join('');
+            const period = homeCfg.timeColors ? homePeriod(new Date().getHours()) : '';
+            const sky = homeCfg.sunArc ? homeSkyPos() : null;
             const style = `<style>
-                .home-hero { position: relative; background: linear-gradient(135deg, rgb(var(--surface)) 0%, rgb(var(--page-bg)) 100%); border: 1px solid rgb(var(--accent)); border-radius: 18px; padding: 22px 26px; box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 12px 24px -14px rgb(var(--brand-900) / .45); text-align: center; }
-                .home-hero::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .45); border-radius: 13px; pointer-events: none; }
-                .home-hero-greet { font-size: 14px; color: rgb(var(--brand-700)); }
-                .home-hero-name { font-family: var(--font-heading); font-weight: 700; font-size: 30px; color: rgb(var(--brand-800)); margin: 2px 0 6px; }
-                .home-hero-date { font-size: 14px; color: #475569; }
-                .home-rule { height: 2px; margin: 14px auto 0; width: 60%; background: linear-gradient(90deg, transparent, rgb(var(--accent)), transparent); }
+                .home-hero { position: relative; overflow: hidden; border-radius: 18px; padding: 46px 20px 14px; text-align: center; background: linear-gradient(135deg, rgb(var(--surface)) 0%, rgb(var(--page-bg)) 100%); border: 1px solid rgb(var(--accent)); box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 10px 22px -14px rgb(var(--brand-900) / .45); --hero-ink: rgb(var(--brand-800)); --hero-sub: #475569; color: var(--hero-ink); }
+                .home-hero::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .35); border-radius: 13px; pointer-events: none; }
+                .home-hero[data-period="morning"] { background: linear-gradient(135deg, #fff8e6, #f5dd9a); --hero-ink: #6b4e0a; --hero-sub: #7c5e12; }
+                .home-hero[data-period="day"] { background: linear-gradient(135deg, #f0f9ff, #bae6fd); --hero-ink: #0c4a6e; --hero-sub: #075985; }
+                .home-hero[data-period="dusk"] { background: linear-gradient(135deg, #ffedd5, #e9d5ff 60%, #c4b5fd); --hero-ink: #4c1d95; --hero-sub: #5b21b6; }
+                .home-hero[data-period="night"] { background: linear-gradient(160deg, #0b1220, #1e3a5f); --hero-ink: #f8fafc; --hero-sub: #cbd5e1; border-color: rgb(var(--accent) / .6); }
+                .home-hero-body { position: relative; z-index: 1; }
+                .home-pill { display: inline-block; padding: 3px 14px; border-radius: 999px; border: 1px solid rgb(var(--accent)); background: rgb(var(--accent) / .18); color: var(--hero-ink); font-size: 12px; font-weight: 700; }
+                .home-hero-name { font-family: var(--font-heading); font-weight: 700; font-size: 22px; color: var(--hero-ink); margin: 6px 0 2px; }
+                .home-hero-date { font-size: 12px; color: var(--hero-sub); }
+                .home-rule { height: 2px; margin: 10px auto 0; width: 50%; background: linear-gradient(90deg, transparent, rgb(var(--accent)), transparent); }
+                .home-sun { position: absolute; z-index: 0; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #b45309; background: radial-gradient(circle, #fff7cc 0%, #fbbf24 60%, rgba(251, 191, 36, .3) 100%); box-shadow: 0 0 18px 4px rgba(251, 191, 36, .45); transition: right 1.2s ease, top 1.2s ease; pointer-events: none; }
+                .home-hero[data-period="night"] .home-sun { color: #334155; background: radial-gradient(circle at 35% 35%, #ffffff, #cbd5e1 70%); box-shadow: 0 0 14px 2px rgba(226, 232, 240, .35); }
+                .home-stars { position: absolute; inset: 0; z-index: 0; background-image: radial-gradient(1.5px 1.5px at 12% 22%, #fff, transparent), radial-gradient(1px 1px at 30% 70%, #fff, transparent), radial-gradient(1.5px 1.5px at 70% 30%, #fff, transparent), radial-gradient(1px 1px at 88% 65%, #fff, transparent), radial-gradient(1px 1px at 52% 85%, #fff, transparent); animation: homeTwinkle 3s ease-in-out infinite alternate; }
+                @keyframes homeTwinkle { from { opacity: .35; } to { opacity: 1; } }
+                .home-ticker { margin-top: 12px; padding: 8px 12px; border-radius: 12px; background: rgba(255, 255, 255, .55); border: 1px dashed rgb(var(--accent)); }
+                .home-hero[data-period="night"] .home-ticker { background: rgba(255, 255, 255, .08); }
+                .home-ticker-title { display: block; font-size: 11px; font-weight: 700; color: var(--hero-sub); margin-bottom: 4px; }
+                .home-ticker-box { min-height: 28px; transition: opacity .4s ease, transform .4s ease; }
+                .home-ticker-box.is-out { opacity: 0; transform: translateY(6px); }
+                .home-ticker-item { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; background: none; border: 0; color: var(--hero-ink); font-size: 14px; font-weight: 700; cursor: pointer; padding: 2px; }
+                .home-ticker-count { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgb(var(--brand-600)); color: #fff; direction: ltr; }
+                .home-ticker-ok { font-size: 13px; color: var(--hero-ink); font-weight: 700; }
                 .home-card { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; min-height: 176px; padding: 26px 18px 22px; background: rgb(var(--surface)); border: 1px solid rgb(var(--accent)); border-radius: 16px; box-shadow: 0 1px 0 rgb(var(--accent) / .3), 0 10px 20px -14px rgb(var(--brand-900) / .45); color: rgb(var(--brand-800)); text-decoration: none; transition: transform .2s ease, box-shadow .2s ease; }
                 .home-card::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .35); border-radius: 11px; pointer-events: none; }
                 .home-card:hover, .home-card:focus-visible { transform: translateY(-3px); box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 18px 30px -14px rgb(var(--brand-900) / .5); }
                 .home-card-icon { width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #fff; background: linear-gradient(145deg, rgb(var(--brand-600)), rgb(var(--brand-800))); box-shadow: 0 0 0 3px rgb(var(--surface)), 0 0 0 4px rgb(var(--accent)); }
                 .home-card-title { font-family: var(--font-heading); font-weight: 700; font-size: 21px; color: rgb(var(--brand-800)); }
                 .home-card-desc { font-size: 13px; line-height: 1.7; color: #475569; }
+                @media (prefers-reduced-motion: reduce) { .home-sun, .home-ticker-box, .home-stars { transition: none !important; animation: none !important; } }
             </style>`;
             return {
                 title: 'الرئيسية',
+                after: homeStartTicker,
                 html: `${style}<div class="space-y-6">
-                    <div class="home-hero">
-                        <p class="home-hero-greet">أهلاً بيك</p>
-                        <h2 class="home-hero-name">${esc(u ? u.name : '')}</h2>
-                        <p class="home-hero-date">${esc(fmtDateAr(todayISO()))}</p>
-                        <div class="home-rule"></div>
+                    <div class="home-hero" ${period ? `data-period="${period}"` : ''}>
+                        ${period === 'night' ? '<div class="home-stars"></div>' : ''}
+                        ${sky ? `<span id="homeSun" class="home-sun" style="right:${sky.right}%; top:${sky.top}px"><i class="fa-solid ${sky.icon}"></i></span>` : ''}
+                        <div class="home-hero-body">
+                            <span class="home-pill">أهلاً بيك</span>
+                            <h2 class="home-hero-name">${esc(u ? u.name : '')}</h2>
+                            <p class="home-hero-date">${esc(fmtDateAr(todayISO()))}</p>
+                            ${homeTickerHtml()}
+                            <div class="home-rule"></div>
+                        </div>
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
                         ${cards || '<p class="text-slate-600 font-bold text-center">مفيش أقسام متاحة لحسابك</p>'}
@@ -6221,7 +6356,7 @@
             return {
                 title: 'الإعدادات',
                 actions: '',
-                html: `<div class="grid gap-4 lg:grid-cols-2 items-start">${identity}${themeSettingsHtml()}${backup}${account}${logs}${danger}</div>`
+                html: `<div class="grid gap-4 lg:grid-cols-2 items-start">${identity}${themeSettingsHtml()}${homeSettingsHtml()}${backup}${account}${logs}${danger}</div>`
             };
         }
 
@@ -7017,7 +7152,7 @@
 
         // ============ INIT ============
         document.addEventListener('DOMContentLoaded', async () => {
-            themeLoad(); applyTheme(); startDigitsObserver();
+            themeLoad(); applyTheme(); startDigitsObserver(); homeCfgLoad();
             appData = normalizeData(defaultData());   // placeholder until the first sync
             window.addEventListener('hashchange', render);
 
@@ -7074,5 +7209,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5d08cf48c9ee1e4',t:'MTc5NTEwNTMxNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5d08cf48c9ee1e4',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5d0b8500cc6e15d',t:'MTc5NTEwNzA4OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5d0b8500cc6e15d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
