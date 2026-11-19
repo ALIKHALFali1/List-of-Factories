@@ -5112,7 +5112,7 @@
             checks: param => viewChecks(param),
             users: () => viewUsers(),
             logs: () => viewLogs(),
-            settings: () => viewSettings()
+            settings: param => viewSettings(param)
         };
 
         function btn(onclick, label, icon, cls = BTN_PRIMARY) {
@@ -5159,12 +5159,12 @@
         };
         // ============ HOME: greeting card (time-of-day look, sun/moon arc, orders ticker) ============
         const HOME_CFG_KEY = 'factoryHomeSettings';
-        const HOME_DEFAULT = { timeColors: true, sunArc: true, ticker: true, alertUndelivered: true, alertIncomplete: true, speed: 6 };
+        const HOME_DEFAULT = { timeColors: true, sunArc: true, ticker: true, alertUndelivered: true, alertIncomplete: true, alertLists: true, alertLogs: true, alertUsers: true, soundOn: false, vibrateOn: false, speed: 6 };
         let homeCfg = { ...HOME_DEFAULT };
         function homeCfgClean(o) {
             const out = {};
             if (!o || typeof o !== 'object') return out;
-            for (const k of ['timeColors', 'sunArc', 'ticker', 'alertUndelivered', 'alertIncomplete']) if (typeof o[k] === 'boolean') out[k] = o[k];
+            for (const k of Object.keys(HOME_DEFAULT)) if (k !== 'speed' && typeof o[k] === 'boolean') out[k] = o[k];
             if ([4, 6, 10].includes(Number(o.speed))) out.speed = Number(o.speed);
             return out;
         }
@@ -5202,50 +5202,124 @@
             el.innerHTML = `<i class="fa-solid ${pos.icon}"></i>`;
         }
 
-        // orders that need a follow-up: not delivered, and/or incomplete (only the orders this user can see)
-        function homeAlertItems() {
+        // every alert this user may see: customer orders, lists, system (deletes), and users (reps)
+        const DAY_MS = 864e5;
+        function homeAlerts() {
             const out = [];
-            for (const c of appData.custOrders) {
-                const reasons = [];
-                if (homeCfg.alertUndelivered && c.delivery === 'لم تُسلم') reasons.push('لم تُسلم');
-                if (homeCfg.alertIncomplete && c.completeness === 'ناقصة') reasons.push('ناقصة');
-                if (reasons.length) out.push({ id: c.id, no: Number(c.no) || 0, text: `${reasons.join(' · ')} — رقم الفاتورة ${custNoLabel(c)} — ${c.customer || ''}` });
+            const now = Date.now();
+            if (canCust('view')) {
+                for (const c of appData.custOrders) {
+                    const reasons = [];
+                    if (homeCfg.alertUndelivered && c.delivery === 'لم تُسلم') reasons.push('لم تُسلم');
+                    if (homeCfg.alertIncomplete && c.completeness === 'ناقصة') reasons.push('ناقصة');
+                    if (reasons.length) out.push({ id: 'cust:' + c.id, open: c.id, no: Number(c.no) || 0, type: 'طلبيات', prio: 2, route: 'customers', text: `${reasons.join(' · ')} — رقم الفاتورة ${custNoLabel(c)} — ${c.customer || ''}` });
+                }
+                out.sort((x, y) => (x.prio - y.prio) || (y.no - x.no));
             }
-            return out.sort((x, y) => y.no - x.no);
+            if (homeCfg.alertLists && canAccessRoute('lists')) {
+                for (const co of appData.companies) for (const l of co.lists) {
+                    const st = listState(l);
+                    if (st.expiring) {
+                        const when = st.days <= 0 ? 'النهارده' : `خلال ${st.days} يوم`;
+                        out.push({ id: 'list:' + l.id + ':exp', type: 'لستات', prio: st.days !== null && st.days <= 7 ? 1 : 2, route: 'lists', text: `لستة "${l.name}" (${co.name}) تنتهي ${when}` });
+                    } else if (st.active && !numOr0(l.discount1) && !numOr0(l.discount2) && !numOr0(l.discount3) && !l.hasPdf) {
+                        out.push({ id: 'list:' + l.id + ':empty', type: 'لستات', prio: 3, route: 'lists', text: `لستة "${l.name}" (${co.name}) مفيهاش خصومات ولا ملف` });
+                    }
+                }
+            }
+            if (homeCfg.alertLogs && canAccessRoute('logs')) {
+                const recent = appData.logs.filter(l => String(l.action || '').startsWith('حذف') && now - Date.parse(l.t) < 10 * 60000);
+                if (recent.length >= 5) out.push({ id: 'logs:bulk:' + recent.length, type: 'تنبيه نظام', prio: 1, route: 'logs', text: `${recent.length} عمليات حذف في آخر ١٠ دقايق — آخر واحدة من ${recent[0].user || '—'}` });
+            }
+            if (homeCfg.alertUsers && canAccessRoute('users')) {
+                for (const u of appData.users) {
+                    if (!u.repId) continue;
+                    const last = Date.parse(u.lastLoginAt || u.createdAt || '');
+                    if (last && now - last > 30 * DAY_MS) out.push({ id: 'user:' + u.id + ':idle', type: 'مستخدمين', prio: 2, route: 'users', text: `المندوب ${u.name} مدخلش النظام من ٣٠ يوم` });
+                }
+                const linked = new Set(appData.users.map(u => u.repId).filter(Boolean));
+                for (const r of appData.custReps) if (!linked.has(r.id)) out.push({ id: 'rep:' + r.id + ':nologin', type: 'مستخدمين', prio: 2, route: 'users', text: `المندوب ${r.name} مالوش حساب دخول` });
+            }
+            return out.sort((x, y) => x.prio - y.prio);
         }
-        let homeTickerIdx = 0;
-        const homeTickerItemHtml = (it, i, n) => `<button type="button" class="home-ticker-item" onclick="openCustDetail('${esc(it.id)}')">
-                <span class="home-ticker-count">${i + 1} / ${n}</span><span class="home-ticker-text">${esc(it.text)}</span></button>`;
+        const homeAlertItems = homeAlerts;   // older name, same list
+        let homeTickerIdx = 0, homePaused = false, homeTouchX = null, homeSeen = null, homeAudio = null;
+        const HOME_PRIO_CLS = { 1: 'home-ticker-p1', 2: 'home-ticker-p2', 3: 'home-ticker-p3' };
+        const homeTickerItemHtml = (it, i, n) => `<button type="button" class="home-ticker-item ${HOME_PRIO_CLS[it.prio] || ''}" onclick="${it.open ? `openCustDetail('${esc(it.open)}')` : `navigate('${esc(it.route)}')`}">
+                <span class="home-ticker-count">${i + 1} / ${n}</span><span class="home-ticker-chip">${esc(it.type)}</span><span class="home-ticker-text">${esc(it.text)}</span></button>`;
+        function homeCanSeeAlerts() { return canCust('view') || canAccessRoute('lists') || canAccessRoute('logs') || canAccessRoute('users'); }
         function homeTickerHtml() {
-            if (!homeCfg.ticker || !canCust('view')) return '';
-            const items = homeAlertItems();
+            if (!homeCfg.ticker || !homeCanSeeAlerts()) return '';
+            const items = homeAlerts();
             const body = items.length
                 ? homeTickerItemHtml(items[homeTickerIdx % items.length], homeTickerIdx % items.length, items.length)
-                : '<span class="home-ticker-ok"><i class="fa-solid fa-circle-check"></i> كل الطلبيات متسلمة ومكتملة</span>';
-            return `<div class="home-ticker"><span class="home-ticker-title"><i class="fa-solid fa-bell"></i> تنبيه للمتابعة</span>
+                : '<span class="home-ticker-ok"><i class="fa-solid fa-circle-check"></i> كل حاجة تمام، مفيش تنبيهات دلوقتي</span>';
+            const nav = items.length > 1 ? `<span class="home-ticker-nav">
+                    <button type="button" onclick="homeGo(-1)" aria-label="التنبيه اللي قبله"><i class="fa-solid fa-arrow-right"></i></button>
+                    <button type="button" onclick="homeGo(1)" aria-label="التنبيه اللي بعده"><i class="fa-solid fa-arrow-left"></i></button></span>` : '';
+            return `<div class="home-ticker" onmouseenter="homePause(true)" onmouseleave="homePause(false)" ontouchstart="homeTouchStart(event)" ontouchend="homeTouchEnd(event)">
+                <div class="home-ticker-head"><span class="home-ticker-title"><i class="fa-solid fa-bell"></i> تنبيهات للمتابعة</span>${nav}</div>
                 <div id="homeTickerBox" class="home-ticker-box">${body}</div></div>`;
         }
+        // swipe left/right or use the arrows; the ticker pauses while the pointer or finger is on it
+        function homePause(on) { homePaused = !!on; }
+        function homeTouchStart(e) { homePaused = true; homeTouchX = e.touches[0].clientX; }
+        function homeTouchEnd(e) {
+            const x = e.changedTouches[0].clientX;
+            const dx = x - (homeTouchX === null ? x : homeTouchX);
+            homeTouchX = null;
+            if (Math.abs(dx) > 40) homeGo(dx < 0 ? 1 : -1);
+            homePaused = false;
+        }
+        function homeGo(delta) {
+            const items = homeAlerts();
+            if (!items.length) return;
+            homeTickerIdx = ((homeTickerIdx + delta) % items.length + items.length) % items.length;
+            const box = document.getElementById('homeTickerBox');
+            if (!box) return;
+            const show = () => { box.innerHTML = homeTickerItemHtml(items[homeTickerIdx], homeTickerIdx, items.length); };
+            if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { show(); return; }
+            box.classList.add('is-out');
+            setTimeout(() => { show(); box.classList.remove('is-out'); }, 300);
+        }
+        // new alerts: a short sound and/or vibration (both off by default; set in الإعدادات)
+        function homeBeep() {
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                const ctx = homeAudio || (homeAudio = new AC());
+                const o = ctx.createOscillator(), g = ctx.createGain();
+                o.frequency.value = 880;
+                g.gain.setValueAtTime(0.0001, ctx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+                o.connect(g); g.connect(ctx.destination);
+                o.start(); o.stop(ctx.currentTime + 0.4);
+            } catch (e) { /* audio blocked by the browser */ }
+        }
+        function homeCheckNew() {
+            const ids = homeAlerts().map(it => it.id);
+            if (homeSeen === null) { homeSeen = new Set(ids); return; }   // first look: nothing is "new" yet
+            const fresh = ids.filter(id => !homeSeen.has(id));
+            ids.forEach(id => homeSeen.add(id));
+            if (!fresh.length) return;
+            if (homeCfg.soundOn) homeBeep();
+            if (homeCfg.vibrateOn && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) { /* not supported */ } }
+        }
+
         let homeTimer = null, homeSecs = 0;
         function homeStartTicker() {
             clearInterval(homeTimer);
             homeSecs = 0;
+            homeCheckNew();
             homeTimer = setInterval(homeTick, 1000);
         }
         function homeTick() {
             if (!document.querySelector('.home-hero') || parseRoute().name !== 'home') { clearInterval(homeTimer); homeTimer = null; return; }
             homeSecs++;
             if (homeSecs % 60 === 0) { const sun = document.getElementById('homeSun'); if (sun) placeSun(sun, homeSkyPos()); }
-            if (homeSecs % homeCfg.speed === 0) homeNextAlert();
-        }
-        function homeNextAlert() {
-            const box = document.getElementById('homeTickerBox');
-            const items = homeAlertItems();
-            if (!box || !items.length) return;
-            homeTickerIdx = (homeTickerIdx + 1) % items.length;
-            const show = () => { box.innerHTML = homeTickerItemHtml(items[homeTickerIdx], homeTickerIdx, items.length); };
-            if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { show(); return; }
-            box.classList.add('is-out');
-            setTimeout(() => { show(); box.classList.remove('is-out'); }, 400);
+            if (homeSecs % 5 === 0) homeCheckNew();
+            if (!homePaused && homeSecs % homeCfg.speed === 0) homeGo(1);
         }
 
         function homeSettingsHtml() {
@@ -5257,10 +5331,17 @@
                 <div class="grid gap-3">
                     ${chk('timeColors', 'الكرت يتلون حسب وقت اليوم')}
                     ${chk('sunArc', 'الشمس والقمر يتحركوا على القوس')}
-                    ${chk('ticker', 'شريط تنبيهات الطلبيات')}
-                    ${chk('alertUndelivered', 'تنبيه: طلبيات لم تُسلم')}
-                    ${chk('alertIncomplete', 'تنبيه: طلبيات ناقصة')}
-                    <label class="block"><span class="block text-xs font-bold text-slate-700 mb-1">سرعة تبديل التنبيهات</span>
+                    ${chk('ticker', 'شريط التنبيهات')}
+                    <p class="text-xs font-bold text-slate-600 mt-2">أنواع التنبيهات</p>
+                    ${chk('alertUndelivered', 'طلبيات لم تُسلم')}
+                    ${chk('alertIncomplete', 'طلبيات ناقصة')}
+                    ${chk('alertLists', 'لستات قربت تنتهي أو مفيهاش خصومات (حسب صلاحيتك)')}
+                    ${chk('alertLogs', 'حذف كتير في سجل النشاط (للأدمن)')}
+                    ${chk('alertUsers', 'مندوب مدخلش من ٣٠ يوم أو مالوش حساب (للأدمن)')}
+                    <p class="text-xs font-bold text-slate-600 mt-2">لما يظهر تنبيه جديد</p>
+                    ${chk('soundOn', 'صوت قصير')}
+                    ${chk('vibrateOn', 'اهتزاز (على الموبايل)')}
+                    <label class="block mt-1"><span class="block text-xs font-bold text-slate-700 mb-1">سرعة تبديل التنبيهات</span>
                         <select onchange="homeSet('speed', this.value)" class="${INPUT_CLS}">${[[4, '4 ثواني'], [6, '6 ثواني'], [10, '10 ثواني']].map(([v, l]) => `<option value="${v}" ${c.speed === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
                 </div>
             </section>`;
@@ -5308,6 +5389,15 @@
                 .home-card-icon { width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #fff; background: linear-gradient(145deg, rgb(var(--brand-600)), rgb(var(--brand-800))); box-shadow: 0 0 0 3px rgb(var(--surface)), 0 0 0 4px rgb(var(--accent)); }
                 .home-card-title { font-family: var(--font-heading); font-weight: 700; font-size: 21px; color: rgb(var(--brand-800)); }
                 .home-card-desc { font-size: 13px; line-height: 1.7; color: #475569; }
+                .home-ticker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+                .home-ticker-nav { display: inline-flex; gap: 10px; }
+                .home-ticker-nav button { background: transparent; border: 0; padding: 2px 4px; color: var(--hero-ink); cursor: pointer; font-size: 15px; line-height: 1; }
+                .home-ticker-nav button:hover { opacity: .7; }
+                .home-ticker-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgb(var(--accent) / .25); color: var(--hero-ink); white-space: nowrap; }
+                .home-ticker-p1 .home-ticker-count { background: #dc2626; }
+                .home-ticker-p2 .home-ticker-count { background: #d97706; }
+                .home-ticker-p3 .home-ticker-count { background: #64748b; }
+                .home-ticker-item { flex-wrap: wrap; }
                 @media (prefers-reduced-motion: reduce) { .home-sun, .home-ticker-box, .home-stars { transition: none !important; animation: none !important; } }
             </style>`;
             return {
@@ -6293,15 +6383,14 @@
         }
 
         // ---------- Settings ----------
-        function viewSettings() {
+        // ---- الإعدادات: قايمة أقسام، كل قسم في صفحته ----
+        const SETTINGS_CARD_BTN = 'px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium flex items-center gap-2';
+        function settingsIdentityHtml() {
             const s = appData.settings;
-            const canSys = can('settings.manage');
-            const canBackup = can('backup.manage');
             const logo = s.logo
                 ? `<img id="sysLogoPreview" src="${esc(s.logo)}" class="w-20 h-20 rounded-xl object-contain bg-white border border-slate-200">`
                 : `<img id="sysLogoPreview" class="hidden w-20 h-20 rounded-xl object-contain bg-white border border-slate-200">`;
-
-            const identity = canSys ? `
+            return `
                 <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
                     <h3 class="font-bold text-lg mb-1">هوية النظام</h3>
                     <p class="text-xs text-slate-500 mb-4">الاسم والشعار اللي بيظهروا في الشريط الجانبي وشاشة الدخول.</p>
@@ -6320,9 +6409,10 @@
                         ${field('مدة تنبيه انتهاء اللستات (بالأيام)', `<input name="expiryDays" type="number" min="1" max="365" required value="${s.expiryDays}" class="${INPUT_CLS} max-w-[12rem]">`)}
                         <div class="flex justify-end"><button type="submit" class="${BTN_PRIMARY}"><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>
                     </form>
-                </section>` : '';
-
-            const backup = canBackup ? `
+                </section>`;
+        }
+        function settingsBackupHtml() {
+            return `
                 <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
                     <h3 class="font-bold text-lg mb-1">النسخ الاحتياطي</h3>
                     <p class="text-xs text-slate-500 mb-4">النسخة بتشمل الشركات واللستات والمستخدمين والأدوار وسجل النشاط. ملفات PDF المرفوعة لا تدخل فيها. احفظ الملف في مكان آمن لأنه بيحتوي على بيانات الدخول (مشفّرة).</p>
@@ -6330,33 +6420,67 @@
                         ${btn('exportBackup()', 'تنزيل نسخة احتياطية', 'fa-download', BTN_PRIMARY)}
                         ${btn("el('backupFileInput').click()", 'استعادة من ملف', 'fa-upload', BTN_SECONDARY)}
                     </div>
-                </section>` : '';
-
-            const account = `
+                </section>`;
+        }
+        function settingsAccountHtml() {
+            return `
                 <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
                     <h3 class="font-bold text-lg mb-1">حسابي</h3>
                     <p class="text-xs text-slate-500 mb-4">تغيير كلمة المرور الخاصة بك.</p>
                     ${btn('openAccountModal()', 'تغيير كلمة المرور', 'fa-key', BTN_SECONDARY)}
                 </section>`;
-
-            const logs = can('settings.manage') ? `
+        }
+        function settingsLogsHtml() {
+            return `
                 <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
                     <h3 class="font-bold text-lg mb-1">سجل النشاط</h3>
                     <p class="text-xs text-slate-500 mb-4">عدد السجلات الحالية: ${appData.logs.length}</p>
                     ${btn('clearLogs()', 'مسح السجل', 'fa-eraser', 'px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium flex items-center gap-2')}
-                </section>` : '';
-
-            const danger = canSys ? `
+                </section>`;
+        }
+        function settingsDangerHtml() {
+            return `
                 <section class="bg-white rounded-2xl border border-rose-200 p-5 sm:p-6 shadow-sm">
                     <h3 class="font-bold text-lg text-rose-700 mb-1">منطقة الخطر</h3>
                     <p class="text-xs text-slate-500 mb-4">إعادة ضبط كاملة للنظام: بتمسح كل الشركات واللستات والمستخدمين وملفات PDF. لا يمكن التراجع.</p>
-                    ${btn('resetAllData()', 'إعادة ضبط النظام بالكامل', 'fa-triangle-exclamation', 'px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium flex items-center gap-2')}
-                </section>` : '';
+                    ${btn('resetAllData()', 'إعادة ضبط النظام بالكامل', 'fa-triangle-exclamation', SETTINGS_CARD_BTN)}
+                </section>`;
+        }
 
+        // the sections the current user may open, in menu order
+        function settingsSections() {
+            const canSys = can('settings.manage');
+            const out = [];
+            if (canSys) out.push({ key: 'identity', title: 'هوية النظام', icon: 'fa-id-card', desc: 'اسم النظام والشعار ومدة تنبيه انتهاء اللستات.', html: settingsIdentityHtml });
+            out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
+            out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
+            if (can('backup.manage')) out.push({ key: 'backup', title: 'النسخ الاحتياطي', icon: 'fa-database', desc: 'تنزيل نسخة احتياطية أو استعادة من ملف.', html: settingsBackupHtml });
+            out.push({ key: 'account', title: 'حسابي', icon: 'fa-user', desc: 'تغيير كلمة المرور الخاصة بك.', html: settingsAccountHtml });
+            if (canSys) out.push({ key: 'logs', title: 'سجل النشاط', icon: 'fa-clock-rotate-left', desc: 'عرض عدد السجلات ومسحها.', html: settingsLogsHtml });
+            if (canSys) out.push({ key: 'danger', title: 'منطقة الخطر', icon: 'fa-triangle-exclamation', desc: 'إعادة ضبط النظام بالكامل. لا يمكن التراجع.', danger: true, html: settingsDangerHtml });
+            return out;
+        }
+
+        function settingsMenuHtml(secs) {
+            return `<div class="grid gap-4 sm:grid-cols-2 items-stretch">${secs.map(x => `
+                <section class="bg-white rounded-2xl border ${x.danger ? 'border-rose-200' : 'border-slate-200'} p-5 sm:p-6 shadow-sm flex flex-col">
+                    <h3 class="font-bold text-lg mb-1 ${x.danger ? 'text-rose-700' : ''}"><i class="fa-solid ${x.icon} ${x.danger ? '' : 'text-brand-600'}"></i> ${x.title}</h3>
+                    <p class="text-xs text-slate-500 mb-4 flex-1">${x.desc}</p>
+                    <div>${btn(`navigate('settings/${x.key}')`, 'فتح الإعدادات', 'fa-arrow-left', x.danger ? SETTINGS_CARD_BTN : BTN_SECONDARY)}</div>
+                </section>`).join('')}</div>`;
+        }
+
+        function viewSettings(param) {
+            const secs = settingsSections();
+            const cur = param ? secs.find(x => x.key === param) : null;
+            if (!cur) return { title: 'الإعدادات', actions: '', html: settingsMenuHtml(secs) };
             return {
-                title: 'الإعدادات',
+                title: 'الإعدادات · ' + cur.title,
                 actions: '',
-                html: `<div class="grid gap-4 lg:grid-cols-2 items-start">${identity}${themeSettingsHtml()}${homeSettingsHtml()}${backup}${account}${logs}${danger}</div>`
+                html: `<div class="max-w-3xl mx-auto space-y-4">
+                    <div>${btn("navigate('settings')", 'رجوع للإعدادات', 'fa-arrow-right', BTN_SECONDARY)}</div>
+                    ${cur.html()}
+                </div>`
             };
         }
 
@@ -7209,5 +7333,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5d0b8500cc6e15d',t:'MTc5NTEwNzA4OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5d0b8500cc6e15d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5d0e2a55e05f4c0',t:'MTc5NTEwODgyMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5d0e2a55e05f4c0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
