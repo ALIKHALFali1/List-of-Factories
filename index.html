@@ -265,6 +265,7 @@
         let appData = null;
         let sessionUserId = null;
         let modalSubmit = null;
+        let modalSeq = 0;   // changes every time a modal opens
         let usersTab = 'users';
         let editingListId = null;
         let editingCompanyId = null;
@@ -1454,9 +1455,9 @@
         function enterApp() {
             el('authScreen').classList.add('hidden');
             el('appShell').classList.remove('hidden');
-            // opening the app always starts on the home screen
-            const start = 'home';
-            if (location.hash !== '#/' + start) location.hash = '#/' + start;
+            // opening the app starts on the home screen, except a display screen opened on its own link
+            const keepScreen = location.hash === '#/shipping/screen' && canAccessRoute('shipping');
+            if (!keepScreen && location.hash !== '#/home') location.hash = '#/home';
             render();
         }
 
@@ -3175,6 +3176,7 @@
         function openModal({ title, body, submitText = 'حفظ', onSubmit = null, danger = false, size = 'md', onOpen = null }) {
             const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl' };
             modalSubmit = onSubmit;
+            modalSeq++;
             el('modalHost').innerHTML = `
                 <div id="modalBackdrop" class="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
                      onclick="if (event.target === this) closeModal()">
@@ -4978,8 +4980,10 @@
                 log('إضافة طلبية عميل', `${custNoLabel(n)} — ${customer}`);
                 toast('تمت إضافة الطلبية', 'success');
             }
+            const savedId = c ? c.id : appData.custOrders[appData.custOrders.length - 1].id;
             saveState();
             render();
+            shipAfterInvoiceSaved(savedId);
             return true;
         }
 
@@ -5130,9 +5134,9 @@
         }
 
         // ============ الشحن والنقل ============
-        // جدول 15 عربية × مواعيد. كل خانة فيها شحنة فاتورة واحدة، والبيانات في shipping/<التاريخ>/<الخانة>.
-        // كل خانة بتحفظ نسخة من بيانات الفاتورة (الاسم والرقم والتليفون) عشان شاشة العرض متحتاجش صلاحية طلبيات العملاء.
-        // المواعيد في shippingConfig/slots/<id>.
+        // جدول 15 عربية × مواعيد. كل خانة فيها شحنة فاتورة واحدة: shipping/<التاريخ>/<الخانة>.
+        // الخانة بتحفظ نسخة من بيانات الفاتورة، والعرض بياخد الاسم والرقم من طلبيات العملاء لو متاحة.
+        // المواعيد في shippingConfig/slots/<id> (الوقت بنظام ٢٤ ساعة داخلياً)، وإعدادات العرض في shippingConfig/display.
         const SHIP_CARS = 15;
         const SHIP_STAGES = [
             ['waiting', 'في الانتظار', 'slate'],
@@ -5149,6 +5153,10 @@
             emerald: 'bg-emerald-100 border-emerald-300 text-emerald-900'
         };
         const SHIP_DEFAULT_SLOTS = ['08:00', '10:00', '12:00', '14:00', '16:00'];
+        const SHIP_CARGO_SUGGEST = ['كراتين', 'أدوات صحية', 'أبواب', 'سيراميك', 'أخرى'];
+        const SHIP_MIN_STEPS = [1, 5, 10, 15];
+        const SHIP_DEFAULT_CFG = { clock: '12', minuteStep: 5, showPhone: true, showCargo: true, showRoad: true };
+        let shipCfg = { ...SHIP_DEFAULT_CFG };
         let shipDate = '';            // اليوم اللي على الجدول ('' = النهارده)
         let shipCells = {};           // خانات اليوم المعروض
         let shipSlots = [];           // المواعيد بالترتيب
@@ -5157,14 +5165,44 @@
         let shipCellsLoaded = false;
         let shipAnimSeen = new Set(); // الشحنات اللي اتعرض أنيميشن توصيلها (يوم|خانة)
         let shipAnimQueue = [];
-        let shipAnimBusy = false;
         let shipSeeding = false;
+        let shipReturn = null;        // فاتورة اتفتحت من خانة شحن: بنرجع للخانة بعد الحفظ
+        let shipFxBusy = false, shipFxToken = 0;
 
         const shipDay = () => shipDate || todayISO();
         const shipStage = k => SHIP_STAGES.find(s => s[0] === k) || SHIP_STAGES[0];
         const shipCellKey = (car, slotId) => 'c' + String(car).padStart(2, '0') + '_' + slotId;
+        const shipCarOf = key => Number(key.slice(1, 3));
         const shipPath = (day, key) => 'shipping/' + day + '/' + key;
         const shipCanManage = () => can('shipping.manage');
+
+        // ---- الوقت ----
+        function shipHm(t) {
+            const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || ''));
+            return m ? { h: Number(m[1]), m: Number(m[2]) } : { h: 8, m: 0 };
+        }
+        function shipFmtTime(t) {
+            const { h, m } = shipHm(t);
+            const mm = String(m).padStart(2, '0');
+            if (shipCfg.clock === '24') return `${String(h).padStart(2, '0')}:${mm}`;
+            return `${h % 12 || 12}:${mm} ${h < 12 ? 'صباحاً' : 'مساءً'}`;
+        }
+        function shipSelect(name, options, value, required = true) {
+            return `<select name="${name}" ${required ? 'required' : ''} class="${INPUT_CLS}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(value ?? '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+        }
+
+        // بيانات الخانة مع أحدث بيانات الفاتورة (لو الفاتورة متاحة عندك)
+        function shipView(cell) {
+            if (!cell) return null;
+            const c = appData.custOrders.find(x => x.id === cell.custId);
+            if (!c) return cell;
+            return {
+                ...cell,
+                customer: c.customer || cell.customer || '',
+                phone: c.customerPhone !== undefined ? (c.customerPhone || '') : (cell.phone || ''),
+                no: custNoLabel(c)
+            };
+        }
 
         function shipUnsubAll() {
             shipSubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
@@ -5192,7 +5230,10 @@
                     const id = day + '|' + k;
                     if (shipAnimSeen.has(id)) return;
                     shipAnimSeen.add(id);
-                    if (parseRoute().param === 'screen') shipAnimQueue.push({ no: v[k].no, customer: v[k].customer });
+                    if (parseRoute().param === 'screen') {
+                        const vv = shipView(v[k]);
+                        shipAnimQueue.push({ no: vv.no, customer: vv.customer || '' });
+                    }
                 });
                 [...shipAnimSeen].filter(id => id.startsWith(day + '|') && !doneKeys.includes(id.slice(day.length + 1)))
                     .forEach(id => shipAnimSeen.delete(id));
@@ -5203,9 +5244,20 @@
             shipSubs.push(fbDb.doc('shippingConfig/slots').onSnapshot(snap => {
                 const v = snap.exists ? (snap.data() || {}) : {};
                 shipSlots = Object.keys(v)
-                    .map(id => ({ id, time: String(v[id].time || ''), order: Number(v[id].order) || 0 }))
-                    .sort((a, b) => a.order - b.order || a.time.localeCompare(b.time));
+                    .map(id => ({ id, time: String(v[id].time || ''), order: Number(v[id].order) || 0, label: String(v[id].label || '') }))
+                    .sort((x, y) => x.order - y.order || x.time.localeCompare(y.time));
                 if (!shipSlots.length && shipCanManage() && !shipSeeding) shipSeedSlots();
+                shipLiveUpdate();
+            }, onErr));
+            shipSubs.push(fbDb.doc('shippingConfig/display').onSnapshot(snap => {
+                const v = snap.exists ? (snap.data() || {}) : {};
+                shipCfg = {
+                    clock: v.clock === '24' ? '24' : '12',
+                    minuteStep: SHIP_MIN_STEPS.includes(Number(v.minuteStep)) ? Number(v.minuteStep) : 5,
+                    showPhone: v.showPhone !== false,
+                    showCargo: v.showCargo !== false,
+                    showRoad: v.showRoad !== false
+                };
                 shipLiveUpdate();
             }, onErr));
         }
@@ -5228,7 +5280,7 @@
         }
         function shipShiftDay(n) { shipSetDay(addDaysISO(shipDay(), n)); }
 
-        const SHIP_TRUCK_SVG = `<svg viewBox="0 0 120 60" aria-hidden="true"><rect x="4" y="12" width="72" height="34" rx="5" fill="#10b981"/><path d="M80 22h20l16 16v8H80z" fill="#34d399"/><rect x="88" y="26" width="18" height="10" rx="2" fill="#0f172a" opacity=".5"/><circle cx="26" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/><circle cx="94" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/></svg>`;
+        const SHIP_TRUCK_SVG = `<svg viewBox="0 0 120 60" aria-hidden="true"><rect x="4" y="12" width="72" height="34" rx="5" fill="#10b981"/><path d="M80 22h20l16 16v8H80z" fill="#34d399"/><rect x="88" y="26" width="18" height="10" rx="2" fill="#0f172a" opacity=".5"/><circle class="ship-wheel" cx="26" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/><circle class="ship-wheel" cx="94" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/></svg>`;
 
         // styles of the shipping page and the display (added once)
         function shipInjectStyles() {
@@ -5242,12 +5294,14 @@
                 .ship-cell-name { font-size:1rem; font-weight:900; line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
                 .ship-cell-inv { font-size:.95rem; font-weight:800; }
                 .ship-cell-phone { font-size:.8rem; opacity:.8; font-family:ui-monospace,monospace; }
+                .ship-cell-cargo { font-size:.8rem; font-weight:700; background:rgba(0,0,0,.07); padding:.1rem .4rem; border-radius:.4rem; align-self:flex-start; }
                 .ship-done { box-shadow: 0 0 0 3px rgba(16,185,129,.55); }
                 .ship-cell-tv { padding:.6vw .7vw; border-radius:.8vw; min-height:0; }
                 .ship-cell-tv .ship-cell-stage { font-size:1.05vw; }
                 .ship-cell-tv .ship-cell-name { font-size:1.45vw; }
                 .ship-cell-tv .ship-cell-inv { font-size:1.2vw; }
                 .ship-cell-tv .ship-cell-phone { font-size:1vw; }
+                .ship-cell-tv .ship-cell-cargo { font-size:1vw; }
                 .ship-screen { position:fixed; inset:0; z-index:45; background:#020617; color:#fff; display:flex; flex-direction:column; gap:1.2vh; padding:1.5vh 1.5vw; overflow:hidden; }
                 .ship-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1vw; }
                 .ship-head h1 { font-size:2.6vw; font-weight:900; line-height:1.1; }
@@ -5258,15 +5312,19 @@
                 .ship-body { flex:1; min-height:0; }
                 .ship-tv { display:grid; grid-template-columns: 8vw repeat(15, minmax(0,1fr)); gap:.35vw; height:100%; min-height:0; }
                 .ship-tv-corner, .ship-tv-head { display:flex; align-items:center; justify-content:center; text-align:center; background:#1e293b; color:#fff; font-weight:900; font-size:1.2vw; border-radius:.6vw; }
-                .ship-tv-time { display:flex; align-items:center; justify-content:center; font-weight:900; font-size:1.9vw; font-family:ui-monospace,monospace; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
-                .ship-road { position:relative; height:9vh; border-radius:1vw; background:#1e293b; overflow:hidden; }
-                .ship-road-line { position:absolute; left:0; right:0; bottom:1.2vh; height:.5vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash 1.2s linear infinite; }
-                .ship-road-idle { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:1.4vw; color:#94a3b8; font-weight:700; }
-                .ship-truck { position:absolute; bottom:3vh; left:0; width:9vw; animation: shipDrive 14s linear infinite; }
+                .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.7vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
+                .ship-tv-time small { font-size:.95vw; font-weight:700; opacity:.8; }
+                .ship-road { position:relative; height:12vh; border-radius:1.2vw; overflow:hidden; background: linear-gradient(180deg, #0c4a6e 0%, #1e293b 42%, #334155 100%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+                .ship-road-line { position:absolute; left:0; right:0; bottom:2.2vh; height:.6vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash .9s linear infinite; }
+                .ship-road-count { position:absolute; top:1vh; left:1vw; z-index:2; font-size:1.1vw; font-weight:800; background:rgba(2,6,23,.7); padding:.3vh .8vw; border-radius:.6vw; }
+                .ship-truck { position:absolute; bottom:4vh; left:0; width:9vw; animation: shipDrive 14s linear infinite; }
                 .ship-truck svg { width:100%; height:auto; display:block; }
-                .ship-truck-tag { position:absolute; top:-2.6vh; left:0; white-space:nowrap; font-size:1vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                .ship-truck-amb { opacity:.5; filter: grayscale(.5); }
+                .ship-truck-tag { position:absolute; top:-2.8vh; left:0; white-space:nowrap; font-size:1vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                .ship-wheel { transform-box: fill-box; transform-origin: center; animation: shipSpin .5s linear infinite; }
                 @keyframes shipDash { to { background-position: 6vw 0; } }
                 @keyframes shipDrive { from { transform: translateX(-12vw); } to { transform: translateX(112vw); } }
+                @keyframes shipSpin { to { transform: rotate(360deg); } }
                 @keyframes shipPop { 0% { transform: scale(.4); opacity: 0 } 18% { transform: scale(1.06); opacity: 1 } 28% { transform: scale(1) } 82% { opacity: 1 } 100% { opacity: 0; transform: translateY(-24px) } }
                 @keyframes shipRing { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.7) } 100% { box-shadow: 0 0 0 80px rgba(16,185,129,0) } }
                 .ship-anim { animation: shipPop 4.2s ease forwards; }
@@ -5278,7 +5336,7 @@
                 body.ship-screen-on.ship-nav-open .ship-nav-btn { right: 18rem; }
                 body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-open { display:none; }
                 body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-close { display:inline; }
-                @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring, .ship-road-line, .ship-truck { animation: none !important; } }
+                @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring, .ship-road-line, .ship-truck, .ship-wheel { animation: none !important; } }
             `;
             document.head.appendChild(st);
         }
@@ -5290,23 +5348,33 @@
                     ? `<button type="button" ${click} class="ship-cell ship-cell-empty border-dashed border-slate-300 text-slate-400 hover:border-brand-400 hover:text-brand-600 transition"><i class="fa-solid fa-plus"></i></button>`
                     : `<div class="ship-cell-empty"></div>`;
             }
-            const [, label, col] = shipStage(cell.stage);
-            return `<button type="button" ${click} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${cell.stage === 'delivered' ? 'ship-done' : ''} ${edit ? 'hover:shadow-md' : 'cursor-default'}">
+            const v = shipView(cell);
+            const [, label, col] = shipStage(v.stage);
+            const cargo = [v.cargoType, v.cargoText].filter(Boolean).join(' — ');
+            const showPhone = !big || shipCfg.showPhone;
+            const showCargo = !big || shipCfg.showCargo;
+            return `<button type="button" ${click} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${v.stage === 'delivered' ? 'ship-done' : ''} ${edit ? 'hover:shadow-md' : 'cursor-default'}">
                 <span class="ship-cell-stage">${label}</span>
-                <span class="ship-cell-name">${esc(cell.customer || '')}</span>
-                <span class="ship-cell-inv">فاتورة رقم ${esc(cell.no || '')}</span>
-                <span class="ship-cell-phone" dir="ltr">${esc(cell.phone || '')}</span>
+                <span class="ship-cell-name">${esc(v.customer || '')}</span>
+                <span class="ship-cell-inv">فاتورة رقم ${esc(v.no || '')}</span>
+                ${showPhone && v.phone ? `<span class="ship-cell-phone" dir="ltr">${esc(v.phone)}</span>` : ''}
+                ${showCargo && cargo ? `<span class="ship-cell-cargo">${esc(cargo)}</span>` : ''}
             </button>`;
         }
 
         // the board table (scrolls sideways on small screens)
         function shipGridHtml(edit) {
             const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
-            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[7rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[9.5rem]">عربية ${c}</th>`).join('')}</tr>`;
-            const rows = shipSlots.map(sl => `<tr>
+            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[9rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[10rem]">عربية ${c}</th>`).join('')}</tr>`;
+            const rows = shipSlots.map((sl, i) => `<tr>
                     <th class="sticky right-0 z-10 bg-white p-2 border border-slate-200 align-middle">
-                        <div class="font-mono font-black text-lg" dir="ltr">${esc(sl.time)}</div>
-                        ${edit ? `<button type="button" onclick="openShipSlot('${sl.id}')" class="mt-1 text-xs font-bold text-brand-700 underline">تعديل الموعد</button>` : ''}
+                        <div class="font-mono font-black text-lg" dir="ltr">${esc(shipFmtTime(sl.time))}</div>
+                        ${sl.label ? `<div class="text-xs font-bold text-slate-600">${esc(sl.label)}</div>` : ''}
+                        ${edit ? `<div class="mt-1 flex flex-wrap items-center gap-1">
+                            <button type="button" onclick="openShipSlot('${sl.id}')" class="text-xs font-bold text-brand-700 underline">تعديل</button>
+                            ${i > 0 ? `<button type="button" onclick="shipMoveSlot('${sl.id}', -1)" class="text-xs text-slate-500 hover:text-brand-600" aria-label="فوق"><i class="fa-solid fa-arrow-up"></i></button>` : ''}
+                            ${i < shipSlots.length - 1 ? `<button type="button" onclick="shipMoveSlot('${sl.id}', 1)" class="text-xs text-slate-500 hover:text-brand-600" aria-label="تحت"><i class="fa-solid fa-arrow-down"></i></button>` : ''}
+                        </div>` : ''}
                     </th>
                     ${cars.map(c => { const key = shipCellKey(c, sl.id); return `<td class="p-1.5 border border-slate-200 align-top">${shipCellHtml(key, shipCells[key], edit, false)}</td>`; }).join('')}
                 </tr>`).join('');
@@ -5320,7 +5388,7 @@
             const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
             const n = Math.max(shipSlots.length, 1);
             const head = `<div class="ship-tv-corner">الموعد</div>${cars.map(c => `<div class="ship-tv-head">عربية ${c}</div>`).join('')}`;
-            const body = shipSlots.map(sl => `<div class="ship-tv-time" dir="ltr">${esc(sl.time)}</div>${cars.map(c => {
+            const body = shipSlots.map(sl => `<div class="ship-tv-time" dir="ltr"><span>${esc(shipFmtTime(sl.time))}</span>${sl.label ? `<small>${esc(sl.label)}</small>` : ''}</div>${cars.map(c => {
                 const key = shipCellKey(c, sl.id);
                 return shipCellHtml(key, shipCells[key], false, true);
             }).join('')}`).join('');
@@ -5328,12 +5396,16 @@
             return `<div class="ship-tv" style="grid-template-rows: 5vh repeat(${n}, minmax(0,1fr))">${head}${body}</div>${empty}`;
         }
 
-        // the road above the table: one moving truck for every car that is on the way
+        // the road above the table: two trucks always drive on it, and one more for every car on the way
         function shipRoadHtml() {
             const cars = Object.keys(shipCells).filter(k => shipCells[k] && shipCells[k].stage === 'transit')
-                .map(k => Number(k.slice(1, 3))).sort((x, y) => x - y).slice(0, 6);
-            const trucks = cars.map((car, i) => `<div class="ship-truck" style="animation-delay:${-i * 4}s"><span class="ship-truck-tag">عربية ${car}</span>${SHIP_TRUCK_SVG}</div>`).join('');
-            return `<div class="ship-road" aria-hidden="true"><div class="ship-road-line"></div>${trucks}${cars.length ? '' : '<div class="ship-road-idle">مفيش عربيات في الطريق دلوقتي</div>'}</div>`;
+                .map(k => shipCarOf(k)).sort((x, y) => x - y).slice(0, 6);
+            const ambient = [0, 1].map(i => `<div class="ship-truck ship-truck-amb" style="animation-delay:${-i * 9}s;animation-duration:20s">${SHIP_TRUCK_SVG}</div>`).join('');
+            const trucks = cars.map((car, i) => `<div class="ship-truck" style="animation-delay:${-i * 4.5}s"><span class="ship-truck-tag">عربية ${car}</span>${SHIP_TRUCK_SVG}</div>`).join('');
+            return `<div class="ship-road" aria-hidden="true">
+                <div class="ship-road-line"></div>${ambient}${trucks}
+                <div class="ship-road-count"><i class="fa-solid fa-truck-fast"></i> في الطريق: ${cars.length}</div>
+            </div>`;
         }
 
         function viewShipping() {
@@ -5347,6 +5419,7 @@
                     ${btn('shipShiftDay(1)', 'التالي', 'fa-chevron-left', BTN_SECONDARY)}
                     ${btn('shipSetDay(todayISO())', 'النهارده', 'fa-calendar-day', BTN_SECONDARY)}
                     ${edit ? btn('openShipSlot()', 'إضافة موعد', 'fa-plus', BTN_PRIMARY) : ''}
+                    ${edit ? btn('openShipDisplaySettings()', 'إعدادات العرض', 'fa-sliders', BTN_SECONDARY) : ''}
                     ${btn(`window.open(location.pathname + '#/shipping/screen', '_blank')`, 'شاشة العرض للعملاء', 'fa-tv', BTN_SECONDARY)}
                 </div>`;
             const legend = `<div class="flex flex-wrap gap-2 mb-4">${SHIP_STAGES.map(([, l, c]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS[c]}">${l}</span>`).join('')}</div>`;
@@ -5372,7 +5445,7 @@
                         <div class="ship-legend">${legend}</div>
                         <button type="button" class="ship-exit" onclick="navigate('shipping')"><i class="fa-solid fa-xmark"></i> خروج من العرض</button>
                     </div>
-                    ${shipRoadHtml()}
+                    ${shipCfg.showRoad ? shipRoadHtml() : ''}
                     <div class="ship-body">${shipTvHtml()}</div>
                     <button type="button" id="shipNavBtn" class="ship-nav-btn" onclick="shipToggleNav()" aria-label="إظهار القائمة أو إخفاؤها"><i class="fa-solid fa-chevron-left ship-i-open"></i><i class="fa-solid fa-chevron-right ship-i-close"></i></button>
                 </div>`,
@@ -5383,8 +5456,7 @@
         function shipToggleNav() { document.body.classList.toggle('ship-nav-open'); }
 
         // The arrival card lives in its own layer on the page body, so a re-render of the content
-        // (a log entry, another list change) does not remove it while it plays.
-        let shipFxBusy = false, shipFxToken = 0;
+        // does not remove it. It goes away when its animation ends (it waits while the tab is hidden).
         function shipRunAnim() {
             if (shipFxBusy || !shipAnimQueue.length) return;
             if (parseRoute().param !== 'screen') { shipAnimQueue = []; return; }
@@ -5404,12 +5476,15 @@
                 <p class="text-3xl font-black">تم توصيل فاتورة رقم ${esc(next.no)}</p>
                 <p class="text-xl mt-2 opacity-90">${esc(next.customer)}</p>`;
             fx.appendChild(box);
-            setTimeout(() => {
+            const finish = () => {
                 if (token !== shipFxToken) return;   // the screen was left meanwhile
                 box.remove();
                 shipFxBusy = false;
                 shipRunAnim();
-            }, 4300);
+            };
+            box.addEventListener('animationend', e => { if (e.target === box) finish(); });
+            // fallback when animations are off (reduced motion)
+            setTimeout(() => { if (!document.hidden) finish(); }, 12000);
         }
 
         function shipLeaveScreen() {
@@ -5419,26 +5494,55 @@
             shipAnimQueue = [];
             shipFxBusy = false;
             shipFxToken++;
+            if (parseRoute().name !== 'shipping') shipReturn = null;
         }
 
         // ---- خانة الجدول ----
-        function openShipCell(key) {
+        function openShipCell(key, presetId = '') {
             if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            shipReturn = null;
             const cur = shipCells[key] || null;
-            const car = Number(key.slice(1, 3));
             const slot = shipSlots.find(s => key.endsWith('_' + s.id));
+            const selId = presetId || (cur ? cur.custId : '');
             const invoices = [...appData.custOrders].sort((a, b) => (b.no || 0) - (a.no || 0));
             const invOpts = [['', '— اختر الفاتورة —'], ...invoices.map(c => [c.id, `${custNoLabel(c)} — ${c.customer || ''}`])];
-            const sel = (name, options, value) => `<select name="${name}" required class="${INPUT_CLS}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(value ?? '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+            const invTools = canCust('manage') ? `<div class="flex flex-wrap gap-2 mt-2">
+                    ${btn(`shipNewInvoice('${key}')`, 'فاتورة جديدة', 'fa-plus', BTN_SECONDARY)}
+                    ${selId ? btn(`shipEditInvoice('${key}', '${selId}')`, 'تعديل بيانات الفاتورة', 'fa-pen', BTN_SECONDARY) : ''}
+                </div>` : '';
             openModal({
-                title: `عربية ${car}${slot ? ' · ' + slot.time : ''}`,
-                size: 'md',
+                title: `عربية ${shipCarOf(key)}${slot ? ' · ' + shipFmtTime(slot.time) : ''}`,
+                size: 'lg',
                 submitText: 'حفظ الشحنة',
                 onSubmit: fd => saveShipCell(key, fd),
-                body: `${field('الفاتورة *', sel('inv', invOpts, cur ? cur.custId : ''))}
-                    ${field('المرحلة *', sel('stage', SHIP_STAGES.map(([k, l]) => [k, l]), cur ? cur.stage : 'waiting'))}
-                    ${cur ? `<div class="flex justify-start"><button type="button" onclick="clearShipCell('${key}')" class="${BTN_SECONDARY} text-rose-700"><i class="fa-solid fa-trash-can"></i> إلغاء الشحنة من الخانة</button></div>` : ''}`
+                body: `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="sm:col-span-2">${field('الفاتورة *', shipSelect('inv', invOpts, selId))}${invTools}</div>
+                    ${field('المرحلة *', shipSelect('stage', SHIP_STAGES.map(([k, l]) => [k, l]), cur ? cur.stage : 'waiting'))}
+                    ${field('نوع الحمولة', `<input name="cargoType" list="shipCargoList" maxlength="60" value="${esc(cur?.cargoType || '')}" class="${INPUT_CLS}" placeholder="كراتين، أدوات صحية...">
+                        <datalist id="shipCargoList">${SHIP_CARGO_SUGGEST.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>`)}
+                    ${field('الكمية / الوصف', `<input name="cargoText" maxlength="200" value="${esc(cur?.cargoText || '')}" class="${INPUT_CLS}" placeholder="مثال: 40 كرتونة">`, 'بيتعرض زي ما بتكتبه')}
+                    <div class="sm:col-span-2">${field('ملاحظات الشحن', `<textarea name="note" rows="2" maxlength="500" class="${INPUT_CLS}">${esc(cur?.note || '')}</textarea>`)}</div>
+                </div>
+                ${cur ? `<div class="flex justify-start mt-3"><button type="button" onclick="clearShipCell('${key}')" class="${BTN_SECONDARY} text-rose-700"><i class="fa-solid fa-trash-can"></i> إلغاء الشحنة من الخانة</button></div>` : ''}`
             });
+        }
+
+        // فاتورة جديدة أو تعديل فاتورة من الشحن: بنفس فورم طلبيات العملاء، وبعد الحفظ بنرجع للخانة
+        function shipNewInvoice(key) {
+            if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            shipReturn = { key };
+            openCustModal();
+        }
+        function shipEditInvoice(key, id) {
+            if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            shipReturn = { key };
+            openCustModal(id);
+        }
+        function shipAfterInvoiceSaved(id) {
+            const r = shipReturn;
+            shipReturn = null;
+            if (!r || parseRoute().name !== 'shipping') return;
+            setTimeout(() => openShipCell(r.key, id), 0);
         }
 
         function saveShipCell(key, fd) {
@@ -5450,8 +5554,13 @@
             const day = shipDay();
             const cell = {
                 custId: inv.id, no: custNoLabel(inv), customer: inv.customer || '', phone: inv.customerPhone || '',
-                stage, at: new Date().toISOString(), by: orderUserName()
+                stage,
+                cargoType: String(fd.get('cargoType') || '').trim().slice(0, 60),
+                cargoText: String(fd.get('cargoText') || '').trim().slice(0, 200),
+                note: String(fd.get('note') || '').trim().slice(0, 500),
+                at: new Date().toISOString(), by: orderUserName()
             };
+            const seq = modalSeq;
             const b = fbDb.batch();
             b.set(fbDb.doc(shipPath(day, key)), cell);
             // the same invoice sits on one cell only: it moves from its old cell
@@ -5459,10 +5568,10 @@
                 if (k !== key && shipCells[k] && shipCells[k].custId === inv.id) b.delete(fbDb.doc(shipPath(day, k)));
             });
             b.commit().then(() => {
-                log('تعديل الشحن والنقل', `عربية ${Number(key.slice(1, 3))} — ${cell.no} — ${shipStage(stage)[1]}`);
+                log('تعديل الشحن والنقل', `عربية ${shipCarOf(key)} — ${cell.no} — ${shipStage(stage)[1]}`);
                 if (stage === 'delivered') shipMarkDelivered(inv);
                 toast('تم حفظ الشحنة', 'success');
-                closeModal();
+                if (seq === modalSeq) closeModal();
             }, () => toast('ماتسجلتش الشحنة، جرّب تاني', 'error'));
             return false;   // the modal closes only after the server confirms
         }
@@ -5480,10 +5589,11 @@
 
         function clearShipCell(key) {
             if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const seq = modalSeq;
             fbDb.doc(shipPath(shipDay(), key)).delete().then(() => {
-                log('حذف من الشحن والنقل', `عربية ${Number(key.slice(1, 3))}`);
+                log('حذف من الشحن والنقل', `عربية ${shipCarOf(key)}`);
                 toast('اتشالت الشحنة من الخانة', 'success');
-                closeModal();
+                if (seq === modalSeq) closeModal();
             }, () => toast('ماتشالتش، جرّب تاني', 'error'));
         }
 
@@ -5492,37 +5602,105 @@
             if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const sl = id ? shipSlots.find(s => s.id === id) : null;
             if (id && !sl) return;
+            const { h, m } = shipHm(sl ? sl.time : '08:00');
+            const step = shipCfg.minuteStep || 5;
+            const minSet = new Set([...Array(60).keys()].filter(x => x % step === 0));
+            minSet.add(m);
+            const minOpts = [...minSet].sort((x, y) => x - y).map(x => [String(x), String(x).padStart(2, '0')]);
+            const hourOpts = [...Array(12).keys()].map(i => [String(i + 1), String(i + 1)]);
             openModal({
                 title: sl ? 'تعديل الموعد' : 'موعد جديد',
-                size: 'sm',
+                size: 'md',
                 submitText: sl ? 'حفظ' : 'إضافة',
                 onSubmit: fd => saveShipSlot(sl, fd),
-                body: `${field('الساعة *', `<input name="time" type="time" required value="${esc(sl ? sl.time : '')}" dir="ltr" class="${INPUT_CLS} font-mono">`)}
-                    ${sl ? `<div class="flex justify-start"><button type="button" onclick="deleteShipSlot('${sl.id}')" class="${BTN_SECONDARY} text-rose-700"><i class="fa-solid fa-trash-can"></i> شيل الموعد</button></div>` : ''}`
+                body: `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    ${field('اسم الموعد (اختياري)', `<input name="label" maxlength="60" value="${esc(sl ? sl.label : '')}" class="${INPUT_CLS}" placeholder="مثال: الشيفت الأول">`)}
+                    ${field('الفترة *', shipSelect('period', [['am', 'صباحاً'], ['pm', 'مساءً']], h < 12 ? 'am' : 'pm'))}
+                    ${field('الساعة *', shipSelect('hour', hourOpts, String(h % 12 || 12)))}
+                    ${field('الدقايق *', shipSelect('minute', minOpts, String(m)))}
+                </div>
+                ${sl ? `<div class="flex justify-start mt-3"><button type="button" onclick="deleteShipSlot('${sl.id}')" class="${BTN_SECONDARY} text-rose-700"><i class="fa-solid fa-trash-can"></i> شيل الموعد</button></div>` : ''}`
             });
         }
 
         function saveShipSlot(sl, fd) {
             if (!shipCanManage()) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
-            const time = String(fd.get('time') || '');
-            if (!/^\d{2}:\d{2}$/.test(time)) { toast('اختار الساعة', 'error'); return false; }
+            const h12 = Number(fd.get('hour')), mm = Number(fd.get('minute'));
+            const pm = String(fd.get('period')) === 'pm';
+            if (!(h12 >= 1 && h12 <= 12) || !(mm >= 0 && mm <= 59)) { toast('اختار الساعة والدقايق', 'error'); return false; }
+            const h24 = (h12 % 12) + (pm ? 12 : 0);
+            const time = String(h24).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+            if (shipSlots.some(x => x.time === time && (!sl || x.id !== sl.id))) { toast('فيه موعد بنفس الساعة قبل كده', 'error'); return false; }
+            const label = String(fd.get('label') || '').trim().slice(0, 60);
             const id = sl ? sl.id : uid('slot-');
-            const order = sl ? sl.order : shipSlots.reduce((m, x) => Math.max(m, x.order), 0) + 1;
-            fbDb.doc('shippingConfig/slots/' + id).set({ time, order }).then(() => {
-                log('تعديل مواعيد الشحن', time);
+            const order = sl ? sl.order : shipSlots.reduce((mx, x) => Math.max(mx, x.order), 0) + 1;
+            const seq = modalSeq;
+            fbDb.doc('shippingConfig/slots/' + id).set({ time, order, label }).then(() => {
+                log('تعديل مواعيد الشحن', shipFmtTime(time));
                 toast('تم حفظ الموعد', 'success');
-                closeModal();
+                if (seq === modalSeq) closeModal();
             }, () => toast('ماتسجلش الموعد، جرّب تاني', 'error'));
             return false;
         }
 
         function deleteShipSlot(id) {
             if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const seq = modalSeq;
             fbDb.doc('shippingConfig/slots/' + id).delete().then(() => {
                 log('حذف موعد من الشحن', id);
                 toast('اتشال الموعد', 'success');
-                closeModal();
+                if (seq === modalSeq) closeModal();
             }, () => toast('ماتشالش الموعد، جرّب تاني', 'error'));
+        }
+
+        // تحريك الموعد فوق أو تحت: بنكتب الترتيب الجديد لكل المواعيد
+        function shipMoveSlot(id, dir) {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const i = shipSlots.findIndex(x => x.id === id), j = i + dir;
+            if (i < 0 || j < 0 || j >= shipSlots.length) return;
+            const list = [...shipSlots];
+            [list[i], list[j]] = [list[j], list[i]];
+            const b = fbDb.batch();
+            list.forEach((sl, idx) => b.set(fbDb.doc('shippingConfig/slots/' + sl.id), { time: sl.time, order: idx + 1, label: sl.label || '' }));
+            b.commit().then(() => {}, () => toast('ماتحركش الموعد، جرّب تاني', 'error'));
+        }
+
+        // ---- إعدادات العرض (نظام الساعة والدقايق وما يظهرش على الشاشة) ----
+        function openShipDisplaySettings() {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = shipCfg;
+            const chk = (name, label, on) => `<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="${name}" class="w-4 h-4" ${on ? 'checked' : ''}> ${label}</label>`;
+            openModal({
+                title: 'إعدادات الجدول وشاشة العرض',
+                size: 'md',
+                submitText: 'حفظ الإعدادات',
+                onSubmit: fd => saveShipDisplay(fd),
+                body: `<div class="grid gap-3">
+                    ${field('نظام الساعة', shipSelect('clock', [['12', '١٢ ساعة (صباحاً / مساءً)'], ['24', '٢٤ ساعة']], c.clock))}
+                    ${field('خطوة الدقايق في القايمة', shipSelect('minuteStep', [['1', 'كل دقيقة'], ['5', 'كل ٥ دقايق'], ['10', 'كل ١٠ دقايق'], ['15', 'كل ١٥ دقيقة']], String(c.minuteStep)))}
+                    ${chk('showPhone', 'اظهر تليفون العميل على شاشة العرض', c.showPhone)}
+                    ${chk('showCargo', 'اظهر نوع الحمولة والكمية على شاشة العرض', c.showCargo)}
+                    ${chk('showRoad', 'اظهر الطريق المتحرك فوق الجدول', c.showRoad)}
+                </div>`
+            });
+        }
+
+        function saveShipDisplay(fd) {
+            if (!shipCanManage()) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const next = {
+                clock: String(fd.get('clock')) === '24' ? '24' : '12',
+                minuteStep: SHIP_MIN_STEPS.includes(Number(fd.get('minuteStep'))) ? Number(fd.get('minuteStep')) : 5,
+                showPhone: fd.get('showPhone') === 'on',
+                showCargo: fd.get('showCargo') === 'on',
+                showRoad: fd.get('showRoad') === 'on'
+            };
+            const seq = modalSeq;
+            fbDb.doc('shippingConfig/display').set(next).then(() => {
+                log('تعديل إعدادات الشحن', next.clock === '24' ? '٢٤ ساعة' : '١٢ ساعة');
+                toast('تم حفظ الإعدادات', 'success');
+                if (seq === modalSeq) closeModal();
+            }, () => toast('ماتسجلتش الإعدادات، جرّب تاني', 'error'));
+            return false;
         }
 
         const VIEWS = {
@@ -7758,5 +7936,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5dfb7c2ac2843f0',t:'MTc5NTI2NDM1Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5dfb7c2ac2843f0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e03bd4cbede183',t:'MTc5NTI2OTc2Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e03bd4cbede183',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
