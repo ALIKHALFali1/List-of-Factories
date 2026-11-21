@@ -235,7 +235,12 @@
                 ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
                 ['settings.manage', 'تعديل الإعدادات وإعادة الضبط'],
-                ['backup.manage', 'النسخ الاحتياطي والاستعادة']
+                ['backup.manage', 'النسخ الاحتياطي والاستعادة'],
+                ['home.personal', 'المظهر والشاشة الرئيسية (على الجهاز ده بس)']
+            ] },
+            { title: 'الشحن والنقل', items: [
+                ['shipping.view', 'عرض جدول الشحن وشاشة العرض'],
+                ['shipping.manage', 'تعديل جدول الشحن ومواعيده']
             ] }
         ];
         const ALL_PERMS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i[0]));
@@ -251,9 +256,10 @@
             customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
+            shipping: { title: 'الشحن والنقل', icon: 'fa-truck', perm: 'shipping.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'shipping', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -632,11 +638,11 @@
                 admin: { id: 'admin', name: 'مدير النظام', locked: true, permissions: [...ALL_PERMS] },
                 manager: {
                     id: 'manager', name: 'مدير لستات', locked: false,
-                    permissions: ['dashboard.view', 'companies.view', 'companies.manage', 'lists.view', 'lists.manage', 'lists.import', 'lists.export', 'logs.view']
+                    permissions: ['dashboard.view', 'companies.view', 'companies.manage', 'lists.view', 'lists.manage', 'lists.import', 'lists.export', 'logs.view', 'home.personal']
                 },
                 viewer: {
                     id: 'viewer', name: 'مشاهد', locked: false,
-                    permissions: ['dashboard.view', 'companies.view', 'lists.view', 'lists.export']
+                    permissions: ['dashboard.view', 'companies.view', 'lists.view', 'lists.export', 'home.personal']
                 }
             };
         }
@@ -668,7 +674,7 @@
         function defaultData() {
             return {
                 version: 4,
-                settings: { systemName: 'منظومة لستات المصانع', logo: '', expiryDays: 30 },
+                settings: { systemName: 'منظومة لستات المصانع', logo: '', expiryDays: 30, permsVersion: 1 },
                 roles: defaultRoles(),
                 users: [],
                 companies: sampleCompanies(),
@@ -685,6 +691,7 @@
             d.settings.expiryDays = parseInt(d.settings.expiryDays, 10) || 30;
             d.settings.systemName = String(d.settings.systemName || base.settings.systemName);
             d.settings.logo = String(d.settings.logo || '');
+            d.settings.permsVersion = Number(d.settings.permsVersion) || 1;
 
             // Roles: saved roles are kept as they are (deleted default roles stay deleted).
             // The admin role is always locked and always has every permission.
@@ -771,7 +778,7 @@
                     ...c, id: String(c.id), no: Number(c.no) || 0, amount: numOr0(c.amount), paid: numOr0(c.paid),
                     date: String(c.date || ''), customer: String(c.customer || ''), repId: String(c.repId || ''), repName: String(c.repName || ''),
                     category: String(c.category || ''), completeness: String(c.completeness || ''), validUntil: String(c.validUntil || ''),
-                    delivery: CUST_DELIVERY.includes(c.delivery) ? c.delivery : 'لم تُسلم', booking: String(c.booking || ''), notes: String(c.notes || '')
+                    delivery: CUST_DELIVERY.includes(c.delivery) ? c.delivery : 'لم تُسلم', booking: String(c.booking || ''), notes: String(c.notes || ''), customerPhone: String(c.customerPhone || '')
                 }));
             d.logs = (Array.isArray(d.logs) ? d.logs : []).slice(0, LOG_LIMIT);
             return d;
@@ -949,7 +956,8 @@
                 ...(r.repRole ? { repRole: true } : {})
             }));
             out.set('settings/main', {
-                systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays
+                systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays,
+                permsVersion: d.settings.permsVersion
             });
             return out;
         }
@@ -2961,7 +2969,7 @@
 
         function canAccessRoute(name) {
             if (name === 'home') return true;
-            if (name === 'settings') return can('settings.manage') || can('backup.manage');
+            if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
         }
@@ -3225,6 +3233,20 @@
             else location.hash = target;
         }
 
+        // The new "home.personal" permission is given to every existing role once (settings.permsVersion 2).
+        // After that the admin's choices are kept, even when a role is unticked.
+        const PERMS_VERSION_NOW = 2;
+        function ensureHomePersonalPerm() {
+            if (!appData || !fbSynced || !sessionUserId) return;
+            if ((appData.settings.permsVersion || 1) >= PERMS_VERSION_NOW) return;
+            if (!can('settings.manage') || !can('users.manage')) return;
+            Object.values(appData.roles).forEach(r => {
+                if (!r.locked && !r.permissions.includes('home.personal')) r.permissions = [...r.permissions, 'home.personal'];
+            });
+            appData.settings.permsVersion = PERMS_VERSION_NOW;
+            saveState();
+        }
+
         function render() {
             if (orderFormKeep && parseRoute().name !== 'orders') orderFormKeep = null;
             if (pendingNewOrderImages.length && parseRoute().param !== 'new') pendingNewOrderImages = [];
@@ -3234,6 +3256,7 @@
                 logout(true);
                 return;
             }
+            ensureHomePersonalPerm();
             let { name, param } = parseRoute();
 
             if (!ROUTES[name]) name = 'dashboard';
@@ -4892,6 +4915,7 @@
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('التاريخ *', `<input name="date" type="date" required value="${esc(c ? c.date : todayISO())}" class="${INPUT_CLS}">`)}
                         ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" class="${INPUT_CLS}">`)}
+                        ${field('تليفون العميل', `<input name="customerPhone" type="tel" value="${esc(c?.customerPhone)}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'رقم الموبايل اللي في الفاتورة')}
                         ${field('رقم الطلب *', `<input name="no" type="number" min="1" step="1" required value="${c ? esc(c.no) : nextCustNo()}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'بياخد رقم تلقائي، وتقدر تكتب غيره')}
                         ${sel('repId', 'اسم المندوب', repOpts, c ? c.repId : '')}
                         ${sel('category', 'الصنف', [['', '— اختر الصنف —'], ...CUST_CATEGORIES], c ? c.category : '')}
@@ -4940,6 +4964,7 @@
                 repId: rep ? rep.id : (keepOld ? repId : ''),
                 repName: rep ? rep.name : (keepOld ? c.repName : ''),
                 booking,
+                customerPhone: String(fd.get('customerPhone') || '').trim(),
                 notes: String(fd.get('notes') || '').trim()
             };
             if (c) {
@@ -5064,6 +5089,7 @@
                 ${row('الرقم', `<span class="font-mono font-bold">${esc(custNoLabel(c))}</span>`)}
                 ${row('التاريخ', esc(fmtDateAr(c.date) || '—'))}
                 ${row('العميل', `<b>${esc(c.customer || '—')}</b>`)}
+                ${row('تليفون العميل', `<span dir="ltr" class="font-mono">${esc(c.customerPhone || '—')}</span>`)}
                 ${row('المندوب', esc(c.repName || '—'))}
                 ${row('الصنف', esc(c.category || '—'))}
                 ${row('حالة الطلبية', esc(c.completeness || '—'))}
@@ -5102,9 +5128,311 @@
             printHtml(custPrintHtml(filteredCustOrders(), 'طلبيات العملاء', 'قائمة مفلترة'));
         }
 
+        // ============ الشحن والنقل ============
+        // جدول 15 عربية × مواعيد. كل خانة فيها شحنة فاتورة واحدة، والبيانات في shipping/<التاريخ>/<الخانة>.
+        // كل خانة بتحفظ نسخة من بيانات الفاتورة (الاسم والرقم والتليفون) عشان شاشة العرض متحتاجش صلاحية طلبيات العملاء.
+        // المواعيد في shippingConfig/slots/<id>.
+        const SHIP_CARS = 15;
+        const SHIP_STAGES = [
+            ['waiting', 'في الانتظار', 'slate'],
+            ['loaded', 'تم التحميل', 'amber'],
+            ['transit', 'في الطريق', 'sky'],
+            ['arrived', 'وصلت', 'violet'],
+            ['delivered', 'تم التوصيل', 'emerald']
+        ];
+        const SHIP_CLS = {
+            slate: 'bg-slate-100 border-slate-300 text-slate-800',
+            amber: 'bg-amber-100 border-amber-300 text-amber-900',
+            sky: 'bg-sky-100 border-sky-300 text-sky-900',
+            violet: 'bg-violet-100 border-violet-300 text-violet-900',
+            emerald: 'bg-emerald-100 border-emerald-300 text-emerald-900'
+        };
+        const SHIP_DEFAULT_SLOTS = ['08:00', '10:00', '12:00', '14:00', '16:00'];
+        let shipDate = '';            // اليوم اللي على الجدول ('' = النهارده)
+        let shipCells = {};           // خانات اليوم المعروض
+        let shipSlots = [];           // المواعيد بالترتيب
+        let shipSubs = [];            // دوال إلغاء الاشتراك
+        let shipSubKey = '';
+        let shipCellsLoaded = false;
+        let shipAnimSeen = new Set(); // الشحنات اللي اتعرض أنيميشن توصيلها (يوم|خانة)
+        let shipAnimQueue = [];
+        let shipAnimBusy = false;
+        let shipSeeding = false;
+
+        const shipDay = () => shipDate || todayISO();
+        const shipStage = k => SHIP_STAGES.find(s => s[0] === k) || SHIP_STAGES[0];
+        const shipCellKey = (car, slotId) => 'c' + String(car).padStart(2, '0') + '_' + slotId;
+        const shipPath = (day, key) => 'shipping/' + day + '/' + key;
+        const shipCanManage = () => can('shipping.manage');
+
+        function shipUnsubAll() {
+            shipSubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            shipSubs = [];
+        }
+
+        function shipEnsureSubs() {
+            if (!fbDb || !fbUser || !can('shipping.view')) return;
+            const day = shipDay();
+            if (shipSubKey === day && shipSubs.length) return;
+            shipUnsubAll();
+            shipSubKey = day;
+            shipCells = {};
+            shipCellsLoaded = false;
+            shipAnimSeen = new Set();
+            shipAnimQueue = [];
+            const onErr = err => console.error('shipping listener', err);
+            shipSubs.push(fbDb.doc('shipping/' + day).onSnapshot(snap => {
+                const v = snap.exists ? (snap.data() || {}) : {};
+                shipCells = v;
+                const doneKeys = Object.keys(v).filter(k => v[k] && v[k].stage === 'delivered');
+                // the first load only remembers what is already delivered; later changes start the animation
+                if (!shipCellsLoaded) doneKeys.forEach(k => shipAnimSeen.add(day + '|' + k));
+                else doneKeys.forEach(k => {
+                    const id = day + '|' + k;
+                    if (shipAnimSeen.has(id)) return;
+                    shipAnimSeen.add(id);
+                    if (parseRoute().param === 'screen') shipAnimQueue.push({ no: v[k].no, customer: v[k].customer });
+                });
+                [...shipAnimSeen].filter(id => id.startsWith(day + '|') && !doneKeys.includes(id.slice(day.length + 1)))
+                    .forEach(id => shipAnimSeen.delete(id));
+                shipCellsLoaded = true;
+                shipLiveUpdate();
+            }, onErr));
+            shipSubs.push(fbDb.doc('shippingConfig/slots').onSnapshot(snap => {
+                const v = snap.exists ? (snap.data() || {}) : {};
+                shipSlots = Object.keys(v)
+                    .map(id => ({ id, time: String(v[id].time || ''), order: Number(v[id].order) || 0 }))
+                    .sort((a, b) => a.order - b.order || a.time.localeCompare(b.time));
+                if (!shipSlots.length && shipCanManage() && !shipSeeding) shipSeedSlots();
+                shipLiveUpdate();
+            }, onErr));
+        }
+
+        // first use: the five default times (fixed ids, so two admins writing at once end up the same)
+        function shipSeedSlots() {
+            shipSeeding = true;
+            const b = fbDb.batch();
+            SHIP_DEFAULT_SLOTS.forEach((t, i) => b.set(fbDb.doc('shippingConfig/slots/s' + (i + 1)), { time: t, order: i + 1 }));
+            b.commit().then(() => { shipSeeding = false; }, err => { shipSeeding = false; console.error('shipping slots not saved', err); });
+        }
+
+        function shipLiveUpdate() {
+            if (parseRoute().name === 'shipping') render();
+        }
+
+        function shipSetDay(v) {
+            shipDate = /^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : '';
+            render();
+        }
+        function shipShiftDay(n) { shipSetDay(addDaysISO(shipDay(), n)); }
+
+        function shipCellHtml(key, cell, edit, big) {
+            const click = edit ? `onclick="openShipCell('${key}')"` : '';
+            if (!cell) {
+                return edit
+                    ? `<button type="button" ${click} class="w-full min-h-[5.5rem] rounded-xl border-2 border-dashed border-slate-300 text-slate-400 hover:border-brand-400 hover:text-brand-600 transition"><i class="fa-solid fa-plus"></i></button>`
+                    : `<div class="min-h-[5.5rem] rounded-xl bg-slate-50"></div>`;
+            }
+            const [, label, col] = shipStage(cell.stage);
+            return `<button type="button" ${click} class="w-full text-start rounded-xl border-2 p-2 min-h-[5.5rem] transition ${SHIP_CLS[col]} ${cell.stage === 'delivered' ? 'ship-done' : ''} ${edit ? 'hover:shadow-md' : 'cursor-default'}">
+                <div class="flex items-center justify-between gap-1">
+                    <span class="${big ? 'text-sm' : 'text-[11px]'} font-bold">${label}</span>
+                    <span class="font-mono ${big ? 'text-sm' : 'text-[11px]'}">${esc(cell.no || '')}</span>
+                </div>
+                <p class="font-black ${big ? 'text-lg' : 'text-sm'} mt-1 truncate">${esc(cell.customer || '')}</p>
+                <p class="${big ? 'text-sm' : 'text-xs'} font-mono opacity-80" dir="ltr">${esc(cell.phone || '')}</p>
+            </button>`;
+        }
+
+        function shipGridHtml(edit, big) {
+            const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
+            const txt = big ? 'text-base' : 'text-xs';
+            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 ${txt} font-bold text-slate-700 border border-slate-200 min-w-[7rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 ${txt} font-bold text-slate-700 border border-slate-200 min-w-[9.5rem]">عربية ${c}</th>`).join('')}</tr>`;
+            const rows = shipSlots.map(sl => `<tr>
+                    <th class="sticky right-0 z-10 bg-white p-2 border border-slate-200 align-middle">
+                        <div class="font-mono font-black ${big ? 'text-2xl' : 'text-lg'}" dir="ltr">${esc(sl.time)}</div>
+                        ${edit ? `<button type="button" onclick="openShipSlot('${sl.id}')" class="mt-1 text-xs font-bold text-brand-700 underline">تعديل الموعد</button>` : ''}
+                    </th>
+                    ${cars.map(c => { const key = shipCellKey(c, sl.id); return `<td class="p-1.5 border border-slate-200 align-top">${shipCellHtml(key, shipCells[key], edit, big)}</td>`; }).join('')}
+                </tr>`).join('');
+            const empty = shipSlots.length ? '' : `<tr><td colspan="${SHIP_CARS + 1}" class="p-6 text-center text-slate-500">مفيش مواعيد لسه.${edit ? ' اضغط "إضافة موعد" عشان تبدأ.' : ''}</td></tr>`;
+            return `<div class="overflow-x-auto rounded-2xl border-2 border-slate-300 bg-white"><table class="border-collapse w-max">
+                <thead>${head}</thead><tbody>${rows}${empty}</tbody></table></div>`;
+        }
+
+        function viewShipping() {
+            shipEnsureSubs();
+            const day = shipDay();
+            const edit = shipCanManage();
+            const actions = `<div class="flex flex-wrap items-center gap-2 mb-4">
+                    <input type="date" value="${esc(day)}" onchange="shipSetDay(this.value)" class="${INPUT_CLS} max-w-[11rem]">
+                    ${btn('shipShiftDay(-1)', 'السابق', 'fa-chevron-right', BTN_SECONDARY)}
+                    ${btn('shipShiftDay(1)', 'التالي', 'fa-chevron-left', BTN_SECONDARY)}
+                    ${btn('shipSetDay(todayISO())', 'النهارده', 'fa-calendar-day', BTN_SECONDARY)}
+                    ${edit ? btn('openShipSlot()', 'إضافة موعد', 'fa-plus', BTN_PRIMARY) : ''}
+                    ${btn(`window.open(location.pathname + '#/shipping/screen', '_blank')`, 'شاشة العرض للعملاء', 'fa-tv', BTN_SECONDARY)}
+                </div>`;
+            const legend = `<div class="flex flex-wrap gap-2 mb-4">${SHIP_STAGES.map(([, l, c]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS[c]}">${l}</span>`).join('')}</div>`;
+            const hint = edit ? '' : '<p class="text-sm text-slate-500 mb-3">عرض بس: صلاحية التعديل مش متاحة ليك.</p>';
+            return {
+                title: 'الشحن والنقل',
+                actions: '',
+                html: `<div>${actions}${legend}${hint}${shipGridHtml(edit, false)}</div>`
+            };
+        }
+
+        // شاشة العرض: صفحة كبيرة للتليفزيون، وأنيميشن لما شحنة تتوصل
+        function viewShippingScreen() {
+            shipEnsureSubs();
+            return {
+                title: 'شاشة الشحن',
+                actions: '',
+                html: `<div id="shipScreen" dir="rtl" class="fixed inset-0 z-[55] overflow-auto bg-slate-950 text-white p-6">
+                    <style>
+                        @keyframes shipPop { 0% { transform: scale(.4); opacity: 0 } 18% { transform: scale(1.06); opacity: 1 } 28% { transform: scale(1) } 82% { opacity: 1 } 100% { opacity: 0; transform: translateY(-24px) } }
+                        @keyframes shipRing { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.7) } 100% { box-shadow: 0 0 0 80px rgba(16,185,129,0) } }
+                        .ship-anim { animation: shipPop 4.2s ease forwards; }
+                        .ship-anim .ship-ring { animation: shipRing 1.6s ease-out 3; }
+                        .ship-done { box-shadow: 0 0 0 2px rgba(16,185,129,.5); }
+                        @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring { animation: none; } }
+                    </style>
+                    <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+                        <div>
+                            <h1 class="text-4xl font-black">حركة النقل</h1>
+                            <p class="text-lg text-slate-300">${esc(fmtDateAr(shipDay()))}</p>
+                        </div>
+                        <button type="button" onclick="navigate('shipping')" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-sm font-bold"><i class="fa-solid fa-xmark"></i> خروج من العرض</button>
+                    </div>
+                    ${shipGridHtml(false, true)}
+                    <div id="shipAnimLayer" class="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center"></div>
+                </div>`,
+                after: shipRunAnim
+            };
+        }
+
+        // one arrival at a time: the box stays for the animation, then the next one plays
+        function shipRunAnim() {
+            const layer = el('shipAnimLayer');
+            if (!layer || shipAnimBusy || !shipAnimQueue.length) return;
+            const next = shipAnimQueue.shift();
+            shipAnimBusy = true;
+            const box = document.createElement('div');
+            box.className = 'ship-anim text-center bg-emerald-600 text-white rounded-3xl px-10 py-8 shadow-2xl';
+            box.innerHTML = `<div class="ship-ring mx-auto w-20 h-20 rounded-full bg-white text-emerald-600 flex items-center justify-center text-4xl mb-4"><i class="fa-solid fa-check"></i></div>
+                <p class="text-3xl font-black">تم توصيل فاتورة رقم ${esc(next.no)}</p>
+                <p class="text-xl mt-2 opacity-90">${esc(next.customer)}</p>`;
+            layer.appendChild(box);
+            setTimeout(() => { box.remove(); shipAnimBusy = false; shipRunAnim(); }, 4300);
+        }
+
+        // ---- خانة الجدول ----
+        function openShipCell(key) {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const cur = shipCells[key] || null;
+            const car = Number(key.slice(1, 3));
+            const slot = shipSlots.find(s => key.endsWith('_' + s.id));
+            const invoices = [...appData.custOrders].sort((a, b) => (b.no || 0) - (a.no || 0));
+            const invOpts = [['', '— اختر الفاتورة —'], ...invoices.map(c => [c.id, `${custNoLabel(c)} — ${c.customer || ''}`])];
+            const sel = (name, options, value) => `<select name="${name}" required class="${INPUT_CLS}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(value ?? '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+            openModal({
+                title: `عربية ${car}${slot ? ' · ' + slot.time : ''}`,
+                size: 'md',
+                submitText: 'حفظ الشحنة',
+                onSubmit: fd => saveShipCell(key, fd),
+                body: `${field('الفاتورة *', sel('inv', invOpts, cur ? cur.custId : ''))}
+                    ${field('المرحلة *', sel('stage', SHIP_STAGES.map(([k, l]) => [k, l]), cur ? cur.stage : 'waiting'))}
+                    ${cur ? `<div class="flex justify-start"><button type="button" onclick="clearShipCell('${key}')" class="${BTN_SECONDARY} text-rose-700"><i class="fa-solid fa-trash-can"></i> إلغاء الشحنة من الخانة</button></div>` : ''}`
+            });
+        }
+
+        function saveShipCell(key, fd) {
+            if (!shipCanManage()) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const inv = appData.custOrders.find(c => c.id === String(fd.get('inv') || ''));
+            const stage = String(fd.get('stage') || '');
+            if (!inv) { toast('اختر الفاتورة من القايمة', 'error'); return false; }
+            if (!SHIP_STAGES.some(s => s[0] === stage)) { toast('اختر المرحلة', 'error'); return false; }
+            const day = shipDay();
+            const cell = {
+                custId: inv.id, no: custNoLabel(inv), customer: inv.customer || '', phone: inv.customerPhone || '',
+                stage, at: new Date().toISOString(), by: orderUserName()
+            };
+            const b = fbDb.batch();
+            b.set(fbDb.doc(shipPath(day, key)), cell);
+            // the same invoice sits on one cell only: it moves from its old cell
+            Object.keys(shipCells).forEach(k => {
+                if (k !== key && shipCells[k] && shipCells[k].custId === inv.id) b.delete(fbDb.doc(shipPath(day, k)));
+            });
+            b.commit().then(() => {
+                log('تعديل الشحن والنقل', `عربية ${Number(key.slice(1, 3))} — ${cell.no} — ${shipStage(stage)[1]}`);
+                if (stage === 'delivered') shipMarkDelivered(inv);
+                toast('تم حفظ الشحنة', 'success');
+                closeModal();
+            }, () => toast('ماتسجلتش الشحنة، جرّب تاني', 'error'));
+            return false;   // the modal closes only after the server confirms
+        }
+
+        // التوصيل في الشحن بيحدّث حالة التسليم في طلبية العميل (لو المستخدم عنده صلاحية طلبيات العملاء)
+        function shipMarkDelivered(inv) {
+            if (!canCust('manage')) return;
+            const c = appData.custOrders.find(x => x.id === inv.id);
+            if (!c || c.delivery === 'تم التسليم') return;
+            c.delivery = 'تم التسليم';
+            Object.assign(c, { updatedAt: new Date().toISOString(), updatedBy: orderUserName() });
+            log('تسليم من الشحن والنقل', `${custNoLabel(c)} — ${c.customer || ''}`);
+            saveState();
+        }
+
+        function clearShipCell(key) {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            fbDb.doc(shipPath(shipDay(), key)).delete().then(() => {
+                log('حذف من الشحن والنقل', `عربية ${Number(key.slice(1, 3))}`);
+                toast('اتشالت الشحنة من الخانة', 'success');
+                closeModal();
+            }, () => toast('ماتشالتش، جرّب تاني', 'error'));
+        }
+
+        // ---- المواعيد ----
+        function openShipSlot(id = null) {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const sl = id ? shipSlots.find(s => s.id === id) : null;
+            if (id && !sl) return;
+            openModal({
+                title: sl ? 'تعديل الموعد' : 'موعد جديد',
+                size: 'sm',
+                submitText: sl ? 'حفظ' : 'إضافة',
+                onSubmit: fd => saveShipSlot(sl, fd),
+                body: `${field('الساعة *', `<input name="time" type="time" required value="${esc(sl ? sl.time : '')}" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                    ${sl ? `<div class="flex justify-start"><button type="button" onclick="deleteShipSlot('${sl.id}')" class="${BTN_SECONDARY} text-rose-700"><i class="fa-solid fa-trash-can"></i> شيل الموعد</button></div>` : ''}`
+            });
+        }
+
+        function saveShipSlot(sl, fd) {
+            if (!shipCanManage()) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const time = String(fd.get('time') || '');
+            if (!/^\d{2}:\d{2}$/.test(time)) { toast('اختار الساعة', 'error'); return false; }
+            const id = sl ? sl.id : uid('slot-');
+            const order = sl ? sl.order : shipSlots.reduce((m, x) => Math.max(m, x.order), 0) + 1;
+            fbDb.doc('shippingConfig/slots/' + id).set({ time, order }).then(() => {
+                log('تعديل مواعيد الشحن', time);
+                toast('تم حفظ الموعد', 'success');
+                closeModal();
+            }, () => toast('ماتسجلش الموعد، جرّب تاني', 'error'));
+            return false;
+        }
+
+        function deleteShipSlot(id) {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            fbDb.doc('shippingConfig/slots/' + id).delete().then(() => {
+                log('حذف موعد من الشحن', id);
+                toast('اتشال الموعد', 'success');
+                closeModal();
+            }, () => toast('ماتشالش الموعد، جرّب تاني', 'error'));
+        }
+
         const VIEWS = {
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
+            shipping: param => param === 'screen' ? viewShippingScreen() : viewShipping(),
             home: () => viewHome(),
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
@@ -5155,6 +5483,7 @@
             customers: 'طلبيات العملاء والجدولة والتقارير',
             users: 'المستخدمين والأدوار والمندوبين',
             logs: 'سجل كل الأنشطة',
+            shipping: 'جدول العربيات والمواعيد وشاشة حركة النقل',
             settings: 'إعدادات النظام والنسخ الاحتياطي'
         };
         // ============ HOME: greeting card (time-of-day look, sun/moon arc, orders ticker) ============
@@ -6016,7 +6345,7 @@
                 const roleId = uid('rep-');
                 const now = new Date().toISOString();
                 appData.custReps.push({ id: repId, name });
-                appData.roles[roleId] = { id: roleId, name: 'مندوب: ' + name, locked: false, permissions: ['custorders.view'], repRole: true };
+                appData.roles[roleId] = { id: roleId, name: 'مندوب: ' + name, locked: false, permissions: ['custorders.view', 'home.personal'], repRole: true };
                 appData.users.push({ id: authUid, name, email, roleId, active: true, createdAt: now, lastLoginAt: null, repId });
                 log('إضافة مندوب', name);
                 saveState();
@@ -6163,7 +6492,7 @@
                 body: `
                     ${field('اسم الدور *', `<input name="name" required value="${esc(role ? role.name : '')}" ${locked ? 'disabled' : ''} class="${INPUT_CLS}">`)}
                     ${locked ? '<p class="text-xs text-violet-700 bg-violet-50 rounded-lg p-3">هذا الدور أساسي ويملك كل الصلاحيات دائماً ولا يمكن تعديله.</p>' : ''}
-                    <div class="space-y-3">${permCheckboxes(role ? role.permissions : ['dashboard.view'], locked)}</div>`
+                    <div class="space-y-3">${permCheckboxes(role ? role.permissions : ['dashboard.view', 'home.personal'], locked)}</div>`
             });
             if (locked) el('modalForm').querySelectorAll('input').forEach(i => i.disabled = true);
         }
@@ -6205,7 +6534,7 @@
         const REP_PIN_RE = /^\d{6,}$/;
         const REP_ROLE_ID = 'rep';
         function isRepRoleDef(r) { return !!r && (r.repRole === true || r.id === REP_ROLE_ID); }
-        function repRoleDef() { return { id: REP_ROLE_ID, name: 'مندوب', locked: false, permissions: ['custorders.view'] }; }
+        function repRoleDef() { return { id: REP_ROLE_ID, name: 'مندوب', locked: false, permissions: ['custorders.view', 'home.personal'] }; }
         // the role is created the first time an admin opens the user form (older systems do not have it yet)
         function ensureRepRole() { if (appData && !appData.roles[REP_ROLE_ID]) appData.roles[REP_ROLE_ID] = repRoleDef(); }
         function loginAddressFor(v) { const t = String(v || '').trim(); if (!t) return ''; return t.includes('@') ? t.toLowerCase() : repLoginKey(t) + REP_EMAIL_DOMAIN; }
@@ -6452,8 +6781,8 @@
             const canSys = can('settings.manage');
             const out = [];
             if (canSys) out.push({ key: 'identity', title: 'هوية النظام', icon: 'fa-id-card', desc: 'اسم النظام والشعار ومدة تنبيه انتهاء اللستات.', html: settingsIdentityHtml });
-            out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
-            out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
+            if (can('home.personal')) out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
+            if (can('home.personal')) out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
             if (can('backup.manage')) out.push({ key: 'backup', title: 'النسخ الاحتياطي', icon: 'fa-database', desc: 'تنزيل نسخة احتياطية أو استعادة من ملف.', html: settingsBackupHtml });
             out.push({ key: 'account', title: 'حسابي', icon: 'fa-user', desc: 'تغيير كلمة المرور الخاصة بك.', html: settingsAccountHtml });
             if (canSys) out.push({ key: 'logs', title: 'سجل النشاط', icon: 'fa-clock-rotate-left', desc: 'عرض عدد السجلات ومسحها.', html: settingsLogsHtml });
@@ -7333,5 +7662,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5d0e2a55e05f4c0',t:'MTc5NTEwODgyMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5d0e2a55e05f4c0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5df8b3bd9f77226',t:'MTc5NTI2MjUyOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5df8b3bd9f77226',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
