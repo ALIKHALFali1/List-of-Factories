@@ -68,6 +68,11 @@
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <body class="text-slate-800 min-h-screen">
 
@@ -5257,6 +5262,10 @@
                 if (!shipSlots.length && shipCanManage() && !shipSeeding) shipSeedSlots();
                 shipLiveUpdate();
             }, onErr));
+            shipSubs.push(fbDb.doc('shippingConfig/cars').onSnapshot(snap => {
+                shipCars = snap.exists ? (snap.data() || {}) : {};
+                shipLiveUpdate();
+            }, onErr));
             shipSubs.push(fbDb.doc('shippingConfig/display').onSnapshot(snap => {
                 const v = snap.exists ? (snap.data() || {}) : {};
                 shipCfg = {
@@ -5304,43 +5313,54 @@
                 .ship-cell-phone { font-size:.8rem; opacity:.85; font-family:ui-monospace,monospace; }
                 .ship-cell-cargo { font-size:.8rem; font-weight:700; background:rgba(0,0,0,.07); padding:.1rem .4rem; border-radius:.4rem; align-self:flex-start; max-width:100%; overflow-wrap:anywhere; }
                 .ship-done { box-shadow: 0 0 0 3px rgba(16,185,129,.55); }
-                .ship-cell-tv { padding:.4vw .45vw; border-radius:.7vw; min-height:0; gap:.2vw; overflow:hidden; }
-                .ship-cell-tv .ship-cell-stage { font-size:calc(1vw * var(--tvk, 1)); }
-                .ship-cell-tv .ship-cell-name { font-size:calc(1.3vw * var(--tvk, 1)); font-weight:900; line-height:1.18; white-space:normal; }
-                .ship-cell-tv .ship-cell-inv { font-size:calc(1.05vw * var(--tvk, 1)); }
-                .ship-cell-tv .ship-cell-phone { font-size:calc(.98vw * var(--tvk, 1)); font-weight:700; opacity:1; }
-                .ship-cell-tv .ship-cell-cargo { font-size:calc(.98vw * var(--tvk, 1)); line-height:1.25; white-space:normal; }
-                .ship-screen { position:fixed; inset:0; z-index:45; display:flex; flex-direction:column; gap:1vh; padding:1.4vh 1.4vw; overflow:hidden; background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); color: var(--ink); --ink:#5b3f06; --sub:#7c5e12; transition: background 1.5s; }
-                .ship-screen[data-period="morning"] { background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); --ink:#5b3f06; --sub:#7c5e12; }
-                .ship-screen[data-period="day"] { background: linear-gradient(170deg,#f0f9ff 0%,#9fd8f7 100%); --ink:#0c4a6e; --sub:#075985; }
-                .ship-screen[data-period="dusk"] { background: linear-gradient(170deg,#ffedd5 0%,#e9d5ff 60%,#b9a4f5 100%); --ink:#3b1880; --sub:#5b21b6; }
-                .ship-screen[data-period="night"] { background: radial-gradient(circle at 20% 10%, #1e3a5f 0%, #0b1220 62%); --ink:#f8fafc; --sub:#cbd5e1; }
+                .ship-cell-tv { padding:.25vw .35vw; border-radius:.6vw; min-height:0; gap:.1vw; overflow:hidden; }
+                .ship-cell-tv .ship-cell-stage { font-size:calc(.85vw * var(--tvk, 1)); }
+                .ship-cell-tv .ship-cell-name { font-size:calc(1.05vw * var(--tvk, 1)); font-weight:900; line-height:1.15; white-space:normal; }
+                .ship-cell-tv .ship-cell-inv { font-size:calc(.9vw * var(--tvk, 1)); }
+                .ship-cell-tv .ship-cell-phone { font-size:calc(.8vw * var(--tvk, 1)); font-weight:700; opacity:1; }
+                .ship-cell-tv .ship-cell-cargo { font-size:calc(.78vw * var(--tvk, 1)); line-height:1.2; white-space:normal; }
+                .ship-screen { position:fixed; inset:0; z-index:45; display:flex; flex-direction:column; gap:1vh; padding:1.4vh 1.4vw; overflow:hidden; background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); color: var(--ink); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; transition: background 1.5s; }
+                .ship-screen[data-period="morning"] { background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; }
+                .ship-screen[data-period="day"] { background: linear-gradient(170deg,#f0f9ff 0%,#9fd8f7 100%); --ink:#0c4a6e; --sub:#075985; --bld:#94a3b8; --win:#e0f2fe; --lamp:#fde68a; --asph:#475569; --walk:#cbd5e1; }
+                .ship-screen[data-period="dusk"] { background: linear-gradient(170deg,#ffedd5 0%,#e9d5ff 60%,#b9a4f5 100%); --ink:#3b1880; --sub:#5b21b6; --bld:#7c6bb0; --win:#fde68a; --lamp:#fbbf24; --asph:#4c3d6b; --walk:#8b7bc4; }
+                .ship-screen[data-period="night"] { background: radial-gradient(circle at 20% 10%, #1e3a5f 0%, #0b1220 62%); --ink:#f8fafc; --sub:#cbd5e1; --bld:#1e293b; --win:#fde68a; --lamp:#fde68a; --asph:#1e293b; --walk:#334155; --sky-shade:#132238; }
                 .ship-screen[data-period="night"]::before { content:''; position:absolute; inset:0; pointer-events:none; background-image: radial-gradient(rgba(255,255,255,.9) 1px, transparent 1.6px); background-size: 9vw 11vh; opacity:.25; }
-                .ship-screen > :not(.ship-nav-btn) { position:relative; z-index:1; }
-                .ship-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1vw; }
+                .ship-screen > :not(.ship-nav-btn):not(#shipSky) { position:relative; z-index:1; }
+                .ship-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1vw; padding-inline-start:12vw; }
                 .ship-head h1 { font-size:2.6vw; font-weight:900; line-height:1.1; }
                 .ship-head p { font-size:1.3vw; color: var(--sub); font-weight:700; }
                 .ship-legend { display:flex; flex-wrap:wrap; gap:.6vw; }
                 .ship-legend span { font-size:1.1vw; font-weight:800; padding:.3vw .8vw; border-radius:.5vw; border:2px solid; }
                 .ship-exit { font-size:1.1vw; font-weight:800; padding:.6vh 1vw; border-radius:.8vw; background:#0f172a; color:#fff; border:0; cursor:pointer; }
+                .ship-sky { position:absolute; right:1.6vw; top:1.5vh; width:10vh; height:10vh; border-radius:50%; z-index:2; pointer-events:none; transition: top 1.5s linear, background 1.5s; }
+                .ship-sky-sun { background: radial-gradient(circle at 35% 35%, #fffbe6 0%, #fde68a 45%, #f59e0b 100%); box-shadow: 0 0 4vh 1vh rgba(251,191,36,.45); }
+                .ship-sky-moon { background: radial-gradient(circle at 60% 40%, #ffffff 0%, #e2e8f0 60%, #cbd5e1 100%); box-shadow: 0 0 3vh .6vh rgba(226,232,240,.35); overflow:hidden; }
+                .ship-sky-moon::after { content:''; position:absolute; top:-8%; left:24%; width:86%; height:116%; border-radius:50%; background: var(--sky-shade, #132238); }
                 .ship-body { flex:1; min-height:0; }
                 .ship-tv { display:grid; grid-template-columns: 8vw repeat(15, minmax(0,1fr)); gap:.35vw; height:100%; min-height:0; }
                 .ship-tv-corner, .ship-tv-head { display:flex; align-items:center; justify-content:center; text-align:center; background:#1e293b; color:#fff; font-weight:900; font-size:1.2vw; border-radius:.6vw; }
+                .ship-tv-head { flex-direction:column; gap:.1vh; padding:.3vh .2vw; overflow:hidden; }
+                .ship-tv-head b { font-size:.92vw; font-weight:900; line-height:1.05; direction:ltr; white-space:nowrap; }
+                .ship-tv-head small { font-size:.74vw; font-weight:700; opacity:.92; line-height:1.1; overflow-wrap:anywhere; }
                 .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.6vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
                 .ship-tv-time small { font-size:1vw; font-weight:700; opacity:.9; }
-                .ship-road { position:relative; height:11vh; border-radius:1.2vw; overflow:hidden; background: linear-gradient(180deg, transparent 0%, transparent 58%, #334155 58%, #1e293b 100%); }
-                .ship-road-line { position:absolute; left:0; right:0; bottom:3.2vh; height:.6vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash .9s linear infinite; }
-                .ship-road-count { position:absolute; top:1vh; right:1vw; z-index:2; font-size:1.1vw; font-weight:800; background:rgba(2,6,23,.75); color:#fff; padding:.3vh .8vw; border-radius:.6vw; }
-                .ship-sky { position:absolute; width:4.2vw; height:4.2vw; margin-right:-2.1vw; margin-top:-2.1vw; display:flex; align-items:center; justify-content:center; font-size:3.2vw; transition: top 1.2s linear, right 1.2s linear; pointer-events:none; }
-                .ship-sky-sun { color:#f59e0b; filter: drop-shadow(0 0 1.2vw rgba(251,191,36,.7)); }
-                .ship-sky-moon { color:#e2e8f0; filter: drop-shadow(0 0 .8vw rgba(226,232,240,.5)); }
-                .ship-truck { position:absolute; bottom:4.5vh; left:0; width:9vw; animation: shipDrive 14s linear infinite; }
-                .ship-truck svg { width:100%; height:auto; display:block; }
-                .ship-truck-amb { opacity:.5; filter: grayscale(.5); }
-                .ship-truck-tag { position:absolute; top:-2.8vh; left:0; white-space:nowrap; font-size:1vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                .ship-road { position:relative; height:18vh; border-radius:1.2vw; overflow:hidden; }
+                .ship-city { position:absolute; left:0; top:0; height:60%; width:200%; display:flex; animation: shipCity 120s linear infinite; }
+                .ship-city svg { width:50%; height:100%; flex:0 0 50%; display:block; }
+                .ship-walk { position:absolute; left:0; right:0; top:60%; height:5%; background:var(--walk); }
+                .ship-asph { position:absolute; left:0; right:0; top:65%; bottom:0; background:var(--asph); }
+                .ship-road-line { position:absolute; left:0; right:0; top:81%; height:.5vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash .9s linear infinite; }
+                .ship-road-count { position:absolute; top:1vh; left:1vw; z-index:3; font-size:1.1vw; font-weight:800; background:rgba(2,6,23,.78); color:#fff; padding:.3vh .8vw; border-radius:.6vw; }
+                .ship-truck { position:absolute; bottom:1vh; left:0; width:9vw; z-index:2; animation: shipDrive 16s linear infinite; }
+                .ship-truck svg, .ship-park svg { width:100%; height:auto; display:block; }
+                .ship-truck-amb { opacity:.45; filter: grayscale(.6); }
+                .ship-truck-tag { position:absolute; top:-3vh; left:0; white-space:nowrap; font-size:1vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                .ship-park { position:absolute; bottom:1vh; width:7.2vw; z-index:2; }
+                .ship-park-badge { position:absolute; top:-3vh; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:1vw; font-weight:900; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
                 .ship-wheel { transform-box: fill-box; transform-origin: center; animation: shipSpin .5s linear infinite; }
+                @keyframes shipCity { to { transform: translateX(-50%); } }
                 @keyframes shipDash { to { background-position: 6vw 0; } }
-                @keyframes shipDrive { from { transform: translateX(-12vw); } to { transform: translateX(112vw); } }
+                @keyframes shipDrive { from { transform: translateX(-12vw); } to { transform: translateX(56vw); } }
                 @keyframes shipSpin { to { transform: rotate(360deg); } }
                 @keyframes shipPop { 0% { transform: scale(.4); opacity: 0 } 18% { transform: scale(1.06); opacity: 1 } 28% { transform: scale(1) } 82% { opacity: 1 } 100% { opacity: 0; transform: translateY(-24px) } }
                 @keyframes shipRing { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.7) } 100% { box-shadow: 0 0 0 80px rgba(16,185,129,0) } }
@@ -5353,7 +5373,7 @@
                 body.ship-screen-on.ship-nav-open .ship-nav-btn { right: 18rem; }
                 body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-open { display:none; }
                 body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-close { display:inline; }
-                @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring, .ship-road-line, .ship-truck, .ship-wheel { animation: none !important; } }
+                @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring, .ship-road-line, .ship-truck, .ship-wheel, .ship-city { animation: none !important; } }
             `;
             document.head.appendChild(st);
         }
@@ -5382,7 +5402,7 @@
         // the board table (scrolls sideways on small screens)
         function shipGridHtml(edit) {
             const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
-            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[9rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[10rem]">عربية ${c}</th>`).join('')}</tr>`;
+            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[9rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[10rem]">${shipCarHeadHtml(c, false)}</th>`).join('')}</tr>`;
             const rows = shipSlots.map((sl, i) => `<tr>
                     <th class="sticky right-0 z-10 bg-white p-2 border border-slate-200 align-middle">
                         <div class="font-mono font-black text-lg" dir="ltr">${esc(shipFmtTime(sl.time))}</div>
@@ -5404,28 +5424,72 @@
         function shipTvHtml() {
             const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
             const n = Math.max(shipSlots.length, 1);
-            const head = `<div class="ship-tv-corner">الموعد</div>${cars.map(c => `<div class="ship-tv-head">عربية ${c}</div>`).join('')}`;
+            const head = `<div class="ship-tv-corner">الموعد</div>${cars.map(c => `<div class="ship-tv-head">${shipCarHeadHtml(c, true)}</div>`).join('')}`;
             const body = shipSlots.map(sl => `<div class="ship-tv-time" dir="ltr"><span>${esc(shipFmtTime(sl.time))}</span>${sl.label ? `<small>${esc(sl.label)}</small>` : ''}</div>${cars.map(c => {
                 const key = shipCellKey(c, sl.id);
                 return shipCellHtml(key, shipCells[key], false, true);
             }).join('')}`).join('');
             const empty = shipSlots.length ? '' : '<p class="p-10 text-3xl text-slate-400">مفيش مواعيد لسه</p>';
-            return `<div class="ship-tv" style="grid-template-rows: 5vh repeat(${n}, minmax(0,1fr))">${head}${body}</div>${empty}`;
+            return `<div class="ship-tv" style="grid-template-rows: 8vh repeat(${n}, minmax(0,1fr))">${head}${body}</div>${empty}`;
         }
 
-        // the road above the table: two trucks always drive on it, one more for every car on the way.
-        // The sun or the moon moves across the sky part of the road, on the same arc as the home screen.
+        // ---- أسماء العربيات: رقم اللوحة أو الكود، واسم السواق ----
+        let shipCars = {};   // shippingConfig/cars: { c01: { plate, driver }, ... }
+        function shipCarInfo(c) {
+            const v = shipCars['c' + String(c).padStart(2, '0')] || {};
+            return { plate: String(v.plate || ''), driver: String(v.driver || '') };
+        }
+        function shipCarTitle(c) { return shipCarInfo(c).plate || ('عربية ' + c); }
+        // header of a car column: the board (light) or the display (dark)
+        function shipCarHeadHtml(c, tv) {
+            const { plate, driver } = shipCarInfo(c);
+            if (tv) return `<b>${esc(plate || 'عربية ' + c)}</b>${driver ? `<small>${esc(driver)}</small>` : ''}`;
+            return `<div>${esc(plate || 'عربية ' + c)}</div>${plate ? `<div class="text-[11px] font-normal text-slate-500">عربية ${c}</div>` : ''}${driver ? `<div class="text-[11px] font-normal text-slate-600">${esc(driver)}</div>` : ''}`;
+        }
+
+        // the truck with its code painted on the side
+        function shipTruckSvg(plate) {
+            return `<svg viewBox="0 0 120 60" aria-hidden="true"><rect x="4" y="12" width="72" height="34" rx="5" fill="#10b981"/><path d="M80 22h20l16 16v8H80z" fill="#34d399"/><rect x="88" y="26" width="18" height="10" rx="2" fill="#0f172a" opacity=".5"/>${plate ? `<text x="40" y="34" text-anchor="middle" font-size="10" font-weight="900" fill="#052e1f" textLength="60" lengthAdjust="spacingAndGlyphs">${esc(plate)}</text>` : ''}<circle class="ship-wheel" cx="26" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/><circle class="ship-wheel" cx="94" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/></svg>`;
+        }
+
+        // the city behind the road: buildings with lit windows and street lamps (colours come from the period)
+        function shipCityBackdrop() {
+            let seed = 11;
+            const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+            let x = 0, out = '';
+            while (x < 1600) {
+                const w = 70 + Math.floor(rnd() * 80), h = 35 + Math.floor(rnd() * 50), top = 100 - h;
+                out += `<rect x="${x}" y="${top}" width="${w - 8}" height="${h}" style="fill:var(--bld)"/>`;
+                for (let wy = top + 7; wy < 92; wy += 11) {
+                    for (let wx = x + 7; wx < x + w - 14; wx += 12) {
+                        if (rnd() > 0.4) out += `<rect x="${wx}" y="${wy}" width="5" height="6" style="fill:var(--win)"/>`;
+                    }
+                }
+                x += w;
+            }
+            for (let lx = 30; lx < 1600; lx += 200) {
+                out += `<rect x="${lx}" y="50" width="2.4" height="46" style="fill:var(--lamp)"/><rect x="${lx - 4}" y="46" width="10" height="3" rx="1.5" style="fill:var(--lamp)"/>`;
+            }
+            return out;
+        }
+
+        // the road: a city street. Moving trucks = cars on the way; parked trucks = cars that have arrived.
         function shipRoadHtml() {
-            const cars = Object.keys(shipCells).filter(k => shipCells[k] && shipCells[k].stage === 'transit')
-                .map(k => shipCarOf(k)).sort((x, y) => x - y).slice(0, 6);
-            const ambient = [0, 1].map(i => `<div class="ship-truck ship-truck-amb" style="animation-delay:${-i * 9}s;animation-duration:20s">${SHIP_TRUCK_SVG}</div>`).join('');
-            const trucks = cars.map((car, i) => `<div class="ship-truck" style="animation-delay:${-i * 4.5}s"><span class="ship-truck-tag">عربية ${car}</span>${SHIP_TRUCK_SVG}</div>`).join('');
-            const sky = shipSkyPos();
+            const carsAt = st => Object.keys(shipCells).filter(k => shipCells[k] && shipCells[k].stage === st)
+                .map(k => shipCarOf(k)).filter((v, i, a) => a.indexOf(v) === i).sort((x, y) => x - y);
+            const moving = carsAt('transit').slice(0, 6);
+            const parked = carsAt('arrived').slice(0, 4);
+            const city = shipCityBackdrop();
+            const ambient = [0, 1].map(i => `<div class="ship-truck ship-truck-amb" style="animation-delay:${-i * 9}s;animation-duration:24s">${shipTruckSvg('')}</div>`).join('');
+            const trucks = moving.map((c, i) => `<div class="ship-truck" style="animation-delay:${-i * 4.5}s"><span class="ship-truck-tag">${esc(shipCarTitle(c))}</span>${shipTruckSvg(shipCarInfo(c).plate)}</div>`).join('');
+            const park = parked.map((c, i) => `<div class="ship-park" style="right:${1 + i * 7.6}vw"><span class="ship-park-badge"><i class="fa-solid fa-check"></i> وصلت</span>${shipTruckSvg(shipCarInfo(c).plate)}</div>`).join('');
             return `<div class="ship-road" aria-hidden="true">
+                <div class="ship-city"><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg></div>
+                <div class="ship-walk"></div>
+                <div class="ship-asph"></div>
                 <div class="ship-road-line"></div>
-                <div id="shipSky" class="ship-sky ${sky.icon === 'fa-moon' ? 'ship-sky-moon' : 'ship-sky-sun'}" style="top:${sky.top}%;right:${sky.right}%"><i class="fa-solid ${sky.icon}"></i></div>
-                ${ambient}${trucks}
-                <div class="ship-road-count"><i class="fa-solid fa-truck-fast"></i> في الطريق: ${cars.length}</div>
+                ${ambient}${trucks}${park}
+                <div class="ship-road-count"><i class="fa-solid fa-truck-fast"></i> في الطريق: ${moving.length}</div>
             </div>`;
         }
 
@@ -5441,6 +5505,7 @@
                     ${btn('shipSetDay(todayISO())', 'النهارده', 'fa-calendar-day', BTN_SECONDARY)}
                     ${edit ? btn('openShipSlot()', 'إضافة موعد', 'fa-plus', BTN_PRIMARY) : ''}
                     ${edit ? btn('openShipDisplaySettings()', 'إعدادات العرض', 'fa-sliders', BTN_SECONDARY) : ''}
+                    ${edit ? btn('openShipCars()', 'أسماء العربيات', 'fa-id-card', BTN_SECONDARY) : ''}
                     ${btn(`window.open(location.pathname + '#/shipping/screen', '_blank')`, 'شاشة العرض للعملاء', 'fa-tv', BTN_SECONDARY)}
                 </div>`;
             const legend = `<div class="flex flex-wrap gap-2 mb-4">${SHIP_STAGES.map(([, l, c]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS[c]}">${l}</span>`).join('')}</div>`;
@@ -5451,12 +5516,11 @@
             };
         }
 
-        // the sun and the moon on the display: the same arc and the same clock as the home screen
-        // (sun 06:00 to 18:00, moon at night). Top is a percentage of the sky part of the road.
+        // the sun or the moon in the top-right corner: it rises low, climbs at noon and sets low, on the same clock as the home screen
         function shipSkyPos(date = new Date()) {
             const p = homeSkyPos(date);
             const lift = Math.max(0, Math.min(1, (34 - p.top) / 26));
-            return { icon: p.icon, right: p.right, top: Math.round(40 - lift * 32) };
+            return { moon: p.icon === 'fa-moon', top: (1.5 + (1 - lift) * 10).toFixed(1) };
         }
         let shipSkyTimer = null;
         function shipSkyTick() {
@@ -5466,10 +5530,8 @@
             const sky = document.getElementById('shipSky');
             if (!sky) return;
             const pos = shipSkyPos();
-            sky.style.top = pos.top + '%';
-            sky.style.right = pos.right + '%';
-            sky.className = 'ship-sky ' + (pos.icon === 'fa-moon' ? 'ship-sky-moon' : 'ship-sky-sun');
-            sky.innerHTML = `<i class="fa-solid ${pos.icon}"></i>`;
+            sky.style.top = pos.top + 'vh';
+            sky.className = 'ship-sky ' + (pos.moon ? 'ship-sky-moon' : 'ship-sky-sun');
         }
         function shipStartSky() {
             clearInterval(shipSkyTimer);
@@ -5477,21 +5539,6 @@
             shipSkyTimer = setInterval(shipSkyTick, 30000);
             if (!shipResizeBound) { shipResizeBound = true; window.addEventListener('resize', shipFitSoon); }
             if (document.fonts && document.fonts.ready) document.fonts.ready.then(shipFitSoon);
-        }
-        // Fit: the cells use the largest text size that still shows every line (no cut text).
-        // Steps the size down from 100% to 30% until no cell overflows.
-        let shipResizeBound = false;
-        function shipFitSoon() { requestAnimationFrame(shipFitTv); }
-        function shipFitTv() {
-            const screen = document.getElementById('shipScreen');
-            if (!screen) return;
-            const over = () => [...screen.querySelectorAll('.ship-cell-tv')].some(c => c.scrollHeight > c.clientHeight + 1 || c.scrollWidth > c.clientWidth + 1);
-            let k = 1;
-            screen.style.setProperty('--tvk', k);
-            for (let i = 0; i < 14 && over(); i++) {
-                k = Math.round((k - 0.05) * 100) / 100;
-                screen.style.setProperty('--tvk', k);
-            }
         }
         function shipStopSky() { clearInterval(shipSkyTimer); shipSkyTimer = null; }
 
@@ -5511,12 +5558,67 @@
                         <div class="ship-legend">${legend}</div>
                         <button type="button" class="ship-exit" onclick="navigate('shipping')"><i class="fa-solid fa-xmark"></i> خروج من العرض</button>
                     </div>
+                    <div id="shipSky" class="ship-sky ship-sky-sun" aria-hidden="true"></div>
                     ${shipCfg.showRoad ? shipRoadHtml() : ''}
                     <div class="ship-body">${shipTvHtml()}</div>
                     <button type="button" id="shipNavBtn" class="ship-nav-btn" onclick="shipToggleNav()" aria-label="إظهار القائمة أو إخفاؤها"><i class="fa-solid fa-chevron-left ship-i-open"></i><i class="fa-solid fa-chevron-right ship-i-close"></i></button>
                 </div>`,
                 after: () => { shipRunAnim(); shipStartSky(); shipFitSoon(); }
             };
+        }
+
+        // ---- تعديل أسماء العربيات (15 عربية في نافذة واحدة) ----
+        function openShipCars() {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const rows = [...Array(SHIP_CARS).keys()].map(i => i + 1).map(c => {
+                const info = shipCarInfo(c), n = String(c).padStart(2, '0');
+                return `<div style="display:grid;grid-template-columns:5.5rem 1fr 1fr;gap:.5rem;align-items:center">
+                    <span class="text-sm font-bold text-slate-700">عربية ${c}</span>
+                    <input name="p${n}" maxlength="20" value="${esc(info.plate)}" class="${INPUT_CLS}" placeholder="رقم اللوحة أو الكود">
+                    <input name="d${n}" maxlength="60" value="${esc(info.driver)}" class="${INPUT_CLS}" placeholder="اسم السواق">
+                </div>`;
+            }).join('');
+            openModal({
+                title: 'أسماء العربيات',
+                size: 'lg',
+                submitText: 'حفظ',
+                onSubmit: fd => saveShipCars(fd),
+                body: `<p class="text-sm text-slate-600 mb-3">اكتب رقم اللوحة أو الكود اللي على كل عربية، واسم السواق (اختياري). بيظهروا على الجدول وعلى شاشة العرض.</p>
+                    <div style="display:grid;gap:.5rem;max-height:60vh;overflow:auto">${rows}</div>`
+            });
+        }
+        function saveShipCars(fd) {
+            if (!shipCanManage()) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const b = fbDb.batch();
+            for (let c = 1; c <= SHIP_CARS; c++) {
+                const n = String(c).padStart(2, '0');
+                b.set(fbDb.doc('shippingConfig/cars/c' + n), {
+                    plate: String(fd.get('p' + n) || '').trim().slice(0, 20),
+                    driver: String(fd.get('d' + n) || '').trim().slice(0, 60)
+                });
+            }
+            const seq = modalSeq;
+            b.commit().then(() => {
+                log('تعديل أسماء العربيات', 'الـ15 عربية');
+                toast('تم حفظ أسماء العربيات', 'success');
+                if (seq === modalSeq) closeModal();
+            }, err => shipSaveFailed(err, 'أسماء العربيات'));
+            return false;
+        }
+
+        // Fit: the cells use the largest text size that still shows every line (no cut text).
+        let shipResizeBound = false;
+        function shipFitSoon() { requestAnimationFrame(shipFitTv); }
+        function shipFitTv() {
+            const screen = document.getElementById('shipScreen');
+            if (!screen) return;
+            const over = () => [...screen.querySelectorAll('.ship-cell-tv')].some(c => c.scrollHeight > c.clientHeight + 1 || c.scrollWidth > c.clientWidth + 1);
+            let k = 1;
+            screen.style.setProperty('--tvk', k);
+            for (let i = 0; i < 14 && over(); i++) {
+                k = Math.round((k - 0.05) * 100) / 100;
+                screen.style.setProperty('--tvk', k);
+            }
         }
 
         function shipToggleNav() { document.body.classList.toggle('ship-nav-open'); }
@@ -8004,5 +8106,12 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e09b52afd0e1f0',t:'MTc5NTI3MzY3NA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e09b52afd0e1f0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/sw.js').catch(function () {});
+            });
+        }
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e0ed7e7ec189c7',t:'MTc5NTI3NzA0MA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e0ed7e7ec189c7',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
