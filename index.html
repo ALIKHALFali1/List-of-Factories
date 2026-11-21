@@ -5170,6 +5170,14 @@
         let shipFxBusy = false, shipFxToken = 0;
 
         const shipDay = () => shipDate || todayISO();
+        // the server refused the write: say why, and keep the details in the console
+        function shipSaveFailed(err, what) {
+            console.error('shipping ' + what + ' refused', err);
+            const denied = err && (err.code === 'permission-denied' || /permission/i.test(String(err.message || '')));
+            toast(denied
+                ? 'السيرفر رفض الحفظ: الصلاحية مش متسجلة في السيرفر أو قواعد الحماية مش محدّثة'
+                : 'ماتسجلتش ' + what + '، جرّب تاني', 'error', null, 7000);
+        }
         const shipStage = k => SHIP_STAGES.find(s => s[0] === k) || SHIP_STAGES[0];
         const shipCellKey = (car, slotId) => 'c' + String(car).padStart(2, '0') + '_' + slotId;
         const shipCarOf = key => Number(key.slice(1, 3));
@@ -5267,7 +5275,7 @@
             shipSeeding = true;
             const b = fbDb.batch();
             SHIP_DEFAULT_SLOTS.forEach((t, i) => b.set(fbDb.doc('shippingConfig/slots/s' + (i + 1)), { time: t, order: i + 1 }));
-            b.commit().then(() => { shipSeeding = false; }, err => { shipSeeding = false; console.error('shipping slots not saved', err); });
+            b.commit().then(() => { shipSeeding = false; }, err => { shipSeeding = false; shipSaveFailed(err, 'المواعيد الافتراضية'); });
         }
 
         function shipLiveUpdate() {
@@ -5506,6 +5514,7 @@
             const selId = presetId || (cur ? cur.custId : '');
             const invoices = [...appData.custOrders].sort((a, b) => (b.no || 0) - (a.no || 0));
             const invOpts = [['', '— اختر الفاتورة —'], ...invoices.map(c => [c.id, `${custNoLabel(c)} — ${c.customer || ''}`])];
+            const noInv = !invoices.length ? '<p class="text-sm text-amber-700 mt-1">مفيش فواتير ظاهرة ليك. الفواتير بتحتاج صلاحية طلبيات العملاء (عرض).</p>' : '';
             const invTools = canCust('manage') ? `<div class="flex flex-wrap gap-2 mt-2">
                     ${btn(`shipNewInvoice('${key}')`, 'فاتورة جديدة', 'fa-plus', BTN_SECONDARY)}
                     ${selId ? btn(`shipEditInvoice('${key}', '${selId}')`, 'تعديل بيانات الفاتورة', 'fa-pen', BTN_SECONDARY) : ''}
@@ -5516,7 +5525,7 @@
                 submitText: 'حفظ الشحنة',
                 onSubmit: fd => saveShipCell(key, fd),
                 body: `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div class="sm:col-span-2">${field('الفاتورة *', shipSelect('inv', invOpts, selId))}${invTools}</div>
+                    <div class="sm:col-span-2">${field('الفاتورة *', shipSelect('inv', invOpts, selId))}${noInv}${invTools}</div>
                     ${field('المرحلة *', shipSelect('stage', SHIP_STAGES.map(([k, l]) => [k, l]), cur ? cur.stage : 'waiting'))}
                     ${field('نوع الحمولة', `<input name="cargoType" list="shipCargoList" maxlength="60" value="${esc(cur?.cargoType || '')}" class="${INPUT_CLS}" placeholder="كراتين، أدوات صحية...">
                         <datalist id="shipCargoList">${SHIP_CARGO_SUGGEST.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>`)}
@@ -5572,7 +5581,7 @@
                 if (stage === 'delivered') shipMarkDelivered(inv);
                 toast('تم حفظ الشحنة', 'success');
                 if (seq === modalSeq) closeModal();
-            }, () => toast('ماتسجلتش الشحنة، جرّب تاني', 'error'));
+            }, err => shipSaveFailed(err, 'الشحنة'));
             return false;   // the modal closes only after the server confirms
         }
 
@@ -5594,7 +5603,7 @@
                 log('حذف من الشحن والنقل', `عربية ${shipCarOf(key)}`);
                 toast('اتشالت الشحنة من الخانة', 'success');
                 if (seq === modalSeq) closeModal();
-            }, () => toast('ماتشالتش، جرّب تاني', 'error'));
+            }, err => shipSaveFailed(err, 'الشحنة'));
         }
 
         // ---- المواعيد ----
@@ -5639,7 +5648,7 @@
                 log('تعديل مواعيد الشحن', shipFmtTime(time));
                 toast('تم حفظ الموعد', 'success');
                 if (seq === modalSeq) closeModal();
-            }, () => toast('ماتسجلش الموعد، جرّب تاني', 'error'));
+            }, err => shipSaveFailed(err, 'الموعد'));
             return false;
         }
 
@@ -5650,7 +5659,7 @@
                 log('حذف موعد من الشحن', id);
                 toast('اتشال الموعد', 'success');
                 if (seq === modalSeq) closeModal();
-            }, () => toast('ماتشالش الموعد، جرّب تاني', 'error'));
+            }, err => shipSaveFailed(err, 'حذف الموعد'));
         }
 
         // تحريك الموعد فوق أو تحت: بنكتب الترتيب الجديد لكل المواعيد
@@ -5662,7 +5671,7 @@
             [list[i], list[j]] = [list[j], list[i]];
             const b = fbDb.batch();
             list.forEach((sl, idx) => b.set(fbDb.doc('shippingConfig/slots/' + sl.id), { time: sl.time, order: idx + 1, label: sl.label || '' }));
-            b.commit().then(() => {}, () => toast('ماتحركش الموعد، جرّب تاني', 'error'));
+            b.commit().then(() => {}, err => shipSaveFailed(err, 'ترتيب المواعيد'));
         }
 
         // ---- إعدادات العرض (نظام الساعة والدقايق وما يظهرش على الشاشة) ----
@@ -5699,7 +5708,7 @@
                 log('تعديل إعدادات الشحن', next.clock === '24' ? '٢٤ ساعة' : '١٢ ساعة');
                 toast('تم حفظ الإعدادات', 'success');
                 if (seq === modalSeq) closeModal();
-            }, () => toast('ماتسجلتش الإعدادات، جرّب تاني', 'error'));
+            }, err => shipSaveFailed(err, 'الإعدادات'));
             return false;
         }
 
@@ -7936,5 +7945,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e03bd4cbede183',t:'MTc5NTI2OTc2Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e03bd4cbede183',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e056ca9845dad4',t:'MTc5NTI3MDg2Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e056ca9845dad4',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
