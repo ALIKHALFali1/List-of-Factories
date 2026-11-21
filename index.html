@@ -3257,6 +3257,7 @@
                 return;
             }
             ensureHomePersonalPerm();
+            if (!(parseRoute().name === 'shipping' && parseRoute().param === 'screen')) shipLeaveScreen();
             let { name, param } = parseRoute();
 
             if (!ROUTES[name]) name = 'dashboard';
@@ -5196,6 +5197,7 @@
                 [...shipAnimSeen].filter(id => id.startsWith(day + '|') && !doneKeys.includes(id.slice(day.length + 1)))
                     .forEach(id => shipAnimSeen.delete(id));
                 shipCellsLoaded = true;
+                shipRunAnim();
                 shipLiveUpdate();
             }, onErr));
             shipSubs.push(fbDb.doc('shippingConfig/slots').onSnapshot(snap => {
@@ -5226,42 +5228,117 @@
         }
         function shipShiftDay(n) { shipSetDay(addDaysISO(shipDay(), n)); }
 
+        const SHIP_TRUCK_SVG = `<svg viewBox="0 0 120 60" aria-hidden="true"><rect x="4" y="12" width="72" height="34" rx="5" fill="#10b981"/><path d="M80 22h20l16 16v8H80z" fill="#34d399"/><rect x="88" y="26" width="18" height="10" rx="2" fill="#0f172a" opacity=".5"/><circle cx="26" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/><circle cx="94" cy="50" r="8" fill="#0f172a" stroke="#e2e8f0" stroke-width="3"/></svg>`;
+
+        // styles of the shipping page and the display (added once)
+        function shipInjectStyles() {
+            if (document.getElementById('shipStyles')) return;
+            const st = document.createElement('style');
+            st.id = 'shipStyles';
+            st.textContent = `
+                .ship-cell { display:flex; flex-direction:column; justify-content:flex-start; gap:.2rem; text-align:start; border:2px solid; border-radius:.75rem; padding:.5rem .6rem; min-height:5.5rem; width:100%; height:100%; overflow:hidden; transition: box-shadow .2s; }
+                .ship-cell-empty { min-height:5.5rem; border-radius:.75rem; background:rgba(148,163,184,.12); }
+                .ship-cell-stage { font-size:.75rem; font-weight:800; }
+                .ship-cell-name { font-size:1rem; font-weight:900; line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+                .ship-cell-inv { font-size:.95rem; font-weight:800; }
+                .ship-cell-phone { font-size:.8rem; opacity:.8; font-family:ui-monospace,monospace; }
+                .ship-done { box-shadow: 0 0 0 3px rgba(16,185,129,.55); }
+                .ship-cell-tv { padding:.6vw .7vw; border-radius:.8vw; min-height:0; }
+                .ship-cell-tv .ship-cell-stage { font-size:1.05vw; }
+                .ship-cell-tv .ship-cell-name { font-size:1.45vw; }
+                .ship-cell-tv .ship-cell-inv { font-size:1.2vw; }
+                .ship-cell-tv .ship-cell-phone { font-size:1vw; }
+                .ship-screen { position:fixed; inset:0; z-index:45; background:#020617; color:#fff; display:flex; flex-direction:column; gap:1.2vh; padding:1.5vh 1.5vw; overflow:hidden; }
+                .ship-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1vw; }
+                .ship-head h1 { font-size:2.6vw; font-weight:900; line-height:1.1; }
+                .ship-head p { font-size:1.3vw; color:#cbd5e1; }
+                .ship-legend { display:flex; flex-wrap:wrap; gap:.6vw; }
+                .ship-legend span { font-size:1.1vw; font-weight:800; padding:.3vw .8vw; border-radius:.5vw; border:2px solid; }
+                .ship-exit { font-size:1.1vw; font-weight:800; padding:.6vh 1vw; border-radius:.8vw; background:rgba(255,255,255,.1); color:#fff; border:0; cursor:pointer; }
+                .ship-body { flex:1; min-height:0; }
+                .ship-tv { display:grid; grid-template-columns: 8vw repeat(15, minmax(0,1fr)); gap:.35vw; height:100%; min-height:0; }
+                .ship-tv-corner, .ship-tv-head { display:flex; align-items:center; justify-content:center; text-align:center; background:#1e293b; color:#fff; font-weight:900; font-size:1.2vw; border-radius:.6vw; }
+                .ship-tv-time { display:flex; align-items:center; justify-content:center; font-weight:900; font-size:1.9vw; font-family:ui-monospace,monospace; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
+                .ship-road { position:relative; height:9vh; border-radius:1vw; background:#1e293b; overflow:hidden; }
+                .ship-road-line { position:absolute; left:0; right:0; bottom:1.2vh; height:.5vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash 1.2s linear infinite; }
+                .ship-road-idle { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:1.4vw; color:#94a3b8; font-weight:700; }
+                .ship-truck { position:absolute; bottom:3vh; left:0; width:9vw; animation: shipDrive 14s linear infinite; }
+                .ship-truck svg { width:100%; height:auto; display:block; }
+                .ship-truck-tag { position:absolute; top:-2.6vh; left:0; white-space:nowrap; font-size:1vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                @keyframes shipDash { to { background-position: 6vw 0; } }
+                @keyframes shipDrive { from { transform: translateX(-12vw); } to { transform: translateX(112vw); } }
+                @keyframes shipPop { 0% { transform: scale(.4); opacity: 0 } 18% { transform: scale(1.06); opacity: 1 } 28% { transform: scale(1) } 82% { opacity: 1 } 100% { opacity: 0; transform: translateY(-24px) } }
+                @keyframes shipRing { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.7) } 100% { box-shadow: 0 0 0 80px rgba(16,185,129,0) } }
+                .ship-anim { animation: shipPop 4.2s ease forwards; }
+                .ship-anim .ship-ring { animation: shipRing 1.6s ease-out 3; }
+                .ship-nav-btn { position:fixed; top:50%; right:0; z-index:60; width:2.6rem; height:4.5rem; border:0; border-radius:.8rem 0 0 .8rem; background:#0284c7; color:#fff; cursor:pointer; }
+                .ship-nav-btn .ship-i-close { display:none; }
+                body.ship-screen-on:not(.ship-nav-open) #sidebar { transform: translateX(100%) !important; }
+                body.ship-screen-on.ship-nav-open #sidebar { transform: none !important; }
+                body.ship-screen-on.ship-nav-open .ship-nav-btn { right: 18rem; }
+                body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-open { display:none; }
+                body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-close { display:inline; }
+                @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring, .ship-road-line, .ship-truck { animation: none !important; } }
+            `;
+            document.head.appendChild(st);
+        }
+
         function shipCellHtml(key, cell, edit, big) {
             const click = edit ? `onclick="openShipCell('${key}')"` : '';
             if (!cell) {
                 return edit
-                    ? `<button type="button" ${click} class="w-full min-h-[5.5rem] rounded-xl border-2 border-dashed border-slate-300 text-slate-400 hover:border-brand-400 hover:text-brand-600 transition"><i class="fa-solid fa-plus"></i></button>`
-                    : `<div class="min-h-[5.5rem] rounded-xl bg-slate-50"></div>`;
+                    ? `<button type="button" ${click} class="ship-cell ship-cell-empty border-dashed border-slate-300 text-slate-400 hover:border-brand-400 hover:text-brand-600 transition"><i class="fa-solid fa-plus"></i></button>`
+                    : `<div class="ship-cell-empty"></div>`;
             }
             const [, label, col] = shipStage(cell.stage);
-            return `<button type="button" ${click} class="w-full text-start rounded-xl border-2 p-2 min-h-[5.5rem] transition ${SHIP_CLS[col]} ${cell.stage === 'delivered' ? 'ship-done' : ''} ${edit ? 'hover:shadow-md' : 'cursor-default'}">
-                <div class="flex items-center justify-between gap-1">
-                    <span class="${big ? 'text-sm' : 'text-[11px]'} font-bold">${label}</span>
-                    <span class="font-mono ${big ? 'text-sm' : 'text-[11px]'}">${esc(cell.no || '')}</span>
-                </div>
-                <p class="font-black ${big ? 'text-lg' : 'text-sm'} mt-1 truncate">${esc(cell.customer || '')}</p>
-                <p class="${big ? 'text-sm' : 'text-xs'} font-mono opacity-80" dir="ltr">${esc(cell.phone || '')}</p>
+            return `<button type="button" ${click} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${cell.stage === 'delivered' ? 'ship-done' : ''} ${edit ? 'hover:shadow-md' : 'cursor-default'}">
+                <span class="ship-cell-stage">${label}</span>
+                <span class="ship-cell-name">${esc(cell.customer || '')}</span>
+                <span class="ship-cell-inv">فاتورة رقم ${esc(cell.no || '')}</span>
+                <span class="ship-cell-phone" dir="ltr">${esc(cell.phone || '')}</span>
             </button>`;
         }
 
-        function shipGridHtml(edit, big) {
+        // the board table (scrolls sideways on small screens)
+        function shipGridHtml(edit) {
             const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
-            const txt = big ? 'text-base' : 'text-xs';
-            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 ${txt} font-bold text-slate-700 border border-slate-200 min-w-[7rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 ${txt} font-bold text-slate-700 border border-slate-200 min-w-[9.5rem]">عربية ${c}</th>`).join('')}</tr>`;
+            const head = `<tr><th class="sticky right-0 z-10 bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[7rem]">الموعد</th>${cars.map(c => `<th class="bg-slate-100 p-2 text-xs font-bold text-slate-700 border border-slate-200 min-w-[9.5rem]">عربية ${c}</th>`).join('')}</tr>`;
             const rows = shipSlots.map(sl => `<tr>
                     <th class="sticky right-0 z-10 bg-white p-2 border border-slate-200 align-middle">
-                        <div class="font-mono font-black ${big ? 'text-2xl' : 'text-lg'}" dir="ltr">${esc(sl.time)}</div>
+                        <div class="font-mono font-black text-lg" dir="ltr">${esc(sl.time)}</div>
                         ${edit ? `<button type="button" onclick="openShipSlot('${sl.id}')" class="mt-1 text-xs font-bold text-brand-700 underline">تعديل الموعد</button>` : ''}
                     </th>
-                    ${cars.map(c => { const key = shipCellKey(c, sl.id); return `<td class="p-1.5 border border-slate-200 align-top">${shipCellHtml(key, shipCells[key], edit, big)}</td>`; }).join('')}
+                    ${cars.map(c => { const key = shipCellKey(c, sl.id); return `<td class="p-1.5 border border-slate-200 align-top">${shipCellHtml(key, shipCells[key], edit, false)}</td>`; }).join('')}
                 </tr>`).join('');
             const empty = shipSlots.length ? '' : `<tr><td colspan="${SHIP_CARS + 1}" class="p-6 text-center text-slate-500">مفيش مواعيد لسه.${edit ? ' اضغط "إضافة موعد" عشان تبدأ.' : ''}</td></tr>`;
             return `<div class="overflow-x-auto rounded-2xl border-2 border-slate-300 bg-white"><table class="border-collapse w-max">
                 <thead>${head}</thead><tbody>${rows}${empty}</tbody></table></div>`;
         }
 
+        // the display table: all 15 cars and all times fit on the screen (no scrolling)
+        function shipTvHtml() {
+            const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
+            const n = Math.max(shipSlots.length, 1);
+            const head = `<div class="ship-tv-corner">الموعد</div>${cars.map(c => `<div class="ship-tv-head">عربية ${c}</div>`).join('')}`;
+            const body = shipSlots.map(sl => `<div class="ship-tv-time" dir="ltr">${esc(sl.time)}</div>${cars.map(c => {
+                const key = shipCellKey(c, sl.id);
+                return shipCellHtml(key, shipCells[key], false, true);
+            }).join('')}`).join('');
+            const empty = shipSlots.length ? '' : '<p class="p-10 text-3xl text-slate-400">مفيش مواعيد لسه</p>';
+            return `<div class="ship-tv" style="grid-template-rows: 5vh repeat(${n}, minmax(0,1fr))">${head}${body}</div>${empty}`;
+        }
+
+        // the road above the table: one moving truck for every car that is on the way
+        function shipRoadHtml() {
+            const cars = Object.keys(shipCells).filter(k => shipCells[k] && shipCells[k].stage === 'transit')
+                .map(k => Number(k.slice(1, 3))).sort((x, y) => x - y).slice(0, 6);
+            const trucks = cars.map((car, i) => `<div class="ship-truck" style="animation-delay:${-i * 4}s"><span class="ship-truck-tag">عربية ${car}</span>${SHIP_TRUCK_SVG}</div>`).join('');
+            return `<div class="ship-road" aria-hidden="true"><div class="ship-road-line"></div>${trucks}${cars.length ? '' : '<div class="ship-road-idle">مفيش عربيات في الطريق دلوقتي</div>'}</div>`;
+        }
+
         function viewShipping() {
             shipEnsureSubs();
+            shipInjectStyles();
             const day = shipDay();
             const edit = shipCanManage();
             const actions = `<div class="flex flex-wrap items-center gap-2 mb-4">
@@ -5273,56 +5350,75 @@
                     ${btn(`window.open(location.pathname + '#/shipping/screen', '_blank')`, 'شاشة العرض للعملاء', 'fa-tv', BTN_SECONDARY)}
                 </div>`;
             const legend = `<div class="flex flex-wrap gap-2 mb-4">${SHIP_STAGES.map(([, l, c]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS[c]}">${l}</span>`).join('')}</div>`;
-            const hint = edit ? '' : '<p class="text-sm text-slate-500 mb-3">عرض بس: صلاحية التعديل مش متاحة ليك.</p>';
             return {
                 title: 'الشحن والنقل',
                 actions: '',
-                html: `<div>${actions}${legend}${hint}${shipGridHtml(edit, false)}</div>`
+                html: `<div>${actions}${legend}${shipGridHtml(edit)}</div>`
             };
         }
 
-        // شاشة العرض: صفحة كبيرة للتليفزيون، وأنيميشن لما شحنة تتوصل
+        // شاشة العرض: صفحة كاملة للتليفزيون. القايمة الجانبية مخفية، وزرار السهم بيظهرها ويخفيها.
         function viewShippingScreen() {
             shipEnsureSubs();
+            shipInjectStyles();
+            document.body.classList.add('ship-screen-on');
+            const legend = SHIP_STAGES.map(([, l, c]) => `<span class="${SHIP_CLS[c]}">${l}</span>`).join('');
             return {
                 title: 'شاشة الشحن',
                 actions: '',
-                html: `<div id="shipScreen" dir="rtl" class="fixed inset-0 z-[55] overflow-auto bg-slate-950 text-white p-6">
-                    <style>
-                        @keyframes shipPop { 0% { transform: scale(.4); opacity: 0 } 18% { transform: scale(1.06); opacity: 1 } 28% { transform: scale(1) } 82% { opacity: 1 } 100% { opacity: 0; transform: translateY(-24px) } }
-                        @keyframes shipRing { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.7) } 100% { box-shadow: 0 0 0 80px rgba(16,185,129,0) } }
-                        .ship-anim { animation: shipPop 4.2s ease forwards; }
-                        .ship-anim .ship-ring { animation: shipRing 1.6s ease-out 3; }
-                        .ship-done { box-shadow: 0 0 0 2px rgba(16,185,129,.5); }
-                        @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring { animation: none; } }
-                    </style>
-                    <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
-                        <div>
-                            <h1 class="text-4xl font-black">حركة النقل</h1>
-                            <p class="text-lg text-slate-300">${esc(fmtDateAr(shipDay()))}</p>
-                        </div>
-                        <button type="button" onclick="navigate('shipping')" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-sm font-bold"><i class="fa-solid fa-xmark"></i> خروج من العرض</button>
+                html: `<div id="shipScreen" dir="rtl" class="ship-screen">
+                    <div class="ship-head">
+                        <div><h1>حركة النقل</h1><p>${esc(fmtDateAr(shipDay()))}</p></div>
+                        <div class="ship-legend">${legend}</div>
+                        <button type="button" class="ship-exit" onclick="navigate('shipping')"><i class="fa-solid fa-xmark"></i> خروج من العرض</button>
                     </div>
-                    ${shipGridHtml(false, true)}
-                    <div id="shipAnimLayer" class="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center"></div>
+                    ${shipRoadHtml()}
+                    <div class="ship-body">${shipTvHtml()}</div>
+                    <button type="button" id="shipNavBtn" class="ship-nav-btn" onclick="shipToggleNav()" aria-label="إظهار القائمة أو إخفاؤها"><i class="fa-solid fa-chevron-left ship-i-open"></i><i class="fa-solid fa-chevron-right ship-i-close"></i></button>
                 </div>`,
                 after: shipRunAnim
             };
         }
 
-        // one arrival at a time: the box stays for the animation, then the next one plays
+        function shipToggleNav() { document.body.classList.toggle('ship-nav-open'); }
+
+        // The arrival card lives in its own layer on the page body, so a re-render of the content
+        // (a log entry, another list change) does not remove it while it plays.
+        let shipFxBusy = false, shipFxToken = 0;
         function shipRunAnim() {
-            const layer = el('shipAnimLayer');
-            if (!layer || shipAnimBusy || !shipAnimQueue.length) return;
+            if (shipFxBusy || !shipAnimQueue.length) return;
+            if (parseRoute().param !== 'screen') { shipAnimQueue = []; return; }
+            let fx = document.getElementById('shipFx');
+            if (!fx) {
+                fx = document.createElement('div');
+                fx.id = 'shipFx';
+                fx.className = 'fixed inset-0 z-[90] pointer-events-none flex items-center justify-center';
+                document.body.appendChild(fx);
+            }
             const next = shipAnimQueue.shift();
-            shipAnimBusy = true;
+            const token = ++shipFxToken;
+            shipFxBusy = true;
             const box = document.createElement('div');
             box.className = 'ship-anim text-center bg-emerald-600 text-white rounded-3xl px-10 py-8 shadow-2xl';
             box.innerHTML = `<div class="ship-ring mx-auto w-20 h-20 rounded-full bg-white text-emerald-600 flex items-center justify-center text-4xl mb-4"><i class="fa-solid fa-check"></i></div>
                 <p class="text-3xl font-black">تم توصيل فاتورة رقم ${esc(next.no)}</p>
                 <p class="text-xl mt-2 opacity-90">${esc(next.customer)}</p>`;
-            layer.appendChild(box);
-            setTimeout(() => { box.remove(); shipAnimBusy = false; shipRunAnim(); }, 4300);
+            fx.appendChild(box);
+            setTimeout(() => {
+                if (token !== shipFxToken) return;   // the screen was left meanwhile
+                box.remove();
+                shipFxBusy = false;
+                shipRunAnim();
+            }, 4300);
+        }
+
+        function shipLeaveScreen() {
+            document.body.classList.remove('ship-screen-on', 'ship-nav-open');
+            const fx = document.getElementById('shipFx');
+            if (fx) fx.remove();
+            shipAnimQueue = [];
+            shipFxBusy = false;
+            shipFxToken++;
         }
 
         // ---- خانة الجدول ----
@@ -7662,5 +7758,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5df8b3bd9f77226',t:'MTc5NTI2MjUyOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5df8b3bd9f77226',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5dfb7c2ac2843f0',t:'MTc5NTI2NDM1Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5dfb7c2ac2843f0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
