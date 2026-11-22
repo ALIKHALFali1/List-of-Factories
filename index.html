@@ -6092,7 +6092,7 @@
         const SHIP_DEFAULT_SLOTS = ['08:00', '10:00', '12:00', '14:00', '16:00'];
         const SHIP_CARGO_SUGGEST = ['كراتين', 'أدوات صحية', 'أبواب', 'سيراميك', 'أخرى'];
         const SHIP_MIN_STEPS = [1, 5, 10, 15];
-        const SHIP_DEFAULT_CFG = { clock: '12', minuteStep: 5, showPhone: true, showCargo: true, showRoad: true, showKpis: true, showSpot: true, celebrate: true };
+        const SHIP_DEFAULT_CFG = { clock: '12', minuteStep: 5, showPhone: true, showCargo: true, showRoad: true, showKpis: true, showSpot: true, celebrate: true, bg: '' };
         let shipCfg = { ...SHIP_DEFAULT_CFG };
         let shipDate = '';            // اليوم اللي على الجدول ('' = النهارده)
         let shipCells = {};           // خانات اليوم المعروض
@@ -6208,7 +6208,8 @@
                     showRoad: v.showRoad !== false,
                     showKpis: v.showKpis !== false,
                     showSpot: v.showSpot !== false,
-                    celebrate: v.celebrate !== false
+                    celebrate: v.celebrate !== false,
+                    bg: typeof v.bg === 'string' ? v.bg.slice(0, 10) : ''
                 };
                 shipLiveUpdate();
             }, onErr));
@@ -6249,12 +6250,12 @@
                 .ship-cell-cargo { font-size:.8rem; font-weight:700; background:rgba(0,0,0,.07); padding:.1rem .4rem; border-radius:.4rem; align-self:flex-start; max-width:100%; overflow-wrap:anywhere; }
                 .ship-done { box-shadow: 0 0 0 3px rgba(16,185,129,.55); }
                 .ship-cell-tv { padding:.25vw .3vw; border-radius:.6vw; min-height:0; gap:.12vw; overflow:hidden; }
-                .ship-cell-tv .ship-cell-stage { font-size:calc(.85vw * var(--tvk, 1)); }
-                .ship-cell-tv .ship-cell-name { font-size:calc(1.05vw * var(--tvk, 1)); font-weight:900; line-height:1.3; white-space:normal; display:block; }
-                .ship-cell-tv .ship-cell-inv { font-size:calc(.9vw * var(--tvk, 1)); line-height:1.3; display:block; }
-                .ship-cell-tv .ship-cell-phone { font-size:calc(.85vw * var(--tvk, 1)); font-weight:700; opacity:1; line-height:1.3; display:block; }
-                .ship-cell-tv .ship-cell-cargo { font-size:calc(.85vw * var(--tvk, 1)); line-height:1.3; white-space:normal; display:block; align-self:stretch; background:none; padding:0; border-radius:0; font-weight:700; }
-                .ship-screen { position:fixed; inset:0; z-index:45; display:flex; flex-direction:column; gap:1vh; padding:1.4vh 1.4vw; overflow:hidden; background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); color: var(--ink); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; transition: background 1.5s; }
+                .ship-cell-tv .ship-cell-stage { font-size:calc(.92vw * var(--tvk, 1)); }
+                .ship-cell-tv .ship-cell-name { font-size:calc(1.18vw * var(--tvk, 1)); font-weight:900; line-height:1.3; white-space:normal; display:block; }
+                .ship-cell-tv .ship-cell-inv { font-size:calc(1.02vw * var(--tvk, 1)); line-height:1.3; display:block; }
+                .ship-cell-tv .ship-cell-phone { font-size:calc(.92vw * var(--tvk, 1)); font-weight:700; opacity:1; line-height:1.3; display:block; }
+                .ship-cell-tv .ship-cell-cargo { font-size:calc(.92vw * var(--tvk, 1)); line-height:1.3; white-space:normal; display:block; align-self:stretch; background:none; padding:0; border-radius:0; font-weight:700; }
+                .ship-screen { position:fixed; inset:0; z-index:45; display:flex; flex-direction:column; gap:.8vh; padding:1vh 1.2vw; overflow:hidden; background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); color: var(--ink); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; transition: background 1.5s; }
                 .ship-screen[data-period="morning"] { background: linear-gradient(170deg,#fff8e6 0%,#f7e3a6 100%); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; }
                 .ship-screen[data-period="day"] { background: linear-gradient(170deg,#f0f9ff 0%,#9fd8f7 100%); --ink:#0c4a6e; --sub:#075985; --bld:#94a3b8; --win:#e0f2fe; --lamp:#fde68a; --asph:#475569; --walk:#cbd5e1; }
                 .ship-screen[data-period="dusk"] { background: linear-gradient(170deg,#ffedd5 0%,#e9d5ff 60%,#b9a4f5 100%); --ink:#3b1880; --sub:#5b21b6; --bld:#7c6bb0; --win:#fde68a; --lamp:#fbbf24; --asph:#4c3d6b; --walk:#8b7bc4; }
@@ -6267,7 +6268,7 @@
                 .ship-legend { display:flex; flex-wrap:wrap; gap:.6vw; }
                 .ship-legend span { font-size:1.1vw; font-weight:800; padding:.3vw .8vw; border-radius:.5vw; border:2px solid; }
                 .ship-exit { font-size:1.1vw; font-weight:800; padding:.6vh 1vw; border-radius:.8vw; background:#0f172a; color:#fff; border:0; cursor:pointer; }
-                .ship-sky { position:absolute; right:1.6vw; top:1.5vh; width:10vh; height:10vh; border-radius:50%; z-index:2; pointer-events:none; transition: top 1.5s linear, background 1.5s; }
+                .ship-sky { position:absolute; right:1.6vw; top:1vh; width:8vh; height:8vh; border-radius:50%; z-index:2; pointer-events:none; transition: top 1.5s linear, background 1.5s; }
                 .ship-sky-sun { background: radial-gradient(circle at 35% 35%, #fffbe6 0%, #fde68a 45%, #f59e0b 100%); box-shadow: 0 0 4vh 1vh rgba(251,191,36,.45); }
                 .ship-sky-moon { background: radial-gradient(circle at 60% 40%, #ffffff 0%, #e2e8f0 60%, #cbd5e1 100%); box-shadow: 0 0 3vh .6vh rgba(226,232,240,.35); overflow:hidden; }
                 .ship-sky-moon::after { content:''; position:absolute; top:-8%; left:24%; width:86%; height:116%; border-radius:50%; background: var(--sky-shade, #132238); }
@@ -6280,7 +6281,7 @@
                 .ship-tv-head small { font-size:.78vw; font-weight:700; opacity:.92; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
                 .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.15vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
                 .ship-tv-time small { font-size:1vw; font-weight:700; opacity:.9; }
-                .ship-road { position:relative; height:10vh; border-radius:1.2vw; overflow:hidden; }
+                .ship-road { position:relative; height:8.5vh; border-radius:1.2vw; overflow:hidden; }
                 .ship-city { position:absolute; left:0; top:0; height:60%; width:200%; display:flex; animation: shipCity 120s linear infinite; }
                 .ship-city svg { width:50%; height:100%; flex:0 0 50%; display:block; }
                 .ship-walk { position:absolute; left:0; right:0; top:60%; height:5%; background:var(--walk); }
@@ -6290,9 +6291,9 @@
                 .ship-truck { position:absolute; bottom:1vh; left:0; width:9vw; z-index:2; animation: shipDrive 16s linear infinite; }
                 .ship-truck svg, .ship-park svg { width:100%; height:auto; display:block; }
                 .ship-truck-amb { opacity:.45; filter: grayscale(.6); }
-                .ship-truck-tag { position:absolute; top:-3vh; left:0; white-space:nowrap; font-size:1vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
-                .ship-park { position:absolute; bottom:1vh; width:7.2vw; z-index:2; }
-                .ship-park-badge { position:absolute; top:-3vh; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:1vw; font-weight:900; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                .ship-truck-tag { position:absolute; top:-1.1vh; left:0; white-space:nowrap; font-size:.85vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
+                .ship-park { position:absolute; bottom:.7vh; width:6vw; z-index:2; }
+                .ship-park-badge { position:absolute; top:-1.9vh; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:.82vw; font-weight:900; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
                 .ship-wheel { transform-box: fill-box; transform-origin: center; animation: shipSpin .5s linear infinite; }
                 @keyframes shipCity { to { transform: translateX(-50%); } }
                 @keyframes shipDash { to { background-position: 6vw 0; } }
@@ -6309,24 +6310,24 @@
                 body.ship-screen-on.ship-nav-open .ship-nav-btn { right: 18rem; }
                 body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-open { display:none; }
                 body.ship-screen-on.ship-nav-open .ship-nav-btn .ship-i-close { display:inline; }
-                .ship-clock { font-size:2vw; font-weight:900; font-variant-numeric:tabular-nums; background:rgba(15,23,42,.85); color:#fff; padding:.4vh 1vw; border-radius:.8vw; white-space:nowrap; }
+                .ship-clock { font-size:1.7vw; font-weight:900; font-variant-numeric:tabular-nums; background:rgba(15,23,42,.85); color:#fff; padding:.4vh 1vw; border-radius:.8vw; white-space:nowrap; }
                 .ship-kpis { display:grid; grid-template-columns:repeat(5,1fr) 1.7fr; gap:.7vw; }
-                .ship-kpi { display:flex; align-items:center; gap:.6vw; background:rgba(255,255,255,.85); border:1px solid rgba(255,255,255,.7); border-radius:1vw; padding:.8vh .8vw; box-shadow:0 .4vh 1.4vh rgba(15,23,42,.10); }
+                .ship-kpi { display:flex; align-items:center; gap:.6vw; background:rgba(255,255,255,.85); border:1px solid rgba(255,255,255,.7); border-radius:1vw; padding:.55vh .7vw; box-shadow:0 .4vh 1.4vh rgba(15,23,42,.10); }
                 .ship-screen[data-period="night"] .ship-kpi { background:rgba(15,23,42,.72); border-color:#334155; color:#f8fafc; }
                 .ship-kpi-dot { width:1vw; height:1vw; min-width:10px; min-height:10px; border-radius:50%; flex:0 0 auto; }
-                .ship-kpi-num { font-size:1.9vw; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
-                .ship-kpi-label { font-size:.95vw; font-weight:800; opacity:.78; line-height:1.2; }
+                .ship-kpi-num { font-size:1.55vw; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
+                .ship-kpi-label { font-size:.85vw; font-weight:800; opacity:.78; line-height:1.2; }
                 .ship-kpi-prog { flex-direction:column; align-items:stretch; gap:.5vh; }
                 .ship-prog-track { height:1.1vh; border-radius:99px; background:rgba(100,116,139,.28); overflow:hidden; }
                 .ship-prog-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,#0ea5e9,#10b981); transition:width 1s ease; }
                 .ship-spot-host { min-height:0; }
-                .ship-spot { display:grid; grid-template-columns:1.05fr 1.45fr 2fr auto; align-items:center; gap:1vw; background:rgba(15,23,42,.9); color:#f8fafc; border-radius:1.1vw; padding:1vh 1.2vw; box-shadow:0 .6vh 2vh rgba(2,6,23,.25); }
+                .ship-spot { display:grid; grid-template-columns:1.05fr 1.45fr 2fr auto; align-items:center; gap:1vw; background:rgba(15,23,42,.9); color:#f8fafc; border-radius:1.1vw; padding:.7vh 1vw; box-shadow:0 .6vh 2vh rgba(2,6,23,.25); }
                 .ship-spot-in { animation: shipSpotIn .55s ease; }
                 @keyframes shipSpotIn { from { opacity:.25; transform:translateY(8px); } }
-                .ship-spot-car b { font-size:1.45vw; font-weight:900; display:block; line-height:1.2; }
-                .ship-spot-car span, .ship-spot-ship span { font-size:.98vw; opacity:.85; font-weight:700; display:block; line-height:1.3; }
-                .ship-spot-ship b { font-size:1.3vw; font-weight:900; display:block; line-height:1.25; }
-                .ship-steps-wrap { position:relative; padding-top:2.4vh; }
+                .ship-spot-car b { font-size:1.28vw; font-weight:900; display:block; line-height:1.2; }
+                .ship-spot-car span, .ship-spot-ship span { font-size:.88vw; opacity:.85; font-weight:700; display:block; line-height:1.3; }
+                .ship-spot-ship b { font-size:1.15vw; font-weight:900; display:block; line-height:1.25; }
+                .ship-steps-wrap { position:relative; padding-top:2vh; }
                 .ship-step-truck { position:absolute; top:0; transform:translateX(-50%); font-size:1.25vw; color:#38bdf8; transition:left .8s ease; }
                 .ship-steps { display:flex; align-items:flex-start; direction:ltr; }
                 .ship-step { flex:1; text-align:center; position:relative; }
@@ -6336,7 +6337,7 @@
                 .ship-step-dot { position:relative; z-index:2; width:1.1vw; height:1.1vw; min-width:12px; min-height:12px; border-radius:50%; background:#475569; border:.22vw solid #94a3b8; margin:0 auto; }
                 .ship-step.done .ship-step-dot { background:#10b981; border-color:#a7f3d0; }
                 .ship-step.cur .ship-step-dot { background:#0ea5e9; border-color:#bae6fd; animation:shipPulse 1.4s ease-in-out infinite; }
-                .ship-step p { font-size:.8vw; font-weight:800; margin-top:.4vh; opacity:.92; white-space:nowrap; }
+                .ship-step p { font-size:.72vw; font-weight:800; margin-top:.4vh; opacity:.92; white-space:nowrap; }
                 .ship-step.cur p { color:#7dd3fc; }
                 @keyframes shipPulse { 0%,100% { box-shadow:0 0 0 0 rgba(14,165,233,.55); } 50% { box-shadow:0 0 0 .7vw rgba(14,165,233,0); } }
                 .ship-spot-dots { display:flex; gap:.4vw; align-items:center; }
@@ -6345,10 +6346,11 @@
                 .ship-cell-focus { animation:shipCellGlow 1.8s ease-in-out infinite; position:relative; z-index:1; }
                 @keyframes shipCellGlow { 0%,100% { box-shadow:0 0 0 .18vw rgba(14,165,233,.9), 0 0 1.6vw rgba(14,165,233,.4); } 50% { box-shadow:0 0 0 .32vw rgba(14,165,233,1), 0 0 2.6vw rgba(14,165,233,.6); } }
                 .ship-city-near { height:84%; animation-duration:48s; opacity:.5; }
-                .ship-sign { position:absolute; top:.8vh; z-index:3; font-size:1vw; font-weight:900; background:rgba(2,6,23,.82); color:#fff; padding:.35vh .8vw; border-radius:.6vw; white-space:nowrap; }
-                .ship-sign-start { left:1vw; }
-                .ship-road-count { left:50%; right:auto; transform:translateX(-50%); white-space:nowrap; }
-                .ship-sign-end { right:1vw; background:rgba(4,120,87,.9); }
+                .ship-zone { position:absolute; top:0; bottom:0; width:6.6vw; z-index:4; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.4vh; text-align:center; font-size:.95vw; font-weight:900; line-height:1.25; color:#fff; background:rgba(2,6,23,.55); }
+                .ship-zone-start { left:0; }
+                .ship-zone-end { right:0; background:rgba(4,120,87,.68); }
+                .ship-zone i { font-size:1.6vw; }
+                .ship-park-l { width:6.3vw; }
                 .ship-truck-dim { filter:grayscale(.55); opacity:.82; }
                 .ship-screen[data-period="night"] .ship-truck::before { content:''; position:absolute; right:-3.2vw; top:34%; width:3.4vw; height:2.4vh; background:linear-gradient(270deg, rgba(253,224,71,.65), rgba(253,224,71,0)); clip-path:polygon(0 30%,100% 0,100% 100%,0 70%); pointer-events:none; }
                 .ship-anim2 { position:relative; overflow:hidden; animation:shipCeleb 5.2s ease forwards; background:linear-gradient(160deg,#059669,#047857); border:3px solid rgba(255,255,255,.65); }
@@ -6464,6 +6466,18 @@
 
         // ---- شاشة العرض 2.0: أرقام حية، رحلة كل عربية، واحتفال التوصيل (بصري فقط — من غير صوت) ----
         const SHIP_HEX = { slate: '#64748b', amber: '#d97706', sky: '#0284c7', violet: '#7c3aed', emerald: '#059669' };
+        function shipHexLum(hex) {
+            const n = parseInt(String(hex).slice(1), 16);
+            if (isNaN(n)) return 0;
+            return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+        }
+        function shipShade(hex, amt) {
+            const n = parseInt(String(hex).slice(1), 16);
+            if (isNaN(n)) return hex;
+            const t = amt < 0 ? 0 : 255, f = Math.abs(amt) / 100;
+            const c = v => Math.round((t - v) * f + v);
+            return `rgb(${c((n >> 16) & 255)},${c((n >> 8) & 255)},${c(n & 255)})`;
+        }
         const shipMotion = () => (window.App && App.Motion && App.Motion.level) || 'balanced';
         let shipSpotCar = 0, shipSpotTimer = null, shipClockTimer = null, shipCountRaf = null;
 
@@ -6580,8 +6594,9 @@
             shipCountRaf = null;
         }
 
-        // the road: a living street. Waiting/loaded trucks queue at the company, transit trucks
-        // drive the whole way, arrived trucks park at the customer end.
+        // the road: a living street with two fixed zones — the company (departure) on the left,
+        // the customer (arrival) on the right. Queue trucks wait inside the company zone,
+        // transit trucks drive between the zones, arrived trucks park by the arrival zone.
         function shipRoadHtml() {
             const carsAt = st => Object.keys(shipCells).filter(k => shipCells[k] && shipCells[k].stage === st)
                 .map(k => shipCarOf(k)).filter((v, i, a) => a.indexOf(v) === i).sort((x, y) => x - y);
@@ -6590,23 +6605,22 @@
             const queue = [
                 ...carsAt('waiting').slice(0, 3).map(c => ({ c, label: 'في الانتظار', dim: true, bg: '#64748b' })),
                 ...carsAt('loaded').slice(0, 3).map(c => ({ c, label: 'تم التحميل', dim: false, bg: '#d97706' }))
-            ].slice(0, 5);
+            ].slice(0, 4);
             const city = shipCityBackdrop();
             const lite = shipMotion() === 'lite';
             const ambient = lite ? '' : [0, 1].map(i => `<div class="ship-truck ship-truck-amb" style="animation-delay:${-i * 11}s;animation-duration:26s;opacity:.22">${shipTruckSvg('')}</div>`).join('');
-            const trucks = moving.map((c, i) => `<div class="ship-truck" style="animation-delay:${-i * 4.5 - (c % 5)}s;animation-duration:${16 + (c % 4) * 2}s;bottom:${i % 2 ? 3.4 : 1}vh;transform:translateX(${30 + (c * 13) % 50}vw)"><span class="ship-truck-tag">${esc(shipCarTitle(c))}</span>${shipTruckSvg(shipCarInfo(c).plate)}</div>`).join('');
-            const park = parked.map((c, i) => `<div class="ship-park" style="right:${1 + i * 7.6}vw"><span class="ship-park-badge"><i class="fa-solid fa-check"></i> وصلت</span>${shipTruckSvg(shipCarInfo(c).plate)}</div>`).join('');
-            const queueHtml = queue.map((q, i) => `<div class="ship-park ship-park-l ${q.dim ? 'ship-truck-dim' : ''}" style="left:${1 + i * 7.4}vw"><span class="ship-park-badge" style="background:${q.bg}">${q.label}</span>${shipTruckSvg(shipCarInfo(q.c).plate)}</div>`).join('');
+            const trucks = moving.map((c, i) => `<div class="ship-truck" style="animation-delay:${-i * 4.5 - (c % 5)}s;animation-duration:${16 + (c % 4) * 2}s;bottom:${i % 2 ? 3.2 : .8}vh;transform:translateX(${32 + (c * 13) % 46}vw)"><span class="ship-truck-tag">${esc(shipCarTitle(c))}</span>${shipTruckSvg(shipCarInfo(c).plate)}</div>`).join('');
+            const park = parked.map((c, i) => `<div class="ship-park" style="right:${7.2 + i * 6.9}vw"><span class="ship-park-badge"><i class="fa-solid fa-check"></i> وصلت</span>${shipTruckSvg(shipCarInfo(c).plate)}</div>`).join('');
+            const queueHtml = queue.map((q, i) => `<div class="ship-park ship-park-l ${q.dim ? 'ship-truck-dim' : ''}" style="left:${7.2 + i * 6.7}vw"><span class="ship-park-badge" style="background:${q.bg}">${q.label}</span>${shipTruckSvg(shipCarInfo(q.c).plate)}</div>`).join('');
             return `<div class="ship-road" aria-hidden="true">
                 <div class="ship-city"><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg></div>
-                <div class="ship-city ship-city-near"><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg></div>
+                ${shipMotion() === 'cinematic' ? `<div class="ship-city ship-city-near"><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg><svg viewBox="0 0 1600 100" preserveAspectRatio="none">${city}</svg></div>` : ''}
                 <div class="ship-walk"></div>
                 <div class="ship-asph"></div>
                 <div class="ship-road-line"></div>
-                <div class="ship-sign ship-sign-start"><i class="fa-solid fa-warehouse"></i> الشركة — الانطلاق</div>
-                <div class="ship-sign ship-sign-end"><i class="fa-solid fa-location-dot"></i> الوصول للعميل</div>
+                <div class="ship-zone ship-zone-start"><i class="fa-solid fa-warehouse"></i><span>الشركة<br>الانطلاق</span></div>
+                <div class="ship-zone ship-zone-end"><i class="fa-solid fa-location-dot"></i><span>الوصول<br>للعميل</span></div>
                 ${ambient}${queueHtml}${trucks}${park}
-                <div class="ship-road-count"><i class="fa-solid fa-truck-fast"></i> في الطريق: ${moving.length}${parked.length ? ` · وصلت: ${parked.length}` : ''}</div>
             </div>`;
         }
 
@@ -6636,13 +6650,13 @@
         function shipSkyPos(date = new Date()) {
             const p = homeSkyPos(date);
             const lift = Math.max(0, Math.min(1, (34 - p.top) / 26));
-            return { moon: p.icon === 'fa-moon', top: (1.5 + (1 - lift) * 10).toFixed(1) };
+            return { moon: p.icon === 'fa-moon', top: (0.2 + (1 - lift) * 2.2).toFixed(1) };
         }
         let shipSkyTimer = null;
         function shipSkyTick() {
             const screen = document.getElementById('shipScreen');
             if (!screen) return;
-            screen.dataset.period = homePeriod(new Date().getHours());
+            if (screen.dataset.custom !== '1') screen.dataset.period = homePeriod(new Date().getHours());
             const sky = document.getElementById('shipSky');
             if (!sky) return;
             const pos = shipSkyPos();
@@ -6671,16 +6685,17 @@
             shipEnsureSubs();
             shipInjectStyles();
             document.body.classList.add('ship-screen-on');
+            document.body.classList.remove('ship-nav-open');
             const legend = SHIP_STAGES.map(([, l, c]) => `<span class="${SHIP_CLS[c]}">${l}</span>`).join('');
             const period = homePeriod(new Date().getHours());
+            const bgHex = /^#[0-9a-f]{6}$/i.test(shipCfg.bg || '') ? shipCfg.bg : '';
             return {
                 title: 'شاشة الشحن',
                 actions: '',
-                html: `<div id="shipScreen" dir="rtl" class="ship-screen" data-period="${period}" data-motion="${shipMotion()}">
+                html: `<div id="shipScreen" dir="rtl" class="ship-screen" data-period="${bgHex ? (shipHexLum(bgHex) < 0.55 ? 'night' : 'day') : period}" data-custom="${bgHex ? '1' : ''}" data-motion="${shipMotion()}" ${bgHex ? `style="background:linear-gradient(170deg, ${shipShade(bgHex, 26)} 0%, ${bgHex} 80%)"` : ''}>
                     <div class="ship-head">
                         <div><h1>حركة النقل</h1><p>${esc(fmtDateAr(shipDay()))} — تابع رحلة كل عربية لحظة بلحظة</p></div>
-                        <div style="display:flex;align-items:center;gap:1vw"><span id="shipClock" class="ship-clock" dir="ltr"></span>
-                        <button type="button" class="ship-exit" onclick="navigate('shipping')"><i class="fa-solid fa-xmark"></i> خروج من العرض</button></div>
+                        <span id="shipClock" class="ship-clock" dir="ltr"></span>
                     </div>
                     ${shipKpisHtml()}
                     <div id="shipSky" class="ship-sky ship-sky-sun" aria-hidden="true"></div>
@@ -7014,6 +7029,11 @@
                     ${chk('showKpis', 'اظهر أرقام اليوم الحية (عدادات المراحل ونسبة الإنجاز)', c.showKpis)}
                     ${chk('showSpot', 'اظهر بطاقة «رحلة العربية» والتنقل التلقائي بين العربيات الشغالة', c.showSpot)}
                     ${chk('celebrate', 'احتفال بصري عند إتمام التوصيل (من غير صوت)', c.celebrate)}
+                    ${field('لون خلفية شاشة العرض', `<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+                            <input type="color" id="shipBgColor" name="bg" value="${esc(c.bg || '#0b3b6e')}" style="width:3.4rem;height:2.5rem;padding:2px;border:1px solid #cbd5e1;border-radius:.55rem;background:#fff;cursor:pointer">
+                            <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="bgAuto" class="w-4 h-4" ${c.bg ? '' : 'checked'}> تلقائي حسب الوقت (نهار / غروب / ليل)</label>
+                        </div>
+                        <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.55rem">${[['#0b3b6e', 'أزرق الشركة', '#fff'], ['#0f766e', 'أخضر مائي', '#fff'], ['#9a3412', 'برتقالي دافئ', '#fff'], ['#4c1d95', 'بنفسجي', '#fff'], ['#111827', 'ليلي غامق', '#fff'], ['#bae6fd', 'سماوي فاتح', '#0c4a6e'], ['#fef3c7', 'ذهبي فاتح', '#92400e']].map(([hex, l, tc]) => `<button type="button" onclick="document.getElementById('shipBgColor').value='${hex}';document.querySelector('[name=bgAuto]').checked=false" class="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-300" style="background:${hex};color:${tc}">${l}</button>`).join('')}</div>`, 'اختار لون جاهز أو أي لون من المربع، وشيل علامة «تلقائي». اللون بيظهر على شاشة العرض بس')}
                     ${field('مستوى حركة شاشة العرض (على الجهاز ده بس)', `<select onchange="shipSetMotion(this.value)" class="${INPUT_CLS}">${[['auto', 'تلقائي حسب قوة الجهاز'], ['cinematic', 'سينمائي — أنميشن كامل'], ['balanced', 'متوازن'], ['lite', 'خفيف — للشاشات الضعيفة']].map(([v, l]) => `<option value="${v}" ${shipMotionChoice() === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`, 'بيتطبق على طول من غير ما تحتاج تحفظ')}
                 </div>`
             });
@@ -7031,6 +7051,8 @@
                 showSpot: fd.get('showSpot') === 'on',
                 celebrate: fd.get('celebrate') === 'on'
             };
+            const bgVal = fd.get('bgAuto') === 'on' ? '' : String(fd.get('bg') || '').slice(0, 10);
+            if (bgVal) next.bg = bgVal;
             const seq = modalSeq;
             fbDb.doc('shippingConfig/display').set(next).then(() => {
                 log('تعديل إعدادات الشحن', next.clock === '24' ? '٢٤ ساعة' : '١٢ ساعة');
@@ -9839,5 +9861,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e8d07d2c9dcc66',t:'MTc5NTM1OTczOA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e8d07d2c9dcc66',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e901fc1fb62b24',t:'MTc5NTM2MTc2NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e901fc1fb62b24',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
