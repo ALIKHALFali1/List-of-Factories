@@ -6520,7 +6520,8 @@
             const cargo = [v.cargoType, v.cargoText].filter(Boolean).join(' — ');
             const showPhone = !big || shipCfg.showPhone;
             const showCargo = !big || shipCfg.showCargo;
-            return `<button type="button" ${click} ${edit ? `data-ship-key="${key}"` : ''} ${big ? `data-car="${shipCarOf(key)}"` : ''} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${v.stage === 'delivered' ? 'ship-done' : ''} ${big && shipSpotCar === shipCarOf(key) ? 'ship-cell-focus' : ''} ${edit ? 'ship-cell-drag hover:shadow-md' : 'cursor-default'}">
+            const ckHit = big ? shipCkCache.get([label, v.customer || '', `فاتورة رقم ${v.no || ''}`, showPhone && v.phone ? v.phone : '', showCargo && cargo ? cargo : ''].join('|')) : undefined;
+            return `<button type="button" ${click} ${edit ? `data-ship-key="${key}"` : ''} ${big ? `data-car="${shipCarOf(key)}"` : ''} ${ckHit ? `style="--ck:${ckHit}"` : ''} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${v.stage === 'delivered' ? 'ship-done' : ''} ${big && shipSpotCar === shipCarOf(key) ? 'ship-cell-focus' : ''} ${edit ? 'ship-cell-drag hover:shadow-md' : 'cursor-default'}">
                 <span class="ship-cell-stage">${label}</span>
                 <span class="ship-cell-name">${esc(v.customer || '')}</span>
                 <span class="ship-cell-inv">فاتورة رقم ${esc(v.no || '')}</span>
@@ -6915,61 +6916,79 @@
             return false;
         }
 
-        // Fit: every customer box is fitted on its own, and the box stretches to its words.
-        // Each row is first grown to the height of its tallest box (measured, then handed to
-        // the grid as a minimum, leftover screen shared equally). Only if the whole table
-        // still runs past the screen does the tallest (or too-wide) box step its own text
-        // down a notch — short boxes always keep their big text, and nothing is ever cut.
+        // Fit: the grid never stretches — every box on the screen is exactly the same
+        // size, in equal columns and equal rows, so the table always looks tidy. Only
+        // the words inside a box are fitted: a box starts from the scale remembered
+        // for the very same words (or the biggest text when they are new) and is then
+        // nudged — never more than a damped step at a time — until its words sit at
+        // about 98% of the box, shrinking when they spill and growing back when a
+        // box is left with air. A fresh scale takes a few frames to reach the words'
+        // real size, so measurements are only trusted once two frames in a row read
+        // the same; the settled scale is remembered by content, so a repaint of the
+        // same words opens already fitted and never pulses.
         let shipResizeBound = false;
+        let shipFitToken = 0;
+        const shipCkCache = new Map();
         function shipFitSoon() { requestAnimationFrame(shipFitTv); }
         function shipFitTv() {
             const screen = document.getElementById('shipScreen');
             if (!screen) return;
-            const tv = screen.querySelector('.ship-tv');
-            const cells = [...screen.querySelectorAll('.ship-cell-tv')];
-            if (!tv || !cells.length) return;
-            const MAXK = 1.15, MINK = 0.5, STEP = 0.05;
-            const kOf = c => parseFloat(c.style.getPropertyValue('--ck')) || MAXK;
-            cells.forEach(c => c.style.setProperty('--ck', MAXK));
-            // intrinsic height of a box's words, independent of the height it happens to sit at
-            const contentH = c => {
-                const kids = [...c.children];
-                if (!kids.length) return 0;
-                const cs = getComputedStyle(c);
-                let h = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
-                    + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
-                    + (parseFloat(cs.rowGap) || 0) * (kids.length - 1);
-                for (const k of kids) h += k.offsetHeight;
-                return h;
-            };
-            // group the occupied boxes by row (a row shares its top edge with its time cell)
-            const times = [...tv.querySelectorAll('.ship-tv-time')];
-            if (!times.length) return;
-            const groups = times.map(t => {
-                const top = t.getBoundingClientRect().top;
-                return cells.filter(c => Math.abs(c.getBoundingClientRect().top - top) < 4);
+            if (!screen.querySelector('.ship-cell-tv')) return;
+            const MAXK = 1.15, MINK = 0.2;
+            const token = ++shipFitToken;
+            screen.querySelectorAll('.ship-cell-tv').forEach(c => {
+                if (!c.style.getPropertyValue('--ck')) c.style.setProperty('--ck', MAXK);
             });
-            const growRows = () => {
-                const mins = groups.map(g => g.length ? Math.max(...g.map(contentH)) : 0);
-                tv.style.gridTemplateRows = `8vh ${mins.map(h => `minmax(${Math.ceil(h)}px, 1fr)`).join(' ')}`;
+            // how much of its box a cell's words really take up (their own boxes
+            // against the cell's box — scrollHeight lies for centred flex content)
+            const extent = c => {
+                let top = Infinity, bot = -Infinity, lft = Infinity, rgt = -Infinity;
+                for (const k of c.children) {
+                    const r = k.getBoundingClientRect();
+                    if (r.top < top) top = r.top;
+                    if (r.bottom > bot) bot = r.bottom;
+                    if (r.left < lft) lft = r.left;
+                    if (r.right > rgt) rgt = r.right;
+                }
+                if (top === Infinity) return 1;
+                return Math.min(c.clientHeight / Math.max(1, bot - top), c.clientWidth / Math.max(1, rgt - lft), 1);
             };
-            const tooWide = c => c.scrollWidth > c.clientWidth + 1;
-            growRows();
-            for (let i = 0; i < 100; i++) {
-                const gridOver = tv.scrollHeight > tv.clientHeight + 1;
-                const wide = cells.filter(tooWide);
-                if (!gridOver && !wide.length) break;
-                // the box causing it pays: a too-wide box, otherwise the tallest box on screen
-                // only a row's tallest box sets its height, so only those ever step down
-                const target = wide.length
-                    ? wide.reduce((a, b) => (b.scrollWidth - b.clientWidth) > (a.scrollWidth - a.clientWidth) ? b : a)
-                    : groups.flatMap(g => g.length ? [g.reduce((a, b) => contentH(b) > contentH(a) ? b : a)] : [])
-                        .reduce((a, b) => contentH(b) > contentH(a) ? b : a);
-                const k = kOf(target);
-                if (k <= MINK) break;
-                target.style.setProperty('--ck', Math.round((k - STEP) * 100) / 100);
-                growRows();
-            }
+            const textSig = c => ['ship-cell-stage', 'ship-cell-name', 'ship-cell-inv', 'ship-cell-phone', 'ship-cell-cargo']
+                .map(cls => { const el = c.querySelector('.' + cls); return el ? el.textContent : ''; }).join('|');
+            const remember = (c, k) => { if (k) shipCkCache.set(textSig(c), k); };
+            let prevSig = null, settle = 0, pass = 0;
+            const step = () => {
+                if (token !== shipFitToken) return;                    // a newer fit took over
+                if (document.getElementById('shipScreen') !== screen) return;   // screen rebuilt/gone
+                const data = [...screen.querySelectorAll('.ship-cell-tv')]
+                    .map(c => ({ c, f: extent(c), k: parseFloat(c.style.getPropertyValue('--ck')) || MAXK }));
+                const sig = data.map(d => d.k + ':' + Math.round(d.f * 500)).join('|');
+                if (sig !== prevSig && settle < 40) {                  // sizes still landing: wait
+                    prevSig = sig; settle++;
+                    requestAnimationFrame(step);
+                    return;
+                }
+                settle = 0;
+                const jobs = [];
+                for (const d of data) {
+                    let nk = null;
+                    if (d.f < 0.985 && d.k > MINK) nk = Math.max(MINK, d.k * Math.max(d.f, 0.55) * 0.98);
+                    else if (d.f > 1.12 && d.k < MAXK) nk = Math.min(MAXK, d.k * Math.min(d.f, 1.3) * 0.98);
+                    if (nk === null) continue;
+                    nk = Math.round(nk * 1000) / 1000;
+                    if (Math.abs(nk - d.k) >= 0.005) jobs.push([d.c, nk]);
+                }
+                const busy = new Set(jobs.map(([c]) => c));
+                for (const d of data) if (!busy.has(d.c)) remember(d.c, d.k);
+                if (!jobs.length || ++pass >= 16) {
+                    data.forEach(d => remember(d.c, d.k));
+                    return;
+                }
+                jobs.forEach(([c, nk]) => c.style.setProperty('--ck', nk));
+                prevSig = null;
+                requestAnimationFrame(step);
+            };
+            requestAnimationFrame(step);
         }
 
         function shipToggleNav() { document.body.classList.toggle('ship-nav-open'); }
@@ -10179,5 +10198,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb64aecf7e83ae',t:'MTc5NTM4Njc3OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb64aecf7e83ae',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb7e14ab79e1e4',t:'MTc5NTM4NzgyMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb7e14ab79e1e4',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
