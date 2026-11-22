@@ -137,10 +137,50 @@
         .modal-panel {
             max-height: calc(100vh - 2rem); max-height: calc(100dvh - 2rem);
             overflow-y: auto; -webkit-overflow-scrolling: touch;
-            animation: modalIn .22s var(--ease) both;
+            animation: modalIn var(--motion) var(--ease-premium) both;
         }
         @keyframes modalIn { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
         .toast-enter { opacity: 0; transform: translateY(8px); }
+
+        /* ================= PREMIUM MOTION SYSTEM (one system for the whole app) =================
+           Tokens first: every duration/easing below reads from these, so all screens move alike.
+           Only opacity + transform are animated; lite level and prefers-reduced-motion flatten
+           every duration through the global rules, and JS checks the same switches before starting
+           any transition. Nothing here re-runs on data repaints: page motion is navigation-only. */
+        :root {
+            --motion-fast: 150ms; --motion: 240ms; --motion-slow: 340ms;
+            --ease-premium: cubic-bezier(.32, .72, .24, 1); --ease-exit: cubic-bezier(.5, 0, .75, 0);
+        }
+        html[data-motion="balanced"] { --motion: 210ms; --motion-slow: 300ms; }
+        html[data-motion="cinematic"] { --motion: 260ms; --motion-slow: 380ms; }
+        /* page transitions (View Transitions API, when the browser offers it) */
+        ::view-transition-old(root) { animation: vtOut var(--motion) var(--ease-exit) both; }
+        ::view-transition-new(root) { animation: vtIn var(--motion) var(--ease-premium) both; }
+        @keyframes vtOut { to { opacity: 0; transform: translateX(var(--vt-out-x, 0px)); } }
+        @keyframes vtIn { from { opacity: 0; transform: translateX(var(--vt-in-x, 0px)); } }
+        /* fallback page entrance (no View Transitions): one wrapper, fade + short slide */
+        .page-slide-in { animation: pageSlideIn var(--motion) var(--ease-premium) both; will-change: opacity, transform; }
+        @keyframes pageSlideIn { from { opacity: 0; transform: translateX(var(--page-in-x, 10px)); } to { opacity: 1; transform: none; } }
+        /* in-page section swap (tabs / view-mode), fired only by explicit user switches */
+        .motion-reveal { animation: sectionIn var(--motion) var(--ease-premium) both; }
+        @keyframes sectionIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        /* light card stagger, only while <html> carries .motion-stagger for one navigation */
+        .motion-stagger .stagger > * { animation: riseIn var(--motion) var(--ease-premium) both; }
+        /* menus and popovers grow a touch as they fade in */
+        #rowMenu:not(.hidden), #notifPanel:not(.hidden) { animation: popIn var(--motion-fast) var(--ease-premium) both; transform-origin: top center; }
+        @keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.97); } to { opacity: 1; transform: none; } }
+        /* modal exit (entrance lives on .modal-panel) */
+        #modalBackdrop { animation: fadeIn var(--motion-fast) ease both; }
+        #modalBackdrop.closing { opacity: 0; transition: opacity var(--motion-fast) var(--ease-exit); }
+        #modalBackdrop.closing .modal-panel { animation: modalOut var(--motion-fast) var(--ease-exit) both; }
+        @keyframes modalOut { to { opacity: 0; transform: translateY(8px) scale(.98); } }
+        /* every control answers the hand the same gentle way */
+        a, button, input, select, textarea {
+            transition-property: background-color, color, border-color, box-shadow, opacity, transform;
+            transition-duration: var(--motion-fast); transition-timing-function: ease;
+        }
+        button:not(:disabled):active { transform: scale(.98); }
+        #sidebar { transition: transform var(--motion) var(--ease-premium); }
         .nav-link.active { background: rgba(255,255,255,.12); color: #fff; }
         @media (max-width: 639px) { input, select, textarea { font-size: 16px !important; } }
 
@@ -289,7 +329,7 @@
         /* ---------- command palette ---------- */
         .palette { position: fixed; inset: 0; z-index: 95; display: flex; align-items: flex-start; justify-content: center; padding: 10vh 1rem 1rem; }
         .palette-backdrop { position: absolute; inset: 0; background: rgb(2 6 23 / .55); backdrop-filter: blur(6px); animation: fadeIn .15s ease both; }
-        .palette-panel { position: relative; width: 100%; max-width: 660px; background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: 20px; box-shadow: var(--shadow-lg); overflow: hidden; animation: paletteIn .2s var(--ease) both; }
+        .palette-panel { position: relative; width: 100%; max-width: 660px; background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: 20px; box-shadow: var(--shadow-lg); overflow: hidden; animation: paletteIn var(--motion) var(--ease-premium) both; }
         @keyframes paletteIn { from { opacity: 0; transform: translateY(-8px) scale(.985); } to { opacity: 1; transform: none; } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         .palette-search { display: flex; align-items: center; gap: .65rem; padding: .9rem 1rem; border-bottom: 1px solid rgb(var(--line)); }
@@ -3728,7 +3768,9 @@
         }
 
         // ============ MODAL SYSTEM ============
+        let modalCloseTimer = null;
         function openModal({ title, body, submitText = 'حفظ', onSubmit = null, danger = false, size = 'md', onOpen = null }) {
+            clearTimeout(modalCloseTimer); modalCloseTimer = null;
             const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl' };
             modalSubmit = onSubmit;
             modalSeq++;
@@ -3756,9 +3798,17 @@
         }
 
         function closeModal() {
-            el('modalHost').innerHTML = '';
-            el('modalHost').classList.add('hidden');
+            const host = el('modalHost');
+            const backdrop = el('modalBackdrop');
+            const finish = () => { host.innerHTML = ''; host.classList.add('hidden'); modalSubmit = null; modalCloseTimer = null; };
+            if (!host || host.classList.contains('hidden') || !backdrop) { if (host) { host.innerHTML = ''; host.classList.add('hidden'); } modalSubmit = null; return; }
+            const reduced = (window.App && App.Motion && App.Motion.level === 'lite')
+                || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+            if (reduced) { finish(); return; }
+            if (modalCloseTimer) return;   // already on its way out
             modalSubmit = null;
+            backdrop.classList.add('closing');
+            modalCloseTimer = setTimeout(finish, 180);
         }
 
         async function submitModal(e) {
@@ -3785,6 +3835,7 @@
         }
 
         function navigate(route) {
+            navDirection = 'forward';
             const target = '#/' + route;
             if (location.hash === target) render();
             else location.hash = target;
@@ -3806,6 +3857,8 @@
 
         let lastAnimatedRoute = '';
         let suppressEnterHashRender = false;
+        let navDirection = 'forward';   // 'back' is set by popstate so returns slide the other way
+        let renderViaNav = false;       // true only for hash-driven renders: those may use View Transitions
         function render() {
             if (orderFormKeep && parseRoute().name !== 'orders') orderFormKeep = null;
             if (pendingNewOrderImages.length && parseRoute().param !== 'new') pendingNewOrderImages = [];
@@ -3829,21 +3882,62 @@
             if (name === 'companies' && param && !findCompany(param)) return navigate('companies');
 
             const view = VIEWS[name](param);
-            el('pageTitle').textContent = view.title;
-            const subEl = el('pageSub');
-            if (subEl) subEl.textContent = (appData.settings.systemName || '') + ' · ' + new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
-            el('topActions').innerHTML = view.actions || '';
-            el('content').innerHTML = view.html;
-            el('content').insertAdjacentHTML('afterbegin', checkReportBanner());
-            renderChrome(name);
-            if (view.after) view.after();
             const routeKey = name + '/' + (param || '');
             const animatePage = routeKey !== lastAnimatedRoute;
             lastAnimatedRoute = routeKey;
-            if (window.App && App.Motion && !(name === 'shipping' && param === 'screen')) {
-                App.Motion.tagTilt();
-                if (animatePage) App.Motion.pageIn();
+            const dir = navDirection; navDirection = 'forward';
+            const applyView = () => {
+                el('pageTitle').textContent = view.title;
+                const subEl = el('pageSub');
+                if (subEl) subEl.textContent = (appData.settings.systemName || '') + ' · ' + new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
+                el('topActions').innerHTML = view.actions || '';
+                const contentEl = el('content');
+                contentEl.classList.remove('motion-stagger', 'page-slide-in');
+                contentEl.innerHTML = view.html;
+                contentEl.insertAdjacentHTML('afterbegin', checkReportBanner());
+                renderChrome(name);
+                if (view.after) view.after();
+                if (window.App && App.Motion && !(name === 'shipping' && param === 'screen')) {
+                    App.Motion.tagTilt();
+                    if (animatePage) App.Motion.pageIn();
+                }
+            };
+            // ---- page transition: real exit+enter via View Transitions on hash navigation,
+            // ---- otherwise one light fade+slide of the new page. Data repaints never animate.
+            const motionOK = !!(window.App && App.Motion && App.Motion.level !== 'lite'
+                && !(name === 'shipping' && param === 'screen'));
+            const reducedMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+            if (animatePage && motionOK) {
+                const rtl = document.documentElement.getAttribute('dir') === 'rtl';
+                const fwd = rtl ? -1 : 1;
+                const inX = (dir === 'back' ? -fwd : fwd) * 14;
+                const root = document.documentElement;
+                root.style.setProperty('--vt-in-x', inX + 'px');
+                root.style.setProperty('--vt-out-x', Math.round(-inX * 0.7) + 'px');
+                root.style.setProperty('--page-in-x', inX + 'px');
+                const useVT = renderViaNav && !reducedMotion && !document.hidden
+                    && typeof document.startViewTransition === 'function';
+                if (useVT) {
+                    App.Motion._vtActive = true;
+                    try {
+                        const t = document.startViewTransition(applyView);
+                        if (t && t.finished && t.finished.catch) t.finished.catch(() => {});
+                        onAfterRender(name);
+                        return;
+                    } catch (e) { App.Motion._vtActive = false; /* fall through to the CSS entrance */ }
+                }
+                applyView();
+                if (!reducedMotion) {
+                    const c = el('content');
+                    c.classList.remove('page-slide-in'); void c.offsetWidth; c.classList.add('page-slide-in');
+                }
+            } else {
+                applyView();
             }
+            onAfterRender(name);
+        }
+
+        function onAfterRender(name) {
             if (window.App && App.Scene) {
                 if (name === 'home') { App.Scene.start(el('homeScene')); App.Scene.heroParallax(document.querySelector('.home-hero')); }
                 else App.Scene.stop();
@@ -4230,8 +4324,8 @@
         function ordersViewToggleHtml() {
             return `<div class="flex items-center justify-between gap-2">
                 <span class="view-toggle" role="tablist" aria-label="طريقة العرض">
-                    <button type="button" class="${ordersViewMode === 'table' ? 'on' : ''}" onclick="ordersViewMode='table'; updateOrdersBody()"><i class="fa-solid fa-table-list"></i> جدول</button>
-                    <button type="button" class="${ordersViewMode === 'kanban' ? 'on' : ''}" onclick="ordersViewMode='kanban'; updateOrdersBody()"><i class="fa-solid fa-table-columns"></i> كانبان</button>
+                    <button type="button" class="${ordersViewMode === 'table' ? 'on' : ''}" onclick="ordersViewMode='table'; updateOrdersBody(); if (window.App && App.Motion) App.Motion.reveal(el('ordersBody'))"><i class="fa-solid fa-table-list"></i> جدول</button>
+                    <button type="button" class="${ordersViewMode === 'kanban' ? 'on' : ''}" onclick="ordersViewMode='kanban'; updateOrdersBody(); if (window.App && App.Motion) App.Motion.reveal(el('ordersBody'))"><i class="fa-solid fa-table-columns"></i> كانبان</button>
                 </span>
                 <span class="text-[11px] text-slate-400 hidden sm:block">${ordersViewMode === 'kanban' ? 'اسحب أي طلبية بين الأعمدة لتغيير حالتها (حسب صلاحياتك)' : ''}</span>
             </div>`;
@@ -8210,6 +8304,7 @@
         function setUsersTab(tab) {
             usersTab = tab;
             render();
+            if (window.App && App.Motion) App.Motion.reveal(el('content'));
         }
 
         function usersTableHtml() {
@@ -9489,9 +9584,25 @@
             },
             pageIn() {
                 const c = el('content'); if (!c || this.level === 'lite') return;
-                // page content itself is never faded or shifted in: on real devices that read as a
-                // flicker/distortion at opening. Only counters and charts animate, and only on navigation.
+                // called only when the route changed (render gates it). The page wrapper itself is
+                // animated by the transition layer; here cards rise in a short stagger, once.
+                // Under a View Transition the snapshot already carries the motion, so skip the stagger.
+                if (!this._vtActive) {
+                    c.classList.add('motion-stagger');
+                    clearTimeout(this._staggerTimer);
+                    this._staggerTimer = setTimeout(() => c.classList.remove('motion-stagger'), 800);
+                }
+                this._vtActive = false;
                 this.counters(c); this.chartsIn(c); this.bindTilt();
+            },
+            // one light fade+rise for an in-page section swap (tabs, view modes) — explicit calls only,
+            // never wired to data repaints, so typing or sync updates stay perfectly still
+            reveal(elm) {
+                if (!elm || this.level === 'lite') return;
+                if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+                elm.classList.remove('motion-reveal');
+                void elm.offsetWidth;
+                elm.classList.add('motion-reveal');
             },
             chartsIn(root) {
                 if (!window.gsap || this.level === 'lite') return;
@@ -9879,9 +9990,11 @@
         document.addEventListener('DOMContentLoaded', async () => {
             themeLoad(); applyTheme(); startDigitsObserver(); homeCfgLoad(); App.init(); setTimeout(() => App.Notifications.checkDue(false), 4000);
             appData = normalizeData(defaultData());   // placeholder until the first sync
+            window.addEventListener('popstate', () => { navDirection = 'back'; });
             window.addEventListener('hashchange', () => {
                 if (suppressEnterHashRender) { suppressEnterHashRender = false; return; }
-                render();
+                renderViaNav = true;
+                try { render(); } finally { renderViaNav = false; }
             });
 
             if (!firebaseReady()) {
@@ -9937,5 +10050,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb1ab5edfd0e5f',t:'MTc5NTM4Mzc1MA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb1ab5edfd0e5f',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb31e9580f8e0a',t:'MTc5NTM4NDcwMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb31e9580f8e0a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
