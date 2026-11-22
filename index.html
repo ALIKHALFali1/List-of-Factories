@@ -6371,6 +6371,12 @@
                 .ship-cell-phone { font-size:.8rem; opacity:.85; font-family:ui-monospace,monospace; }
                 .ship-cell-cargo { font-size:.8rem; font-weight:700; background:rgba(0,0,0,.07); padding:.1rem .4rem; border-radius:.4rem; align-self:flex-start; max-width:100%; overflow-wrap:anywhere; }
                 .ship-done { box-shadow: 0 0 0 3px rgba(16,185,129,.55); }
+                .ship-cell-drag { cursor:grab; touch-action:none; }
+                .ship-cell-drag:active { cursor:grabbing; }
+                .ship-drag-src { opacity:.35; }
+                .ship-drop-hint { outline:3px solid #0284c7; outline-offset:-3px; filter:brightness(1.07); }
+                .ship-drag-ghost { position:fixed; z-index:9999; pointer-events:none; transform:translate(-50%,-50%) rotate(-1.5deg); opacity:.94; box-shadow:0 18px 40px rgba(2,6,23,.35); margin:0; }
+                body.ship-dragging, body.ship-dragging * { cursor:grabbing !important; user-select:none !important; }
                 .ship-cell-tv { padding:.4vw .35vw; border-radius:.6vw; min-height:0; gap:.16vw; overflow:hidden; justify-content:center; }
                 .ship-cell-tv .ship-cell-stage { font-size:calc(.98vw * var(--ck, 1)); }
                 .ship-cell-tv .ship-cell-name { font-size:calc(1.26vw * var(--ck, 1)); font-weight:900; line-height:1.15; white-space:normal; display:block; }
@@ -6506,7 +6512,7 @@
             const click = edit ? `onclick="openShipCell('${key}')"` : '';
             if (!cell) {
                 return edit
-                    ? `<button type="button" ${click} class="ship-cell ship-cell-empty border-dashed border-slate-300 text-slate-400 hover:border-brand-400 hover:text-brand-600 transition"><i class="fa-solid fa-plus"></i></button>`
+                    ? `<button type="button" ${click} data-ship-key="${key}" class="ship-cell ship-cell-empty border-dashed border-slate-300 text-slate-400 hover:border-brand-400 hover:text-brand-600 transition"><i class="fa-solid fa-plus"></i></button>`
                     : `<div class="ship-cell-empty"></div>`;
             }
             const v = shipView(cell);
@@ -6514,7 +6520,7 @@
             const cargo = [v.cargoType, v.cargoText].filter(Boolean).join(' — ');
             const showPhone = !big || shipCfg.showPhone;
             const showCargo = !big || shipCfg.showCargo;
-            return `<button type="button" ${click} ${big ? `data-car="${shipCarOf(key)}"` : ''} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${v.stage === 'delivered' ? 'ship-done' : ''} ${big && shipSpotCar === shipCarOf(key) ? 'ship-cell-focus' : ''} ${edit ? 'hover:shadow-md' : 'cursor-default'}">
+            return `<button type="button" ${click} ${edit ? `data-ship-key="${key}"` : ''} ${big ? `data-car="${shipCarOf(key)}"` : ''} class="ship-cell ${big ? 'ship-cell-tv' : ''} ${SHIP_CLS[col]} ${v.stage === 'delivered' ? 'ship-done' : ''} ${big && shipSpotCar === shipCarOf(key) ? 'ship-cell-focus' : ''} ${edit ? 'ship-cell-drag hover:shadow-md' : 'cursor-default'}">
                 <span class="ship-cell-stage">${label}</span>
                 <span class="ship-cell-name">${esc(v.customer || '')}</span>
                 <span class="ship-cell-inv">فاتورة رقم ${esc(v.no || '')}</span>
@@ -6540,7 +6546,8 @@
                     ${cars.map(c => { const key = shipCellKey(c, sl.id); return `<td class="p-1.5 border border-slate-200 align-top">${shipCellHtml(key, shipCells[key], edit, false)}</td>`; }).join('')}
                 </tr>`).join('');
             const empty = shipSlots.length ? '' : `<tr><td colspan="${SHIP_CARS + 1}" class="p-6 text-center text-slate-500">مفيش مواعيد لسه.</td></tr>`;
-            return `<div class="overflow-x-auto rounded-2xl border-2 border-slate-300 bg-white"><table class="border-collapse w-max">
+            const hint = edit ? `<p class="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1.5"><i class="fa-solid fa-arrows-up-down-left-right text-brand-600"></i> اسحب أي خانة وحطها مكان خانة تانية عشان يبدّلوا الأماكن، أو على مكان فاضي عشان تنقلها — العربية ومعادها هيتغيروا حسب المكان الجديد.</p>` : '';
+            return `${hint}<div class="overflow-x-auto rounded-2xl border-2 border-slate-300 bg-white" ${edit ? 'onpointerdown="shipDragDown(event)"' : ''}><table class="border-collapse w-max">
                 <thead>${head}</thead><tbody>${rows}${empty}</tbody></table></div>`;
         }
 
@@ -7126,6 +7133,96 @@
                 if (seq === modalSeq) closeModal();
             }, err => shipSaveFailed(err, 'الشحنة'));
         }
+
+        // ---- سحب الخانات: نقل لخانة فاضية أو تبديل مع خانة مشغولة ----
+        function shipKeyTimeText(key) {
+            const slot = shipSlots.find(s => key.endsWith('_' + s.id));
+            return slot ? shipFmtTime(slot.time) : '';
+        }
+
+        function shipMoveOrSwap(srcKey, dstKey) {
+            if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (!srcKey || !dstKey || srcKey === dstKey) return;
+            const src = shipCells[srcKey], dst = shipCells[dstKey] || null;
+            if (!src) return;
+            const day = shipDay();
+            const b = fbDb.batch();
+            b.set(fbDb.doc(shipPath(day, dstKey)), src);
+            if (dst) b.set(fbDb.doc(shipPath(day, srcKey)), dst);
+            else b.delete(fbDb.doc(shipPath(day, srcKey)));
+            b.commit().then(() => {
+                if (dst) log('الشحن والنقل', `تبديل خانات: عربية ${shipCarOf(srcKey)} · ${shipKeyTimeText(srcKey)} ⇄ عربية ${shipCarOf(dstKey)} · ${shipKeyTimeText(dstKey)}`);
+                else log('الشحن والنقل', `نقل شحنة ${src.no || ''} من عربية ${shipCarOf(srcKey)} · ${shipKeyTimeText(srcKey)} إلى عربية ${shipCarOf(dstKey)} · ${shipKeyTimeText(dstKey)}`);
+                toast(dst ? 'اتبدّلت الخانتين ومواعيدهم اتبدلت' : 'اتنقلت الشحنة للمكان الجديد', 'success');
+            }, err => shipSaveFailed(err, 'نقل الشحنة'));
+        }
+
+        let shipDrag = null;
+        function shipDragDown(e) {
+            if (shipDrag || !shipCanManage()) return;
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            const cell = e.target && e.target.closest ? e.target.closest('[data-ship-key]') : null;
+            if (!cell || !shipCells[cell.dataset.shipKey]) return;
+            shipDrag = { key: cell.dataset.shipKey, el: cell, x: e.clientX, y: e.clientY, pid: e.pointerId, active: false, ghost: null, target: null, suppress: null };
+            try { cell.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety */ }
+            window.addEventListener('pointermove', shipDragMove, { passive: false });
+            window.addEventListener('pointerup', shipDragUp);
+            window.addEventListener('pointercancel', shipDragCancel);
+        }
+        function shipDragMove(e) {
+            const d = shipDrag;
+            if (!d || e.pointerId !== d.pid) return;
+            if (!d.active) {
+                if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 7) return;
+                d.active = true;
+                const r = d.el.getBoundingClientRect();
+                const g = d.el.cloneNode(true);
+                g.removeAttribute('id');
+                g.removeAttribute('onclick');
+                g.classList.add('ship-drag-ghost');
+                g.style.width = r.width + 'px';
+                g.style.height = r.height + 'px';
+                g.style.left = e.clientX + 'px';
+                g.style.top = e.clientY + 'px';
+                document.body.appendChild(g);
+                d.ghost = g;
+                d.el.classList.add('ship-drag-src');
+                document.body.classList.add('ship-dragging');
+                d.suppress = ev => { ev.stopPropagation(); ev.preventDefault(); window.removeEventListener('click', d.suppress, true); };
+                window.addEventListener('click', d.suppress, true);
+            }
+            e.preventDefault();
+            d.ghost.style.left = e.clientX + 'px';
+            d.ghost.style.top = e.clientY + 'px';
+            const under = document.elementFromPoint(e.clientX, e.clientY);
+            let t = null;
+            if (under && under.closest) {
+                t = under.closest('[data-ship-key]');
+                if (!t) { const td = under.closest('td'); if (td) t = td.querySelector('[data-ship-key]'); }
+            }
+            if (t === d.el) t = null;
+            if (t !== d.target) {
+                if (d.target) d.target.classList.remove('ship-drop-hint');
+                d.target = t;
+                if (t) t.classList.add('ship-drop-hint');
+            }
+        }
+        function shipDragFinish(commit) {
+            const d = shipDrag;
+            if (!d) return;
+            shipDrag = null;
+            window.removeEventListener('pointermove', shipDragMove);
+            window.removeEventListener('pointerup', shipDragUp);
+            window.removeEventListener('pointercancel', shipDragCancel);
+            if (d.ghost) d.ghost.remove();
+            d.el.classList.remove('ship-drag-src');
+            if (d.target) d.target.classList.remove('ship-drop-hint');
+            document.body.classList.remove('ship-dragging');
+            if (d.suppress) setTimeout(() => window.removeEventListener('click', d.suppress, true), 600);
+            if (commit && d.active && d.target) shipMoveOrSwap(d.key, d.target.dataset.shipKey);
+        }
+        function shipDragUp(e) { if (shipDrag && e.pointerId === shipDrag.pid) shipDragFinish(true); }
+        function shipDragCancel(e) { if (shipDrag && e.pointerId === shipDrag.pid) shipDragFinish(false); }
 
         // ---- المواعيد ----
         function openShipSlot(id = null) {
@@ -10082,5 +10179,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb45b6af8cedbb',t:'MTc5NTM4NTUxMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb45b6af8cedbb',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb64aecf7e83ae',t:'MTc5NTM4Njc3OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb64aecf7e83ae',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
