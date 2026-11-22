@@ -6372,11 +6372,11 @@
                 .ship-cell-cargo { font-size:.8rem; font-weight:700; background:rgba(0,0,0,.07); padding:.1rem .4rem; border-radius:.4rem; align-self:flex-start; max-width:100%; overflow-wrap:anywhere; }
                 .ship-done { box-shadow: 0 0 0 3px rgba(16,185,129,.55); }
                 .ship-cell-tv { padding:.4vw .35vw; border-radius:.6vw; min-height:0; gap:.16vw; overflow:hidden; justify-content:center; }
-                .ship-cell-tv .ship-cell-stage { font-size:calc(.98vw * var(--tvk, 1)); }
-                .ship-cell-tv .ship-cell-name { font-size:calc(1.26vw * var(--tvk, 1)); font-weight:900; line-height:1.15; white-space:normal; display:block; }
-                .ship-cell-tv .ship-cell-inv { font-size:calc(1.08vw * var(--tvk, 1)); line-height:1.15; display:block; }
-                .ship-cell-tv .ship-cell-phone { font-size:calc(.98vw * var(--tvk, 1)); font-weight:700; opacity:1; line-height:1.15; display:block; }
-                .ship-cell-tv .ship-cell-cargo { font-size:calc(.98vw * var(--tvk, 1)); line-height:1.15; white-space:normal; display:block; align-self:stretch; background:none; padding:0; border-radius:0; font-weight:700; }
+                .ship-cell-tv .ship-cell-stage { font-size:calc(.98vw * var(--ck, 1)); }
+                .ship-cell-tv .ship-cell-name { font-size:calc(1.26vw * var(--ck, 1)); font-weight:900; line-height:1.15; white-space:normal; display:block; }
+                .ship-cell-tv .ship-cell-inv { font-size:calc(1.08vw * var(--ck, 1)); line-height:1.15; display:block; }
+                .ship-cell-tv .ship-cell-phone { font-size:calc(.98vw * var(--ck, 1)); font-weight:700; opacity:1; line-height:1.15; display:block; }
+                .ship-cell-tv .ship-cell-cargo { font-size:calc(.98vw * var(--ck, 1)); line-height:1.15; white-space:normal; display:block; align-self:stretch; background:none; padding:0; border-radius:0; font-weight:700; }
                 .ship-screen { position:fixed; inset:0; z-index:45; display:flex; flex-direction:column; gap:.8vh; padding:1vh 1.2vw; overflow:hidden; background: linear-gradient(180deg,#0c1425 0%,#111827 58%,#0a101d 100%); color: var(--ink); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; transition: background 1.5s; }
                 .ship-screen[data-period="morning"] { background: linear-gradient(180deg,#151b31 0%,#111827 58%,#0c1220 100%); --ink:#5b3f06; --sub:#7c5e12; --bld:#d9b77e; --win:#fff7d6; --lamp:#f59e0b; --asph:#6b5a3e; --walk:#e8d3a0; }
                 .ship-screen[data-period="day"] { background: linear-gradient(180deg,#0d1b31 0%,#111827 58%,#0a1220 100%); --ink:#0c4a6e; --sub:#075985; --bld:#94a3b8; --win:#e0f2fe; --lamp:#fde68a; --asph:#475569; --walk:#cbd5e1; }
@@ -6554,7 +6554,7 @@
                 return shipCellHtml(key, shipCells[key], false, true);
             }).join('')}`).join('');
             const empty = shipSlots.length ? '' : '<p class="p-10 text-3xl text-slate-400">مفيش مواعيد لسه</p>';
-            return `<div class="ship-tv" style="grid-template-rows: 8vh repeat(${n}, minmax(0,1fr))">${head}${body}</div>${empty}`;
+            return `<div class="ship-tv" style="grid-template-rows: 8vh repeat(${n}, minmax(0, 1fr))">${head}${body}</div>${empty}`;
         }
 
         // ---- أسماء العربيات: رقم اللوحة أو الكود، واسم السواق ----
@@ -6751,7 +6751,7 @@
             shipSpotTimer = shipClockTimer = null;
             if (shipCountRaf) cancelAnimationFrame(shipCountRaf);
             shipCountRaf = null;
-            shipSpotSig = ''; shipCountSig = ''; shipTvK = 0;
+            shipSpotSig = ''; shipCountSig = '';
         }
 
         // the road: a living street with two fixed zones — the company (departure) on the left,
@@ -6908,29 +6908,61 @@
             return false;
         }
 
-        // Fit: the cells use the largest text size that still shows every line (no cut text).
-        let shipResizeBound = false, shipTvK = 0;
+        // Fit: every customer box is fitted on its own, and the box stretches to its words.
+        // Each row is first grown to the height of its tallest box (measured, then handed to
+        // the grid as a minimum, leftover screen shared equally). Only if the whole table
+        // still runs past the screen does the tallest (or too-wide) box step its own text
+        // down a notch — short boxes always keep their big text, and nothing is ever cut.
+        let shipResizeBound = false;
         function shipFitSoon() { requestAnimationFrame(shipFitTv); }
         function shipFitTv() {
             const screen = document.getElementById('shipScreen');
             if (!screen) return;
-            const over = () => [...screen.querySelectorAll('.ship-cell-tv')].some(c => {
-                if (c.scrollHeight > c.clientHeight + 1 || c.scrollWidth > c.clientWidth + 1) return true;
-                // centered content can spill past the top edge without growing scrollHeight
-                const kids = c.children;
-                if (!kids.length) return false;
-                const cr = c.getBoundingClientRect();
-                let top = Infinity, bot = -Infinity;
-                for (const k of kids) { const r = k.getBoundingClientRect(); if (r.top < top) top = r.top; if (r.bottom > bot) bot = r.bottom; }
-                return bot - top > cr.height + 1;
+            const tv = screen.querySelector('.ship-tv');
+            const cells = [...screen.querySelectorAll('.ship-cell-tv')];
+            if (!tv || !cells.length) return;
+            const MAXK = 1.15, MINK = 0.5, STEP = 0.05;
+            const kOf = c => parseFloat(c.style.getPropertyValue('--ck')) || MAXK;
+            cells.forEach(c => c.style.setProperty('--ck', MAXK));
+            // intrinsic height of a box's words, independent of the height it happens to sit at
+            const contentH = c => {
+                const kids = [...c.children];
+                if (!kids.length) return 0;
+                const cs = getComputedStyle(c);
+                let h = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+                    + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+                    + (parseFloat(cs.rowGap) || 0) * (kids.length - 1);
+                for (const k of kids) h += k.offsetHeight;
+                return h;
+            };
+            // group the occupied boxes by row (a row shares its top edge with its time cell)
+            const times = [...tv.querySelectorAll('.ship-tv-time')];
+            if (!times.length) return;
+            const groups = times.map(t => {
+                const top = t.getBoundingClientRect().top;
+                return cells.filter(c => Math.abs(c.getBoundingClientRect().top - top) < 4);
             });
-            let k = shipTvK || 1.15;
-            screen.style.setProperty('--tvk', k);
-            for (let i = 0; i < 20 && k > 0.65 && over(); i++) {
-                k = Math.round((k - 0.05) * 100) / 100;
-                screen.style.setProperty('--tvk', k);
+            const growRows = () => {
+                const mins = groups.map(g => g.length ? Math.max(...g.map(contentH)) : 0);
+                tv.style.gridTemplateRows = `8vh ${mins.map(h => `minmax(${Math.ceil(h)}px, 1fr)`).join(' ')}`;
+            };
+            const tooWide = c => c.scrollWidth > c.clientWidth + 1;
+            growRows();
+            for (let i = 0; i < 100; i++) {
+                const gridOver = tv.scrollHeight > tv.clientHeight + 1;
+                const wide = cells.filter(tooWide);
+                if (!gridOver && !wide.length) break;
+                // the box causing it pays: a too-wide box, otherwise the tallest box on screen
+                // only a row's tallest box sets its height, so only those ever step down
+                const target = wide.length
+                    ? wide.reduce((a, b) => (b.scrollWidth - b.clientWidth) > (a.scrollWidth - a.clientWidth) ? b : a)
+                    : groups.flatMap(g => g.length ? [g.reduce((a, b) => contentH(b) > contentH(a) ? b : a)] : [])
+                        .reduce((a, b) => contentH(b) > contentH(a) ? b : a);
+                const k = kOf(target);
+                if (k <= MINK) break;
+                target.style.setProperty('--ck', Math.round((k - STEP) * 100) / 100);
+                growRows();
             }
-            shipTvK = k;
         }
 
         function shipToggleNav() { document.body.classList.toggle('ship-nav-open'); }
@@ -10050,5 +10082,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb31e9580f8e0a',t:'MTc5NTM4NDcwMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb31e9580f8e0a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb45b6af8cedbb',t:'MTc5NTM4NTUxMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb45b6af8cedbb',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
