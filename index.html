@@ -6805,6 +6805,8 @@
                     ${edit ? btn('openShipDisplaySettings()', 'إعدادات العرض', 'fa-sliders', BTN_SECONDARY) : ''}
                     ${edit ? btn('openShipCars()', 'أسماء العربيات', 'fa-id-card', BTN_SECONDARY) : ''}
                     ${btn(`window.open(location.pathname + '#/shipping/screen', '_blank')`, 'شاشة العرض للعملاء', 'fa-tv', BTN_SECONDARY)}
+                    ${btn('printShipBoard()', 'طباعة الجدول', 'fa-print', BTN_SECONDARY)}
+                    ${btn(`navigate('shipping/trips')`, 'سجل رحلات العربيات', 'fa-route', BTN_SECONDARY)}
                 </div>`;
             const legend = `<div class="flex flex-wrap gap-2 mb-4">${SHIP_STAGES.map(([, l, c]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS[c]}">${l}</span>`).join('')}</div>`;
             return {
@@ -6812,6 +6814,253 @@
                 actions: '',
                 html: `<div>${actions}${legend}${shipGridHtml(edit)}</div>`
             };
+        }
+
+        // ---- طباعة الجدول وسجل رحلات العربيات ----
+        let shipTripCar = 0, shipTripQ = '';
+        const SHIP_PRINT_BG = { slate: '#f1f5f9', amber: '#fef3c7', sky: '#e0f2fe', violet: '#ede9fe', emerald: '#d1fae5' };
+        const shipLocalDay = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+        const shipEventTime = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); };
+
+        function shipPrintDoc(title, meta, body, landscape) {
+            return `<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+  @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 10mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: Tahoma, Arial, sans-serif; color: #111827; margin: 0; font-size: 9pt; }
+  h1 { font-size: 15pt; margin: 0 0 1mm; }
+  h2 { font-size: 11.5pt; margin: 5mm 0 2mm; border-bottom: 2px solid #0b3b6e; padding-bottom: 1mm; }
+  .meta { color: #374151; margin-bottom: 3mm; font-size: 9pt; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3mm; }
+  th, td { border: 1px solid #9ca3af; padding: 1.4mm 1.8mm; text-align: right; vertical-align: top; }
+  th { background: #e5e7eb; font-size: 8.5pt; }
+  .chip { display: inline-block; padding: .4mm 2mm; border-radius: 2mm; font-weight: 800; font-size: 8pt; white-space: nowrap; }
+  .cust { font-weight: 800; font-size: 9.5pt; }
+  .muted { color: #6b7280; font-size: 8pt; }
+  .num { font-family: 'Courier New', monospace; direction: ltr; unicode-bidi: embed; }
+  .foot { margin-top: 4mm; color: #4b5563; font-size: 8.5pt; border-top: 1px solid #d1d5db; padding-top: 2mm; }
+</style></head>
+<body>
+  <h1>${esc(title)}</h1>
+  <div class="meta">${esc(meta)}</div>
+  ${body}
+  <div class="foot">منظومة لستات المصانع — طُبع بواسطة ${esc(currentUser()?.name || '')} — ${esc(fmtDateTime(new Date().toISOString()))}</div>
+</body></html>`;
+        }
+
+        // the day's board, arranged for paper: one row per car, one column per appointment
+        function shipBoardPrintHtml() {
+            const day = shipDay();
+            const { counts, total } = shipStageCounts();
+            const head = `<tr><th style="width:26mm">العربية</th>${shipSlots.map(sl => `<th>${esc(shipFmtTime(sl.time))}${sl.label ? `<br><span class="muted">${esc(sl.label)}</span>` : ''}</th>`).join('')}</tr>`;
+            const rows = [...Array(SHIP_CARS).keys()].map(i => i + 1).map(car => {
+                const { model, plate, driver } = shipCarInfo(car);
+                const carCell = `<td><div class="cust">${esc(plate || 'عربية ' + car)}</div>${model ? `<div>${esc(model)}</div>` : ''}<div class="muted">عربية ${car}${driver ? ' · ' + esc(driver) : ''}</div></td>`;
+                const cells = shipSlots.map(sl => {
+                    const cell = shipCells[shipCellKey(car, sl.id)];
+                    if (!cell) return '<td class="muted" style="text-align:center">—</td>';
+                    const v = shipView(cell) || cell;
+                    const [, label, col] = shipStage(v.stage);
+                    const cargo = [cell.cargoType, cell.cargoText].filter(Boolean).join(' — ');
+                    return `<td><span class="chip" style="background:${SHIP_PRINT_BG[col]};border:1px solid ${SHIP_HEX[col]}">${label}</span>
+                        <div class="cust">${esc(v.customer || '')}</div>
+                        <div>فاتورة رقم ${esc(v.no || '')}</div>
+                        ${v.phone ? `<div class="num">${esc(v.phone)}</div>` : ''}
+                        ${cargo ? `<div class="muted">${esc(cargo)}</div>` : ''}</td>`;
+                }).join('');
+                return `<tr>${carCell}${cells}</tr>`;
+            }).join('');
+            const legend = SHIP_STAGES.map(([k, label, col]) => `<span class="chip" style="background:${SHIP_PRINT_BG[col]};border:1px solid ${SHIP_HEX[col]}">${label}: ${counts[k]}</span>`).join(' ');
+            return shipPrintDoc('جدول الشحن والنقل', `يوم ${fmtDateAr(day)} — ${total} شحنة — ${legend.replace(/<[^>]+>/g, '')}`, `<table><thead>${head}</thead><tbody>${rows}</tbody></table><div>${legend}</div>`, true);
+        }
+
+        function printShipBoard() {
+            if (!can('shipping.view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (!shipSlots.length) return toast('مفيش مواعيد في الجدول لسه', 'error');
+            printHtml(shipBoardPrintHtml());
+        }
+
+        // ---- سجل الرحلات: أحداث الجدول من سجل النشاط العام، مترتبة لكل عربية ----
+        const SHIP_LOG_ACTIONS = ['تعديل الشحن والنقل', 'تسليم من الشحن والنقل', 'حذف من الشحن والنقل', 'الشحن والنقل'];
+        function shipDayEvents(day) {
+            return (appData.logs || [])
+                .filter(l => l && SHIP_LOG_ACTIONS.includes(l.action) && shipLocalDay(l.t) === day)
+                .map(l => {
+                    const detail = String(l.detail || '');
+                    const cars = [...detail.matchAll(/عربية\s*(\d+)/g)].map(m => Number(m[1]));
+                    const mNo = /شحنة\s+(\d{3,})/.exec(detail) || /—\s*(\d{3,})\s*—/.exec(detail) || /^(\d{3,})\s*—/.exec(detail);
+                    return { t: l.t, user: l.user || '', action: l.action, detail, cars, no: mNo ? mNo[1] : '' };
+                })
+                .sort((a, b) => (a.t < b.t ? -1 : 1));
+        }
+
+        function shipTripsModel() {
+            const day = shipDay();
+            const q = shipTripQ.trim().toLowerCase();
+            const events = shipDayEvents(day);
+            const byNo = {};
+            Object.entries(shipCells || {}).forEach(([k, cell]) => { if (cell && cell.no) byNo[String(cell.no)] = shipCarOf(k); });
+            events.forEach(e => { if (!e.cars.length && e.no && byNo[e.no]) e.cars = [byNo[e.no]]; });
+            const cars = [], idle = [];
+            for (let car = 1; car <= SHIP_CARS; car++) {
+                if (shipTripCar && car !== shipTripCar) continue;
+                const ships = Object.entries(shipCells || {})
+                    .filter(([k, cell]) => cell && shipCarOf(k) === car)
+                    .map(([k, cell]) => {
+                        const slot = shipSlots.find(sl => k.endsWith('_' + sl.id));
+                        const v = shipView(cell) || cell;
+                        return { key: k, slotOrder: slot ? slot.order : 99, time: slot ? shipFmtTime(slot.time) : '—', no: v.no || '', customer: v.customer || '', phone: v.phone || '', cargo: [cell.cargoType, cell.cargoText].filter(Boolean).join(' — '), stage: cell.stage || 'waiting', at: cell.at || '', by: cell.by || '', events: [] };
+                    })
+                    .sort((a, b) => a.slotOrder - b.slotOrder);
+                const orphans = [];
+                for (const e of events.filter(e => e.cars.includes(car))) {
+                    const sh = e.no ? ships.find(x => x.no === e.no) : null;
+                    if (sh) sh.events.push(e); else orphans.push(e);
+                }
+                ships.forEach(sh => sh.events.sort((a, b) => (a.t < b.t ? -1 : 1)));
+                const visShips = q ? ships.filter(sh => `${sh.no} ${sh.customer} ${sh.phone} ${sh.cargo}`.toLowerCase().includes(q)) : ships;
+                const visOrphans = q ? orphans.filter(e => `${e.no} ${e.detail} ${e.user}`.toLowerCase().includes(q)) : orphans;
+                if (q && !visShips.length && !visOrphans.length) continue;
+                if (!visShips.length && !visOrphans.length) { idle.push(car); continue; }
+                cars.push({ car, info: shipCarInfo(car), ships: visShips, orphans: visOrphans, delivered: visShips.filter(x => x.stage === 'delivered').length });
+            }
+            return { day, cars, idle, events };
+        }
+
+        function viewShipTrips() {
+            shipEnsureSubs();
+            shipInjectStyles();
+            const day = shipDay();
+            const carOpts = [[0, 'كل العربيات'], ...[...Array(SHIP_CARS).keys()].map(i => {
+                const c = i + 1, info = shipCarInfo(c);
+                return [c, (info.plate || 'عربية ' + c) + ' · عربية ' + c];
+            })].map(([v, l]) => `<option value="${v}" ${shipTripCar === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+            const actions = `<div class="flex flex-wrap items-center gap-2 mb-4">
+                    <input type="date" value="${esc(day)}" onchange="shipSetDay(this.value)" class="${INPUT_CLS} max-w-[11rem]">
+                    ${btn('shipShiftDay(-1)', 'السابق', 'fa-chevron-right', BTN_SECONDARY)}
+                    ${btn('shipShiftDay(1)', 'التالي', 'fa-chevron-left', BTN_SECONDARY)}
+                    ${btn('shipSetDay(todayISO())', 'النهارده', 'fa-calendar-day', BTN_SECONDARY)}
+                    <select onchange="shipTripCar=+this.value; renderShipTrips()" class="${INPUT_CLS} max-w-[13rem]" aria-label="العربية">${carOpts}</select>
+                    <div class="relative">
+                        <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                        <input type="search" value="${esc(shipTripQ)}" oninput="shipTripQ=this.value; renderShipTrips()" placeholder="بحث برقم الفاتورة أو العميل..." class="${INPUT_CLS} pr-9 max-w-[16rem]">
+                    </div>
+                    ${btn('printShipTrips()', 'طباعة السجل', 'fa-print', BTN_SECONDARY)}
+                    ${btn('exportShipTrips()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                    ${btn(`navigate('shipping')`, 'رجوع للجدول', 'fa-table-columns', BTN_SECONDARY)}
+                </div>`;
+            return {
+                title: 'سجل رحلات العربيات',
+                actions: '',
+                html: `<div>${actions}<div id="shipTripsBody"></div></div>`,
+                after: renderShipTrips
+            };
+        }
+
+        const shipTripSteps = stageKey => {
+            const idx = Math.max(0, SHIP_STAGES.findIndex(st => st[0] === stageKey));
+            return `<div class="flex items-center gap-1 mt-2" aria-hidden="true">${SHIP_STAGES.map(([k, label, col], i) => `${i ? `<span class="w-5 h-0.5 rounded ${i <= idx ? 'bg-emerald-400' : 'bg-slate-200'}"></span>` : ''}<span class="w-2.5 h-2.5 rounded-full border-2 shrink-0" style="border-color:${SHIP_HEX[col]};${i <= idx ? `background:${SHIP_HEX[col]}` : 'background:#fff'}" title="${label}"></span>`).join('')}</div>`;
+        };
+        const shipEventDot = e => e.action === 'تسليم من الشحن والنقل' ? SHIP_HEX.emerald : e.action === 'حذف من الشحن والنقل' ? '#e11d48' : e.action === 'الشحن والنقل' ? SHIP_HEX.amber : SHIP_HEX.sky;
+        const shipEventLi = e => `<li class="flex items-start gap-2 text-xs">
+                <span class="font-mono text-slate-400 whitespace-nowrap" dir="ltr">${esc(shipEventTime(e.t))}</span>
+                <span class="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style="background:${shipEventDot(e)}"></span>
+                <span class="text-slate-600">${esc(e.detail)}</span>
+                ${e.user ? `<span class="text-slate-400 whitespace-nowrap">· ${esc(e.user)}</span>` : ''}
+            </li>`;
+
+        function renderShipTrips() {
+            const host = document.getElementById('shipTripsBody');
+            if (!host) return;
+            const m = shipTripsModel();
+            const { counts, total } = shipStageCounts();
+            const activeCars = Object.keys(shipCells || {}).reduce((set, k) => set.add(shipCarOf(k)), new Set()).size;
+            const summary = `<div class="flex flex-wrap items-center gap-2 mb-4">
+                    <span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-slate-800 border-slate-800 text-white">شحنات اليوم: ${total}</span>
+                    <span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-white border-slate-300 text-slate-700">عربيات نشطة: ${activeCars}</span>
+                    ${SHIP_STAGES.map(([k, label, col]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS[col]}">${label}: ${counts[k]}</span>`).join('')}
+                </div>`;
+            const carCard = ({ car, info, ships, orphans, delivered }) => `<section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-4">
+                    <header class="flex flex-wrap items-center gap-3 px-4 py-3 bg-slate-50 border-b border-slate-200">
+                        <div class="w-10 h-10 rounded-xl bg-brand-600 text-white flex items-center justify-center font-black text-lg shrink-0">${car}</div>
+                        <div>
+                            <div class="font-black text-slate-800">${esc(info.plate || 'عربية ' + car)}${info.model ? ` <span class="text-slate-500 font-bold">· ${esc(info.model)}</span>` : ''}</div>
+                            <div class="text-xs text-slate-500">عربية ${car}${info.driver ? ' · السائق: ' + esc(info.driver) : ''}</div>
+                        </div>
+                        <div class="ms-auto flex flex-wrap gap-2">
+                            <span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-white border-slate-300 text-slate-700">${ships.length} شحنة</span>
+                            <span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${SHIP_CLS.emerald}">اتسلمت ${delivered}</span>
+                        </div>
+                    </header>
+                    <div class="divide-y divide-slate-100">
+                    ${ships.map(sh => { const [, label, col] = shipStage(sh.stage); return `<div class="px-4 py-3">
+                        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span class="font-mono font-black text-brand-700" dir="ltr">${esc(sh.time)}</span>
+                            <span class="font-black text-slate-800">فاتورة رقم ${esc(sh.no)}</span>
+                            <span class="font-bold text-slate-700">${esc(sh.customer)}</span>
+                            <span class="text-xs font-bold px-2 py-0.5 rounded-md border ${SHIP_CLS[col]}">${label}</span>
+                            ${sh.cargo ? `<span class="text-xs font-bold text-slate-500">${esc(sh.cargo)}</span>` : ''}
+                            ${sh.phone ? `<span class="text-xs text-slate-400 font-mono" dir="ltr">${esc(sh.phone)}</span>` : ''}
+                            ${sh.at ? `<span class="ms-auto text-[11px] text-slate-400">آخر تحديث ${esc(shipEventTime(sh.at))}${sh.by ? ' · ' + esc(sh.by) : ''}</span>` : ''}
+                        </div>
+                        ${shipTripSteps(sh.stage)}
+                        ${sh.events.length ? `<ul class="mt-2 space-y-1 border-r-2 border-slate-100 pr-2">${sh.events.map(shipEventLi).join('')}</ul>` : ''}
+                    </div>`; }).join('')}
+                    ${orphans.length ? `<div class="px-4 py-3 bg-slate-50/60">
+                        <div class="text-xs font-black text-slate-500 mb-1.5">حركات أخرى على العربية دي</div>
+                        <ul class="space-y-1">${orphans.map(shipEventLi).join('')}</ul>
+                    </div>` : ''}
+                    </div>
+                </section>`;
+            const idleLine = (!shipTripCar && !shipTripQ.trim() && m.idle.length)
+                ? `<p class="text-xs font-bold text-slate-400 mt-2">عربيات بدون رحلات النهارده: ${m.idle.join('، ')}</p>` : '';
+            host.innerHTML = summary + (m.cars.length ? m.cars.map(carCard).join('') : '<div class="bg-white rounded-2xl border border-slate-200 p-10 text-center text-slate-400 font-bold">مفيش رحلات ولا حركات مسجلة مطابقة في اليوم ده</div>') + idleLine;
+        }
+
+        function shipTripsPrintHtml() {
+            const m = shipTripsModel();
+            const filt = [shipTripCar ? 'عربية ' + shipTripCar : 'كل العربيات', shipTripQ.trim() ? 'بحث: ' + shipTripQ.trim() : ''].filter(Boolean).join(' — ');
+            const sections = m.cars.map(({ car, info, ships, orphans }) => {
+                const shipRows = ships.map(sh => { const [, label, col] = shipStage(sh.stage); return `<tr>
+                    <td class="num">${esc(sh.time)}</td><td>${esc(sh.no)}</td><td class="cust">${esc(sh.customer)}</td>
+                    <td class="num">${esc(sh.phone)}</td><td>${esc(sh.cargo)}</td>
+                    <td><span class="chip" style="background:${SHIP_PRINT_BG[col]};border:1px solid ${SHIP_HEX[col]}">${label}</span></td>
+                    <td class="muted">${sh.at ? esc(shipEventTime(sh.at)) : ''}${sh.by ? ' · ' + esc(sh.by) : ''}</td></tr>`; }).join('');
+                const allEv = [...ships.flatMap(x => x.events), ...orphans].sort((a, b) => (a.t < b.t ? -1 : 1));
+                const evRows = allEv.map(e => `<tr><td class="num">${esc(shipEventTime(e.t))}</td><td>${esc(e.no || '')}</td><td>${esc(e.detail)}</td><td>${esc(e.user)}</td></tr>`).join('');
+                return `<h2>عربية ${car} — ${esc(info.plate || '')}${info.model ? ' · ' + esc(info.model) : ''}${info.driver ? ' · السائق: ' + esc(info.driver) : ''}</h2>
+                ${ships.length ? `<table><thead><tr><th>الموعد</th><th>الفاتورة</th><th>العميل</th><th>التليفون</th><th>الحمولة</th><th>المرحلة</th><th>آخر تحديث</th></tr></thead><tbody>${shipRows}</tbody></table>` : ''}
+                ${allEv.length ? `<table><thead><tr><th>الوقت</th><th>الفاتورة</th><th>الحدث</th><th>بواسطة</th></tr></thead><tbody>${evRows}</tbody></table>` : ''}`;
+            }).join('');
+            return shipPrintDoc('سجل رحلات العربيات', `يوم ${fmtDateAr(m.day)} — ${filt}`, sections || '<p>مفيش رحلات مطابقة</p>', false);
+        }
+
+        function printShipTrips() {
+            if (!can('shipping.view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            printHtml(shipTripsPrintHtml());
+        }
+
+        function exportShipTrips() {
+            if (!can('shipping.view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (typeof XLSX === 'undefined') return toast('مكتبة الإكسيل غير متاحة. تأكد من الإنترنت', 'error', null, 5000);
+            const m = shipTripsModel();
+            const shipRows = [['اليوم', 'العربية', 'الموديل', 'اللوحة', 'السائق', 'الموعد', 'رقم الفاتورة', 'العميل', 'التليفون', 'الحمولة', 'المرحلة الحالية']];
+            const evRows = [['اليوم', 'الوقت', 'العربية', 'رقم الفاتورة', 'نوع الحدث', 'التفاصيل', 'بواسطة']];
+            m.cars.forEach(({ car, info, ships, orphans }) => {
+                ships.forEach(sh => shipRows.push([m.day, car, info.model, info.plate || ('عربية ' + car), info.driver, sh.time, sh.no, sh.customer, sh.phone, sh.cargo, shipStage(sh.stage)[1]]));
+                [...ships.flatMap(x => x.events), ...orphans].sort((a, b) => (a.t < b.t ? -1 : 1))
+                    .forEach(e => evRows.push([m.day, shipEventTime(e.t), car, e.no || '', e.action, e.detail, e.user]));
+            });
+            const wb = XLSX.utils.book_new();
+            const ws1 = XLSX.utils.aoa_to_sheet(shipRows);
+            ws1['!cols'] = [12, 8, 14, 14, 14, 12, 12, 22, 14, 26, 14].map(wch => ({ wch }));
+            XLSX.utils.book_append_sheet(wb, ws1, 'رحلات اليوم');
+            const ws2 = XLSX.utils.aoa_to_sheet(evRows);
+            ws2['!cols'] = [12, 8, 8, 12, 16, 60, 16].map(wch => ({ wch }));
+            XLSX.utils.book_append_sheet(wb, ws2, 'أحداث اليوم');
+            XLSX.writeFile(wb, `سجل-رحلات-الشحن-${m.day}.xlsx`);
+            toast('تم تصدير سجل الرحلات', 'success');
         }
 
         // the sun or the moon in the top-right corner: it rises low, climbs at noon and sets low, on the same clock as the home screen
@@ -7123,8 +7372,11 @@
             Object.keys(shipCells).forEach(k => {
                 if (k !== key && shipCells[k] && shipCells[k].custId === inv.id) b.delete(fbDb.doc(shipPath(day, k)));
             });
+            const prevCell = shipCells[key] || null;
+            const sameInv = !!prevCell && prevCell.custId === inv.id;
             b.commit().then(() => {
-                log('تعديل الشحن والنقل', `عربية ${shipCarOf(key)} — ${cell.no} — ${shipStage(stage)[1]}`);
+                const stageTxt = sameInv && prevCell.stage !== stage ? `من «${shipStage(prevCell.stage)[1]}» إلى «${shipStage(stage)[1]}»` : shipStage(stage)[1];
+                log('تعديل الشحن والنقل', `عربية ${shipCarOf(key)} — ${cell.no} — ${stageTxt}${sameInv ? '' : ' — شحنة جديدة'}`);
                 if (stage === 'delivered') shipMarkDelivered(inv);
                 toast('تم حفظ الشحنة', 'success');
                 if (seq === modalSeq) closeModal();
@@ -7139,15 +7391,17 @@
             if (!c || c.delivery === 'تم التسليم') return;
             c.delivery = 'تم التسليم';
             Object.assign(c, { updatedAt: new Date().toISOString(), updatedBy: orderUserName() });
-            log('تسليم من الشحن والنقل', `${custNoLabel(c)} — ${c.customer || ''}`);
+            const skey = Object.keys(shipCells).find(k => shipCells[k] && shipCells[k].custId === inv.id);
+            log('تسليم من الشحن والنقل', `${skey ? `عربية ${shipCarOf(skey)} — ` : ''}${custNoLabel(c)} — ${c.customer || ''}`);
             saveState();
         }
 
         function clearShipCell(key) {
             if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const seq = modalSeq;
+            const cur = shipCells[key] || null;
             fbDb.doc(shipPath(shipDay(), key)).delete().then(() => {
-                log('حذف من الشحن والنقل', `عربية ${shipCarOf(key)}`);
+                log('حذف من الشحن والنقل', `عربية ${shipCarOf(key)}${cur ? ` — ${cur.no || ''} — ${cur.customer || ''}` : ''}`);
                 toast('اتشالت الشحنة من الخانة', 'success');
                 if (seq === modalSeq) closeModal();
             }, err => shipSaveFailed(err, 'الشحنة'));
@@ -7383,7 +7637,7 @@
         const VIEWS = {
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
-            shipping: param => param === 'screen' ? viewShippingScreen() : viewShipping(),
+            shipping: param => param === 'screen' ? viewShippingScreen() : param === 'trips' ? viewShipTrips() : viewShipping(),
             home: () => viewHome(),
             dashboard: () => viewDashboard(),
             companies: param => param ? viewCompanyDetail(param) : viewCompanyList(),
@@ -10198,5 +10452,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb7e14ab79e1e4',t:'MTc5NTM4NzgyMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb7e14ab79e1e4',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eba76f4832ed46',t:'MTc5NTM4OTUxNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eba76f4832ed46',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
