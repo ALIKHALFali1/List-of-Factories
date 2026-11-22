@@ -5337,13 +5337,13 @@
                 .ship-sky-moon { background: radial-gradient(circle at 60% 40%, #ffffff 0%, #e2e8f0 60%, #cbd5e1 100%); box-shadow: 0 0 3vh .6vh rgba(226,232,240,.35); overflow:hidden; }
                 .ship-sky-moon::after { content:''; position:absolute; top:-8%; left:24%; width:86%; height:116%; border-radius:50%; background: var(--sky-shade, #132238); }
                 .ship-body { flex:1; min-height:0; }
-                .ship-tv { display:grid; grid-template-columns: 5.5vw repeat(15, minmax(0,1fr)); gap:.25vw; height:100%; min-height:0; }
+                .ship-tv { display:grid; grid-template-columns: 4.6vw repeat(15, minmax(0,1fr)); gap:.2vw; height:100%; min-height:0; }
                 .ship-tv-corner, .ship-tv-head { display:flex; align-items:center; justify-content:center; text-align:center; background:#1e293b; color:#fff; font-weight:900; font-size:1.2vw; border-radius:.6vw; }
                 .ship-tv-head { flex-direction:column; gap:.1vh; padding:.3vh .3vw; overflow:hidden; text-align:center; }
                 .ship-tv-head i { font-style:normal; font-size:.85vw; font-weight:800; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
                 .ship-tv-head b { font-size:.95vw; font-weight:900; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
                 .ship-tv-head small { font-size:.78vw; font-weight:700; opacity:.92; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
-                .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.3vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
+                .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.15vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
                 .ship-tv-time small { font-size:1vw; font-weight:700; opacity:.9; }
                 .ship-road { position:relative; height:10vh; border-radius:1.2vw; overflow:hidden; }
                 .ship-city { position:absolute; left:0; top:0; height:60%; width:200%; display:flex; animation: shipCity 120s linear infinite; }
@@ -5422,10 +5422,9 @@
         }
 
         // the display table: all 15 cars and all times fit on the screen (no scrolling)
-        const SHIP_TV_SLOTS = 4; // عدد المواعيد اللي بتظهر على شاشة العرض
         function shipTvHtml() {
             const cars = [...Array(SHIP_CARS).keys()].map(i => i + 1);
-            const slots = shipSlots.slice(0, SHIP_TV_SLOTS); // أول 4 مواعيد بس على الشاشة
+            const slots = shipSlots; // كل المواعيد تظهر على الشاشة
             const n = Math.max(slots.length, 1);
             const head = `<div class="ship-tv-corner">الموعد</div>${cars.map(c => `<div class="ship-tv-head">${shipCarHeadHtml(c, true)}</div>`).join('')}`;
             const body = slots.map(sl => `<div class="ship-tv-time" dir="ltr"><span>${esc(shipFmtTime(sl.time))}</span>${sl.label ? `<small>${esc(sl.label)}</small>` : ''}</div>${cars.map(c => {
@@ -8123,5 +8122,5 @@
             });
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e81ca9eae453a8',t:'MTc5NTM1MjM3Mg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e81ca9eae453a8',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e8435a1909e214',t:'MTc5NTM1Mzk1Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e8435a1909e214',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
