@@ -5339,9 +5339,10 @@
                 .ship-body { flex:1; min-height:0; }
                 .ship-tv { display:grid; grid-template-columns: 8vw repeat(15, minmax(0,1fr)); gap:.35vw; height:100%; min-height:0; }
                 .ship-tv-corner, .ship-tv-head { display:flex; align-items:center; justify-content:center; text-align:center; background:#1e293b; color:#fff; font-weight:900; font-size:1.2vw; border-radius:.6vw; }
-                .ship-tv-head { flex-direction:column; gap:.1vh; padding:.3vh .2vw; overflow:hidden; }
-                .ship-tv-head b { font-size:.92vw; font-weight:900; line-height:1.05; direction:ltr; white-space:nowrap; }
-                .ship-tv-head small { font-size:.74vw; font-weight:700; opacity:.92; line-height:1.1; overflow-wrap:anywhere; }
+                .ship-tv-head { flex-direction:column; gap:.1vh; padding:.3vh .3vw; overflow:hidden; text-align:center; }
+                .ship-tv-head i { font-style:normal; font-size:.85vw; font-weight:800; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
+                .ship-tv-head b { font-size:.95vw; font-weight:900; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
+                .ship-tv-head small { font-size:.78vw; font-weight:700; opacity:.92; line-height:1.1; white-space:normal; overflow-wrap:anywhere; }
                 .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.6vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
                 .ship-tv-time small { font-size:1vw; font-weight:700; opacity:.9; }
                 .ship-road { position:relative; height:13vh; border-radius:1.2vw; overflow:hidden; }
@@ -5437,14 +5438,14 @@
         let shipCars = {};   // shippingConfig/cars: { c01: { plate, driver }, ... }
         function shipCarInfo(c) {
             const v = shipCars['c' + String(c).padStart(2, '0')] || {};
-            return { plate: String(v.plate || ''), driver: String(v.driver || '') };
+            return { model: String(v.model || ''), plate: String(v.plate || ''), driver: String(v.driver || '') };
         }
         function shipCarTitle(c) { return shipCarInfo(c).plate || ('عربية ' + c); }
         // header of a car column: the board (light) or the display (dark)
         function shipCarHeadHtml(c, tv) {
-            const { plate, driver } = shipCarInfo(c);
-            if (tv) return `<b>${esc(plate || 'عربية ' + c)}</b>${driver ? `<small>${esc(driver)}</small>` : ''}`;
-            return `<div>${esc(plate || 'عربية ' + c)}</div>${plate ? `<div class="text-[11px] font-normal text-slate-500">عربية ${c}</div>` : ''}${driver ? `<div class="text-[11px] font-normal text-slate-600">${esc(driver)}</div>` : ''}`;
+            const { model, plate, driver } = shipCarInfo(c);
+            if (tv) return `${model ? `<i>${esc(model)}</i>` : ''}<b>${esc(plate || 'عربية ' + c)}</b>${driver ? `<small>${esc(driver)}</small>` : ''}`;
+            return `${model ? `<div class="font-bold">${esc(model)}</div>` : ''}<div>${esc(plate || 'عربية ' + c)}</div>${plate ? `<div class="text-[11px] font-normal text-slate-500">عربية ${c}</div>` : ''}${driver ? `<div class="text-[11px] font-normal text-slate-600">${esc(driver)}</div>` : ''}`;
         }
 
         // the truck with its code painted on the side
@@ -5577,8 +5578,9 @@
             if (!shipCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const rows = [...Array(SHIP_CARS).keys()].map(i => i + 1).map(c => {
                 const info = shipCarInfo(c), n = String(c).padStart(2, '0');
-                return `<div style="display:grid;grid-template-columns:5.5rem 1fr 1fr;gap:.5rem;align-items:center">
+                return `<div style="display:grid;grid-template-columns:5rem 1fr 1fr 1fr;gap:.5rem;align-items:center">
                     <span class="text-sm font-bold text-slate-700">عربية ${c}</span>
+                    <input name="m${n}" maxlength="40" value="${esc(info.model)}" class="${INPUT_CLS}" placeholder="اسم العربية مثلاً جامبو">
                     <input name="p${n}" maxlength="20" value="${esc(info.plate)}" class="${INPUT_CLS}" placeholder="رقم اللوحة أو الكود">
                     <input name="d${n}" maxlength="60" value="${esc(info.driver)}" class="${INPUT_CLS}" placeholder="اسم السواق">
                 </div>`;
@@ -5598,6 +5600,7 @@
             for (let c = 1; c <= SHIP_CARS; c++) {
                 const n = String(c).padStart(2, '0');
                 b.set(fbDb.doc('shippingConfig/cars/c' + n), {
+                    model: String(fd.get('m' + n) || '').trim().slice(0, 40),
                     plate: String(fd.get('p' + n) || '').trim().slice(0, 20),
                     driver: String(fd.get('d' + n) || '').trim().slice(0, 60)
                 });
@@ -8118,5 +8121,5 @@
             });
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e7a101f9d6da31',t:'MTc5NTM0NzMwNw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e7a101f9d6da31',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e7cfe35f95e5bf',t:'MTc5NTM0OTIyOA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e7cfe35f95e5bf',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
