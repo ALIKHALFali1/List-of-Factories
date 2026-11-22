@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
     <meta name="theme-color" content="#0c4a6e" id="metaThemeColor">
     <meta name="color-scheme" content="light dark">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="الرحمة">
     <meta name="description" content="منظومة احترافية لإدارة لستات المصانع والخصومات والطلبيات والشيكات والشحن — نسخة 5.0">
     <title>منظومة لستات المصانع — لوحة التحكم</title>
 
@@ -564,7 +568,7 @@
                 <button type="button" onclick="logout()" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-white/10">
                     <i class="fa-solid fa-right-from-bracket w-5 text-center"></i> تسجيل الخروج
                 </button>
-                <p class="text-[10px] text-slate-500 text-center pt-1"><span id="appVersion">v6.0.0-beta.5</span> · <span id="syncText">جاهز</span></p>
+                <p class="text-[10px] text-slate-500 text-center pt-1"><span id="appVersion">v6.0.0-beta.6</span> · <span id="syncText">جاهز</span></p>
             </div>
         </aside>
 
@@ -617,7 +621,7 @@
             <main id="content" class="flex-1 min-w-0 p-3 sm:p-6 space-y-4 sm:space-y-6" tabindex="-1"></main>
 
             <footer class="bg-white border-t border-slate-200 py-3 px-4 text-center text-xs text-slate-500">
-                لوحة تحكم لستات وخصومات المصانع © 2026 · <span class="font-mono">v6.0.0-beta.5</span>
+                لوحة تحكم لستات وخصومات المصانع © 2026 · <span class="font-mono">v6.0.0-beta.6</span>
             </footer>
         </div>
     </div>
@@ -6993,6 +6997,16 @@
                         </section>
                         ${radarHtml}
 
+                        <section class="app-card span-12">
+                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-file-export"></i>مركز التقارير</h3><p class="app-card-sub">تقارير جاهزة بضغطة — Excel منسق باتجاه عربي وعناوين واضحة</p></div></div>
+                            <div class="flex flex-wrap gap-2">
+                                ${(can('lists.view') || can('companies.view')) ? `<button type="button" class="app-btn app-btn-primary" onclick="App.Reports.companies()"><i class="fa-solid fa-file-excel"></i> تقرير المصانع والخصومات</button>` : ''}
+                                ${can('checks.view') ? `<button type="button" class="app-btn" onclick="navigate('checks/reports')"><i class="fa-solid fa-money-check-dollar"></i> تقارير الشيكات</button>` : ''}
+                                ${canOrd('reports') ? `<button type="button" class="app-btn" onclick="navigate('orders/reports')"><i class="fa-solid fa-truck-ramp-box"></i> تقارير الطلبيات</button>` : ''}
+                                ${can('backup.manage') ? `<button type="button" class="app-btn" onclick="navigate('settings/backup')"><i class="fa-solid fa-database"></i> النسخ الاحتياطي</button>` : ''}
+                            </div>
+                        </section>
+
                         <section class="app-card span-6">
                             <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-triangle-exclamation"></i>لستات قريبة الانتهاء</h3></div><span class="app-badge badge-amber">${s.expItems.length} لستة</span></div>
                             <div class="divide-y divide-slate-100">${expRows}</div>
@@ -7899,6 +7913,21 @@
         }
 
         // the sections the current user may open, in menu order
+
+        // ---------- 6.0 settings: install & offline ----------
+        function installSettingsHtml() {
+            return `<section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                <h3 class="font-bold text-lg mb-1"><i class="fa-solid fa-mobile-screen text-brand-600"></i> تثبيت التطبيق على الجهاز</h3>
+                <p class="text-xs text-slate-500 mb-4">ثبّت «الرحمة» على موبايلك أو كمبيوترك وهيفتح زي أي تطبيق من غير شريط متصفح.</p>
+                <div class="grid gap-3 text-sm">
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3"><b>أندرويد / كمبيوتر (Chrome):</b> اضغط الزرار اللي تحت، أو من قائمة المتصفح ⋮ اختر «تثبيت التطبيق».</div>
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3"><b>آيفون (Safari):</b> زرار المشاركة ⤴ وبعدين «إضافة إلى الشاشة الرئيسية».</div>
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3"><b>الشغل من غير نت:</b> أي تعديل بيتحفظ على الجهاز الأول (وهتشوف نقطة المزامنة في القايمة)، وبيترفع تلقائياً أول ما النت يرجع — والطلبيات المعلّقة عليها شارة «لم تُحفظ بعد» لحد ما تتأكد على السيرفر.</div>
+                </div>
+                <div class="mt-4">${btn('App.PWA.install()', 'تثبيت التطبيق دلوقتي', 'fa-download')}</div>
+            </section>`;
+        }
+
         function settingsSections() {
             const canSys = can('settings.manage');
             const out = [];
@@ -7907,6 +7936,7 @@
             if (can('home.personal')) out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
             if (can('backup.manage')) out.push({ key: 'backup', title: 'النسخ الاحتياطي', icon: 'fa-database', desc: 'تنزيل نسخة احتياطية أو استعادة من ملف.', html: settingsBackupHtml });
             out.push({ key: 'account', title: 'حسابي', icon: 'fa-user', desc: 'تغيير كلمة المرور الخاصة بك.', html: settingsAccountHtml });
+            out.push({ key: 'install', title: 'تثبيت التطبيق', icon: 'fa-mobile-screen', desc: 'ثبّت النظام على الموبايل كتطبيق، واعرف إزاي الشغل الأوفلاين بيشتغل.', html: installSettingsHtml });
             if (canSys) out.push({ key: 'logs', title: 'سجل النشاط', icon: 'fa-clock-rotate-left', desc: 'عرض عدد السجلات ومسحها.', html: settingsLogsHtml });
             if (canSys) out.push({ key: 'danger', title: 'منطقة الخطر', icon: 'fa-triangle-exclamation', desc: 'إعادة ضبط النظام بالكامل. لا يمكن التراجع.', danger: true, html: settingsDangerHtml });
             return out;
@@ -9002,6 +9032,54 @@
             }
         };
 
+
+        // ---------- 6.0 reports center: formatted Excel (title, widths, RTL) ----------
+        App.Reports = {
+            xlsx(title, headers, rows, fileName) {
+                if (typeof XLSX === 'undefined') { toast('مكتبة Excel لم تُحمّل — تأكد من الاتصال', 'error'); return; }
+                const aoa = [[title], [], headers, ...rows];
+                const ws = XLSX.utils.aoa_to_sheet(aoa);
+                ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, headers.length - 1) } }];
+                ws['!cols'] = headers.map((h, i) => ({ wch: Math.min(42, Math.max(12, ...rows.map(r => String(r[i] ?? '').length + 2), String(h).length + 4)) }));
+                ws['!sheetViews'] = [{ rightToLeft: true }];
+                const wb = XLSX.utils.book_new();
+                wb.Workbook = { Views: [{ RTL: true }] };
+                XLSX.utils.book_append_sheet(wb, ws, 'تقرير');
+                XLSX.writeFile(wb, fileName);
+                toast('تم تصدير التقرير', 'success');
+            },
+            companies() {
+                const rows = [];
+                for (const c of appData.companies) for (const l of c.lists) {
+                    const st = listState(l);
+                    rows.push([c.name, l.name, l.discount1 || 0, l.discount2 || 0, l.discount3 || 0, l.flatDiscount || 0, effValue(l).toFixed(2) + '%', l.startDate || '', l.endDate || 'بدون انتهاء', statusLabel(st)]);
+                }
+                this.xlsx('تقرير المصانع واللستات والخصومات — ' + new Date().toLocaleDateString('ar-EG'),
+                    ['المصنع', 'اللستة', 'خصم 1 %', 'خصم 2 %', 'خصم 3 %', 'خصم قطعي %', 'الخصم الفعلي', 'البداية', 'النهاية', 'الحالة'],
+                    rows, 'تقرير-المصانع-والخصومات.xlsx');
+            }
+        };
+
+        // ---------- 6.0 installable app (dynamic manifest; offline already via sync engine) ----------
+        App.PWA = {
+            prompt: null,
+            init() {
+                try {
+                    const icon = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="40" fill="#0c4a6e"/><text x="96" y="128" font-size="96" text-anchor="middle" fill="#c9a961" font-family="sans-serif" font-weight="bold">ر</text></svg>');
+                    const manifest = { name: 'الرحمة — منظومة لستات المصانع', short_name: 'الرحمة', start_url: location.href.split('#')[0], display: 'standalone', dir: 'rtl', lang: 'ar', background_color: '#020617', theme_color: '#0c4a6e', icons: [{ src: icon, sizes: '192x192', type: 'image/svg+xml' }, { src: icon, sizes: '512x512', type: 'image/svg+xml' }] };
+                    const link = document.createElement('link');
+                    link.rel = 'manifest';
+                    link.href = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/json' }));
+                    document.head.appendChild(link);
+                } catch (e) { /* manifest is progressive enhancement only */ }
+                window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); App.PWA.prompt = e; });
+            },
+            install() {
+                if (this.prompt) { this.prompt.prompt(); this.prompt = null; return; }
+                toast('من قائمة المتصفح اختر «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية»', 'info', null, 5000);
+            }
+        };
+
         // ---------- command palette (Ctrl+K): routes + records ----------
         App.Palette = {
             idx: 0, items: [],
@@ -9093,7 +9171,7 @@
             }
         };
 
-        App.init = function () { App.Sync.init(); App.Shortcuts.init(); App.Motion.init(); };
+        App.init = function () { App.Sync.init(); App.Shortcuts.init(); App.Motion.init(); App.PWA.init(); };
 
         // ============ KEYBOARD ============
         document.addEventListener('keydown', e => {
@@ -9172,5 +9250,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e8475df9c2e17d',t:'MTc5NTM1NDEyMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e8475df9c2e17d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e85039fd40c08f',t:'MTc5NTM1NDQ4NA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e85039fd40c08f',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
