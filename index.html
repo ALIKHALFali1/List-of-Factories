@@ -356,6 +356,7 @@
                         radial-gradient(620px 420px at 0% 105%, rgb(var(--accent)/.10), transparent 65%);
             animation: bgBreathe 22s ease-in-out infinite alternate; }
         @keyframes bgBreathe { from { opacity: .35; } to { opacity: .65; } }
+        body.ship-screen-on::after { animation: none; } /* the TV display covers it — don't burn GPU under it */
         header.sticky::after { content:''; position:absolute; left:0; right:0; bottom:-1px; height:2px; background: var(--gold-line); opacity:.85; }
         .app-card { box-shadow: var(--depth-2); background: linear-gradient(180deg, rgb(var(--surface)), rgb(var(--surface)) 70%, rgb(var(--muted)/.45)); }
         .kpi { box-shadow: var(--depth-1); transform-style: preserve-3d; will-change: transform; }
@@ -6282,21 +6283,22 @@
                 .ship-tv-time { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-weight:900; font-size:1.15vw; background:#0f172a; border:1px solid #334155; border-radius:.6vw; color:#fff; }
                 .ship-tv-time small { font-size:1vw; font-weight:700; opacity:.9; }
                 .ship-road { position:relative; height:8.5vh; border-radius:1.2vw; overflow:hidden; }
-                .ship-city { position:absolute; left:0; top:0; height:60%; width:200%; display:flex; animation: shipCity 120s linear infinite; }
+                .ship-city { position:absolute; left:0; top:0; height:60%; width:200%; display:flex; animation: shipCity 120s linear infinite; will-change:transform; }
                 .ship-city svg { width:50%; height:100%; flex:0 0 50%; display:block; }
                 .ship-walk { position:absolute; left:0; right:0; top:60%; height:5%; background:var(--walk); }
                 .ship-asph { position:absolute; left:0; right:0; top:65%; bottom:0; background:var(--asph); }
-                .ship-road-line { position:absolute; left:0; right:0; top:81%; height:.5vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash .9s linear infinite; }
+                .ship-road-line { position:absolute; left:0; width:200%; top:81%; height:.5vh; background: repeating-linear-gradient(90deg, #facc15 0 3vw, transparent 3vw 6vw); animation: shipDash .9s linear infinite; will-change:transform; }
                 .ship-road-count { position:absolute; top:1vh; left:1vw; z-index:3; font-size:1.1vw; font-weight:800; background:rgba(2,6,23,.78); color:#fff; padding:.3vh .8vw; border-radius:.6vw; }
-                .ship-truck { position:absolute; bottom:1vh; left:0; width:9vw; z-index:2; animation: shipDrive 16s linear infinite; }
+                .ship-truck { position:absolute; bottom:1vh; left:0; width:9vw; z-index:2; animation: shipDrive 16s linear infinite; will-change:transform; }
                 .ship-truck svg, .ship-park svg { width:100%; height:auto; display:block; }
-                .ship-truck-amb { opacity:.45; filter: grayscale(.6); }
+                .ship-truck-amb { opacity:.45; }
                 .ship-truck-tag { position:absolute; top:-1.1vh; left:0; white-space:nowrap; font-size:.85vw; font-weight:800; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
                 .ship-park { position:absolute; bottom:.7vh; width:6vw; z-index:2; }
                 .ship-park-badge { position:absolute; top:-1.9vh; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:.82vw; font-weight:900; background:#10b981; color:#fff; padding:.1vh .5vw; border-radius:.4vw; }
-                .ship-wheel { transform-box: fill-box; transform-origin: center; animation: shipSpin .5s linear infinite; }
+                .ship-wheel { transform-box: fill-box; transform-origin: center; }
+                .ship-truck .ship-wheel { animation: shipSpin .5s linear infinite; }
                 @keyframes shipCity { to { transform: translateX(-50%); } }
-                @keyframes shipDash { to { background-position: 6vw 0; } }
+                @keyframes shipDash { to { transform: translateX(-6vw); } }
                 @keyframes shipDrive { from { transform: translateX(-12vw); } to { transform: translateX(102vw); } }
                 @keyframes shipSpin { to { transform: rotate(360deg); } }
                 @keyframes shipPop { 0% { transform: scale(.4); opacity: 0 } 18% { transform: scale(1.06); opacity: 1 } 28% { transform: scale(1) } 82% { opacity: 1 } 100% { opacity: 0; transform: translateY(-24px) } }
@@ -6344,7 +6346,7 @@
                 .ship-spot-dots i { width:.65vw; height:.65vw; min-width:7px; min-height:7px; border-radius:50%; background:rgba(226,232,240,.35); }
                 .ship-spot-dots i.on { background:#38bdf8; transform:scale(1.3); }
                 .ship-cell-focus { animation:shipCellGlow 1.8s ease-in-out infinite; position:relative; z-index:1; }
-                @keyframes shipCellGlow { 0%,100% { box-shadow:0 0 0 .18vw rgba(14,165,233,.9), 0 0 1.6vw rgba(14,165,233,.4); } 50% { box-shadow:0 0 0 .32vw rgba(14,165,233,1), 0 0 2.6vw rgba(14,165,233,.6); } }
+                @keyframes shipCellGlow { 0%,100% { box-shadow:0 0 0 .18vw rgba(14,165,233,.9), 0 0 1vw rgba(14,165,233,.4); } 50% { box-shadow:0 0 0 .3vw rgba(14,165,233,1), 0 0 1.5vw rgba(14,165,233,.55); } }
                 .ship-city-near { height:84%; animation-duration:48s; opacity:.5; }
                 .ship-zone { position:absolute; top:0; bottom:0; width:6.6vw; z-index:4; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.4vh; text-align:center; font-size:.95vw; font-weight:900; line-height:1.25; color:#fff; background:rgba(2,6,23,.55); }
                 .ship-zone-start { left:0; }
@@ -6367,7 +6369,7 @@
                 .ship-screen { --ink:#edf3ff; --sub:#a8c2e6; --bld:#263650; --win:#ffd97a; --lamp:#fbbf24; --asph:#0b1322; --walk:#1b2947; }
                 .ship-screen[data-custom="1"][data-period="day"] { --ink:#14335f; --sub:#3a5c86; --bld:#8ea6cc; --win:#fff3c4; --asph:#546d92; --walk:#c7d8ef; }
                 .ship-kpi { background:rgba(24,38,61,.78); border:1px solid rgba(125,196,255,.22); color:#e8f1ff; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); box-shadow:0 .4vh 1.6vh rgba(2,6,23,.35), inset 0 0 2.2vw rgba(34,195,243,.05); }
-                .ship-spot { background:rgba(17,24,39,.88); border:1px solid rgba(34,195,243,.38); box-shadow:0 .6vh 2.2vh rgba(2,6,23,.45), 0 0 2.4vw rgba(34,195,243,.12); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+                .ship-spot { background:rgba(17,24,39,.95); border:1px solid rgba(34,195,243,.38); box-shadow:0 .6vh 2.2vh rgba(2,6,23,.45), 0 0 2.4vw rgba(34,195,243,.12); }
                 .ship-tv-head, .ship-tv-corner { background:#18263d; border:1px solid rgba(125,196,255,.16); }
                 .ship-tv-time { background:#101c30; border-color:rgba(125,196,255,.18); }
                 .ship-screen .ship-cell-empty { background:rgba(125,196,255,.06); }
@@ -9905,5 +9907,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e9b7dc3bae3169',t:'MTc5NTM2OTIxNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e9b7dc3bae3169',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e9c0d649539aca',t:'MTc5NTM2OTU4Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e9c0d649539aca',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
