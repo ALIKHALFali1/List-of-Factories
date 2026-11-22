@@ -6372,7 +6372,7 @@
                 .ship-tv-head, .ship-tv-corner { background:#18263d; border:1px solid rgba(125,196,255,.16); }
                 .ship-tv-time { background:#101c30; border-color:rgba(125,196,255,.18); }
                 .ship-screen .ship-cell-empty { background:rgba(125,196,255,.06); }
-                .ship-stage3d { position:relative; height:25vh; min-height:180px; border-radius:1.2vw; overflow:hidden; border:1px solid rgba(34,195,243,.25); background:radial-gradient(120% 130% at 50% 0%, #1a2c4c 0%, #0d1626 62%, #0a111f 100%); box-shadow:inset 0 0 4vw rgba(34,195,243,.08), 0 .6vh 2vh rgba(2,6,23,.35); }
+                .ship-stage3d { position:relative; height:27vh; min-height:190px; border-radius:1.2vw; overflow:hidden; border:1px solid rgba(34,195,243,.25); background:linear-gradient(180deg,#1a2c4e 0%,#101d36 52%,#0a111f 100%); box-shadow:inset 0 0 4vw rgba(34,195,243,.08), 0 .6vh 2vh rgba(2,6,23,.35); }
                 .ship-stage3d { display:flex; }
                 .ship-3d-host { position:relative; flex:1 1 auto; min-width:0; height:100%; }
                 .ship-3d-host canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
@@ -6382,10 +6382,14 @@
                 .ship-zone3d.start { left:.8vw; }
                 .ship-zone3d.end { right:.8vw; border-color:rgba(139,92,246,.55); }
                 .ship-zone3d.mid { left:50%; transform:translateX(-50%); border-color:rgba(34,195,243,.5); }
-                .ship-spot-overlay { position:relative; z-index:6; flex:0 0 auto; width:min(36rem,32%); height:100%; display:flex; align-items:center; padding:.6vh .7vw; background:rgba(9,15,29,.62); border-inline-start:1px solid rgba(34,195,243,.28); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
-                .ship-spot-overlay .ship-spot { width:100%; }
-                .ship-stage3d.has-spot .ship-zone3d.start { left:calc(min(36rem,32%) + .8vw); }
-                @media (max-width: 900px) { .ship-spot-overlay { width:44%; } .ship-stage3d.has-spot .ship-zone3d.start { left:calc(44% + .8vw); } }
+                .ship-spot-overlay { position:relative; z-index:6; flex:0 0 auto; width:min(38rem,34%); height:100%; display:flex; align-items:center; padding:.6vh .7vw; background:rgba(9,15,29,.62); border-inline-start:1px solid rgba(34,195,243,.28); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+                .ship-spot-overlay .ship-spot { width:100%; grid-template-columns:1fr; gap:.9vh; padding:1.1vh 1vw; }
+                .ship-spot-overlay .ship-spot-car b { font-size:1.45vw; }
+                .ship-spot-overlay .ship-spot-car span, .ship-spot-overlay .ship-spot-ship span { font-size:.95vw; }
+                .ship-spot-overlay .ship-spot-ship b { font-size:1.15vw; }
+                .ship-stage3d.has-spot .ship-zone3d.start { left:calc(min(38rem,34%) + .8vw); }
+                .ship-stage3d.has-spot .ship-zone3d.mid { left:66%; }
+                @media (max-width: 900px) { .ship-spot-overlay { width:44%; } .ship-stage3d.has-spot .ship-zone3d.start { left:calc(44% + .8vw); } .ship-stage3d.has-spot .ship-zone3d.mid { left:72%; } }
                 @media (prefers-reduced-motion: reduce) { .ship-anim, .ship-anim .ship-ring, .ship-anim2, .ship-confetti, .ship-road-line, .ship-truck, .ship-wheel, .ship-city, .ship-cell-focus, .ship-celeb-truck { animation: none !important; } }
             `;
             document.head.appendChild(st);
@@ -6776,22 +6780,40 @@
                 this.scene.add(ground);
                 // the road (start = left/company, end = right/customer) + parking apron in front of it
                 const road = new T.Mesh(new T.BoxGeometry(116, .18, 7), new T.MeshLambertMaterial({ color: 0x0a0f1c }));
-                road.position.set(0, .03, 4); road.receiveShadow = this.shadows;
+                road.position.set(0, -.09, 4); road.receiveShadow = this.shadows;
                 this.scene.add(road);
                 const apron = new T.Mesh(new T.BoxGeometry(116, .1, 6.4), new T.MeshLambertMaterial({ color: 0x182742 }));
-                apron.position.set(0, .01, 9.8); this.scene.add(apron);
+                apron.position.set(0, -.04, 9.8); this.scene.add(apron);
                 const walk = new T.Mesh(new T.BoxGeometry(116, .22, 1.6), new T.MeshLambertMaterial({ color: 0x1d2c49 }));
                 walk.position.set(0, .05, -.4); this.scene.add(walk);
                 // zone tints on the apron: start (amber) / end (violet)
                 [[-44, 0xf59e0b], [37, 0x8b5cf6]].forEach(([x, c]) => {
                     const z = new T.Mesh(new T.PlaneGeometry(24, 6), new T.MeshBasicMaterial({ color: c, transparent: true, opacity: .13 }));
-                    z.rotation.x = -Math.PI / 2; z.position.set(x, .09, 9.8); this.scene.add(z);
+                    z.rotation.x = -Math.PI / 2; z.position.set(x, .025, 9.8); this.scene.add(z);
                 });
                 this.dashes = [];
                 const dashMat = new T.MeshBasicMaterial({ color: 0xfacc15 });
                 for (let i = 0; i < 17; i++) {
                     const d = new T.Mesh(new T.BoxGeometry(3.2, .06, .4), dashMat);
-                    d.position.set(-54 + i * 6.8, .16, 4); this.scene.add(d); this.dashes.push(d);
+                    d.position.set(-54 + i * 6.8, .035, 4); this.scene.add(d); this.dashes.push(d);
+                }
+                // road edge lines + zebra crossings
+                const edgeMat = new T.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: .5 });
+                [.8, 7.2].forEach(z => { const e = new T.Mesh(new T.BoxGeometry(116, .03, .2), edgeMat); e.position.set(0, .02, z); this.scene.add(e); });
+                const zebMat = new T.MeshBasicMaterial({ color: 0xe2e8f0, transparent: true, opacity: .45 });
+                [-27, 30].forEach(cx => { for (let i = 0; i < 5; i++) { const zb = new T.Mesh(new T.BoxGeometry(1, .03, .85), zebMat); zb.position.set(cx, .02, 1.3 + i * 1.35); this.scene.add(zb); } });
+                // low-poly trees along the sidewalk
+                const trunkMat = new T.MeshLambertMaterial({ color: 0x6b4423 });
+                const leafMat = new T.MeshLambertMaterial({ color: 0x1e7a4c });
+                const leafMat2 = new T.MeshLambertMaterial({ color: 0x2c9e63 });
+                for (let x = -54; x <= 54; x += 9) {
+                    if (Math.abs(x + 41) < 8 || Math.abs(x - 43) < 8) continue;
+                    const trunk = new T.Mesh(new T.CylinderGeometry(.13, .18, 1.3, 6), trunkMat);
+                    trunk.position.set(x, .65, -1.9); this.scene.add(trunk);
+                    const c1 = new T.Mesh(new T.SphereGeometry(1.05, 8, 7), leafMat);
+                    c1.position.set(x, 2.1, -1.9); c1.castShadow = this.shadows; this.scene.add(c1);
+                    const c2 = new T.Mesh(new T.SphereGeometry(.72, 8, 7), leafMat2);
+                    c2.position.set(x + .55, 2.75, -1.9); this.scene.add(c2);
                 }
                 // skyline behind the road
                 const win = this.winTex();
@@ -6800,7 +6822,10 @@
                 const addBuilding = (x, z, w, h, d, tint) => {
                     const geo = new T.BoxGeometry(w, h, d); geo.translate(0, h / 2, 0);
                     const b = new T.Mesh(geo, new T.MeshLambertMaterial({ map: win, color: tint }));
-                    b.position.set(x, 0, z); this.scene.add(b); return b;
+                    b.position.set(x, 0, z); this.scene.add(b);
+                    const roof = new T.Mesh(new T.BoxGeometry(w + .5, .35, d + .5), new T.MeshLambertMaterial({ color: 0x0e1830 }));
+                    roof.position.set(x, h + .17, z); this.scene.add(roof);
+                    return b;
                 };
                 for (let x = -56; x < 58; x += 7) { addBuilding(x + rnd() * 2, -11 - rnd() * 3, 5 + rnd() * 2, 6 + rnd() * 10, 5, tints[Math.floor(rnd() * tints.length)]); }
                 for (let x = -52; x < 56; x += 10) { addBuilding(x + rnd() * 2, -19 - rnd() * 3, 6 + rnd() * 3, 9 + rnd() * 13, 6, tints[Math.floor(rnd() * tints.length)]); }
@@ -6832,9 +6857,9 @@
                 this.scene.add(this.pin);
                 // spotlight route (company -> truck) + ring
                 this.route = new T.Mesh(new T.BoxGeometry(1, .07, .8), new T.MeshBasicMaterial({ color: 0x22c3f3, transparent: true, opacity: .8 }));
-                this.route.position.y = .15; this.route.visible = false; this.scene.add(this.route);
-                this.ring = new T.Mesh(new T.TorusGeometry(2.6, .11, 8, 44), new T.MeshBasicMaterial({ color: 0x22c3f3, transparent: true, opacity: .9 }));
-                this.ring.rotation.x = -Math.PI / 2; this.ring.position.y = .13; this.ring.visible = false; this.scene.add(this.ring);
+                this.route.position.y = .05; this.route.visible = false; this.scene.add(this.route);
+                this.ring = new T.Mesh(new T.TorusGeometry(3, .12, 8, 44), new T.MeshBasicMaterial({ color: 0x22c3f3, transparent: true, opacity: .9 }));
+                this.ring.rotation.x = -Math.PI / 2; this.ring.position.y = .04; this.ring.visible = false; this.scene.add(this.ring);
                 this.applyPeriod();
             },
 
@@ -6846,10 +6871,16 @@
                 const cargoMat = new T.MeshLambertMaterial({ color: this.stageColor('waiting'), emissive: this.stageColor('waiting'), emissiveIntensity: .22 });
                 const cargo = new T.Mesh(new T.BoxGeometry(6.4, 2.9, 2.6), cargoMat);
                 cargo.position.set(-1.1, 2.35, 0); cargo.castShadow = this.shadows; g.add(cargo);
+                const stripe = new T.Mesh(new T.BoxGeometry(6.44, .3, 2.64), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .16 }));
+                stripe.position.set(-1.1, 3.3, 0); g.add(stripe);
                 const cab = new T.Mesh(new T.BoxGeometry(2.3, 2, 2.5), new T.MeshLambertMaterial({ color: 0xdbe7f5 }));
                 cab.position.set(3.35, 1.95, 0); cab.castShadow = this.shadows; g.add(cab);
                 const shield = new T.Mesh(new T.BoxGeometry(.85, .85, 2.2), new T.MeshLambertMaterial({ color: 0x0e2138 }));
                 shield.position.set(4.35, 2.4, 0); g.add(shield);
+                const lightMat = new T.MeshBasicMaterial({ color: 0xfef9c3 });
+                [-0.78, 0.78].forEach(z => { const hl = new T.Mesh(new T.BoxGeometry(.16, .36, .52), lightMat); hl.position.set(4.55, 1.45, z); g.add(hl); });
+                const tailMat = new T.MeshBasicMaterial({ color: 0xef4444 });
+                [-1, 1].forEach(z => { const tl = new T.Mesh(new T.BoxGeometry(.14, .3, .4), tailMat); tl.position.set(-4.35, 1.4, z); g.add(tl); });
                 const chassis = new T.Mesh(new T.BoxGeometry(9.8, .42, 2.4), new T.MeshLambertMaterial({ color: 0x0b1220 }));
                 chassis.position.set(0, .95, 0); g.add(chassis);
                 const wheelGeo = new T.CylinderGeometry(.78, .78, .42, 16); wheelGeo.rotateX(Math.PI / 2);
@@ -6872,6 +6903,7 @@
                     const blob = new T.Mesh(new T.PlaneGeometry(11.5, 4.6), new T.MeshBasicMaterial({ map: this.shadowTex(), transparent: true, depthWrite: false }));
                     blob.rotation.x = -Math.PI / 2; blob.position.y = .045; g.add(blob);
                 }
+                g.scale.setScalar(1.12);
                 g.userData.car = car;
                 return { g, wheels, cargoMat, stage: '', slot: 0, lane: 0, off: (car * 1.73) % 11, px: -41, pz: 8.8 };
             },
@@ -6903,9 +6935,9 @@
                     a.lane = a.slot % 2;
                     // position on the road = stage: start (left) -> middle -> end (right)
                     if (d.stage === 'waiting')   { a.px = -41 + (a.slot % 4) * 6.2;        a.pz = a.slot < 4 ? 8.8 : 12.2; }
-                    if (d.stage === 'loaded')    { a.px = -33 + (a.slot % 3) * 6.8;        a.pz = 4; }
+                    if (d.stage === 'loaded')    { a.px = -36 + (a.slot % 3) * 6;          a.pz = 2.6; }
                     if (d.stage === 'arrived')   { a.px = 22 + (a.slot % 3) * 6.2;         a.pz = a.slot < 3 ? 8.8 : 12.2; }
-                    if (d.stage === 'delivered') { a.px = 40 + (a.slot % 2) * 6.4;         a.pz = a.slot < 2 ? 4 : 8.8; }
+                    if (d.stage === 'delivered') { a.px = 40 + (a.slot % 2) * 6.4;         a.pz = a.slot < 2 ? 5.6 : 8.8; }
                     if (fresh && d.stage !== 'transit') a.g.position.set(a.px, 0, a.pz);   // appear in place, no slide-in on load
                 });
             },
@@ -6917,8 +6949,10 @@
                 const scr = document.getElementById('shipScreen');
                 const per = scr?.dataset.period || 'day';
                 const dark = per === 'night';
-                this.dirLight.intensity = dark ? .55 : .95;
-                this.hemi.intensity = dark ? .55 : .85;
+                const light = scr?.dataset.custom === '1' && per === 'day';
+                this.dirLight.intensity = dark ? .55 : (light ? 1.15 : .95);
+                this.hemi.intensity = dark ? .55 : (light ? 1.1 : .85);
+                if (this.scene) this.scene.fog.color.setHex(light ? 0x8fb4e0 : 0x0d1526);
                 this.dirLight.color.setHex(per === 'dusk' ? 0xffd9a6 : 0xffffff);
             },
 
@@ -6997,10 +7031,10 @@
                 this.actors.forEach(a => {
                     if (a.stage === 'transit') {
                         // drives back and forth across the MIDDLE of the road
-                        const phase = (t * 3.2 + a.off * 11) % 44;
-                        const goingRight = phase <= 22;
-                        const x = goingRight ? -22 + phase : 22 - (phase - 22);
-                        a.g.position.set(x, 0, a.lane ? 6.4 : 3.2);
+                        const phase = (t * 3.2 + a.off * 11) % 36;
+                        const goingRight = phase <= 18;
+                        const x = goingRight ? -18 + phase : 18 - (phase - 18);
+                        a.g.position.set(x, 0, a.lane ? 5.6 : 2.6);
                         const targetRot = goingRight ? 0 : Math.PI;
                         let diff = ((targetRot - a.g.rotation.y + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
                         a.g.rotation.y += diff * Math.min(1, dt * 5);
@@ -7018,11 +7052,11 @@
                 if (spot) {
                     const p = spot.g.position;
                     this.ring.visible = this.route.visible = true;
-                    this.ring.position.set(p.x, .13, p.z);
+                    this.ring.position.set(p.x, .04, p.z);
                     const sc = 1 + Math.sin(t * 3) * .12; this.ring.scale.set(sc, sc, 1);
                     const len = Math.max(1, p.x + 52);
                     this.route.scale.x = len;
-                    this.route.position.set(p.x - len / 2, .15, p.z);
+                    this.route.position.set(p.x - len / 2, .05, p.z);
                 } else { this.ring.visible = this.route.visible = false; }
                 // gentle pan toward the spotlight truck; the whole road stays in frame
                 const tx = spot ? Math.max(-8, Math.min(8, spot.g.position.x * .12)) : 0;
@@ -10225,5 +10259,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e95db39bf6787a',t:'MTc5NTM2NTUyMg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e95db39bf6787a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e976696a41e177',t:'MTc5NTM2NjUzNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e976696a41e177',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
