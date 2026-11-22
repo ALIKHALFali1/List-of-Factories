@@ -6382,7 +6382,7 @@
                 .ship-zone3d.start { left:.8vw; }
                 .ship-zone3d.end { right:.8vw; border-color:rgba(139,92,246,.55); }
                 .ship-zone3d.mid { left:50%; transform:translateX(-50%); border-color:rgba(34,195,243,.5); }
-                .ship-mainrow { display:flex; gap:.8vw; height:38vh; min-height:300px; }
+                .ship-mainrow { display:flex; gap:.8vw; height:29vh; min-height:250px; }
                 .ship-mainrow .ship-stage3d { flex:1 1 auto; min-width:0; height:100%; min-height:0; }
                 .ship-queue, .ship-detail { flex:0 0 auto; width:min(29rem,23%); background:rgba(10,16,30,.88); border:1px solid rgba(56,189,248,.2); border-radius:1vw; padding:1vh .8vw; color:#e6f0ff; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); box-shadow:0 .6vh 2vh rgba(2,6,23,.35); }
                 .ship-queue { display:flex; flex-direction:column; gap:.7vh; }
@@ -6402,14 +6402,14 @@
                 .q-bar { height:.55vh; min-height:4px; background:rgba(125,196,255,.15); border-radius:1vw; overflow:hidden; }
                 .q-bar i { display:block; height:100%; border-radius:1vw; }
                 .ship-queue-empty, .ship-detail-empty { opacity:.65; font-size:.85vw; font-weight:700; text-align:center; padding:2vh 0; }
-                .ship-detail { display:flex; flex-direction:column; gap:.8vh; overflow-y:auto; scrollbar-width:thin; }
+                .ship-detail { display:flex; flex-direction:column; gap:.6vh; overflow-y:auto; scrollbar-width:thin; }
                 .ship-d-head span { font-size:.72vw; opacity:.7; font-weight:700; display:block; }
                 .ship-d-head b { font-size:1.3vw; font-weight:900; }
-                .ship-d-truck { width:100%; height:auto; }
+                .ship-d-truck { width:66%; height:auto; margin:0 auto; }
                 .ship-d-grid { display:grid; grid-template-columns:1fr 1fr; gap:.6vh .6vw; }
                 .ship-d-grid > div { background:rgba(24,38,61,.66); border:1px solid rgba(125,196,255,.12); border-radius:.6vw; padding:.55vh .6vw; }
                 .ship-d-grid span { display:block; font-size:.68vw; opacity:.65; font-weight:700; }
-                .ship-d-grid b { font-size:.92vw; font-weight:900; }
+                .ship-d-grid b { font-size:.88vw; font-weight:900; }
                 .ship-d-trips h4 { font-size:.85vw; font-weight:900; margin:0 0 .5vh; }
                 .ship-d-trip { display:flex; align-items:center; gap:.5vw; font-size:.78vw; font-weight:700; padding:.45vh .5vw; background:rgba(24,38,61,.5); border-radius:.5vw; margin-bottom:.4vh; }
                 .ship-d-trip b { flex:1; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -6674,10 +6674,11 @@
 
         function shipPaintSpot() {
             const host = document.getElementById('shipSpot');
-            if (!host) return;
-            host.innerHTML = shipSpotCardHtml();
-            const card = host.firstElementChild;
-            if (card && shipMotion() !== 'lite') card.classList.add('ship-spot-in');
+            if (host) {
+                host.innerHTML = shipSpotCardHtml();
+                const card = host.firstElementChild;
+                if (card && shipMotion() !== 'lite') card.classList.add('ship-spot-in');
+            }
             document.querySelectorAll('.ship-cell-tv.ship-cell-focus').forEach(n => n.classList.remove('ship-cell-focus'));
             document.querySelectorAll(`.ship-cell-tv[data-car="${shipSpotCar}"]`).forEach(n => n.classList.add('ship-cell-focus'));
             if (typeof Ship3D !== 'undefined') Ship3D.setSpot(shipSpotCar);
@@ -6696,7 +6697,7 @@
         }
 
         function shipNextSpot() {
-            const act = shipActiveCars();
+            const act = shipQueueCars();   // rotate through EVERY car with a trip today, delivered included
             if (act.length < 2) { shipPaintSpot(); return; }
             const i = act.findIndex(a => a.car === shipSpotCar);
             shipSpotCar = act[(i + 1) % act.length].car;
@@ -6738,6 +6739,7 @@
             }, 1000);
             if (shipCfg.showSpot) shipSpotTimer = setInterval(() => { if (!document.hidden) shipNextSpot(); }, 7000);
             if (typeof Ship3D !== 'undefined') Ship3D.start();
+            shipPaintSpot();
         }
 
         function shipStopShow() {
@@ -7188,15 +7190,20 @@
                     this.ring.position.set(p.x, .08, p.z);
                     const sc = 1 + Math.sin(t * 3) * .12; this.ring.scale.set(sc, sc, 1);
                 } else { this.ring.visible = false; }
-                // gentle pan toward the spotlight truck; the whole map stays in frame
-                const tx = spot ? Math.max(-6, Math.min(6, spot.g.position.x * .1)) : 0;
-                this.camPos.set(tx, 47, 36);
-                this.camLook.set(tx * .85, 0, 3.4);
-                this.camera.position.lerp(this.camPos, .04);
+                // camera glides to the spotlight truck, close enough to read the plate on its side
+                if (spot) {
+                    const p = spot.g.position;
+                    this.camPos.set(p.x + .5, 7.5, p.z + 15);
+                    this.camLook.set(p.x, 1.6, p.z);
+                } else {
+                    this.camPos.set(0, 47, 36);
+                    this.camLook.set(0, 0, 3.4);
+                }
+                this.camera.position.lerp(this.camPos, .06);
                 const look = new THREE.Vector3();
                 this.camera.getWorldDirection(look);
                 const cur = this.camera.position.clone().add(look);
-                cur.lerp(this.camLook, .05);
+                cur.lerp(this.camLook, .09);
                 this.camera.lookAt(cur);
                 this.renderer.render(this.scene, this.camera);
             }
@@ -10393,5 +10400,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e987e029d2ad93',t:'MTc5NTM2NzI0OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e987e029d2ad93',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e999bdda251f37',t:'MTc5NTM2Nzk4MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e999bdda251f37',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
