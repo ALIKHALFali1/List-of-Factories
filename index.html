@@ -5415,7 +5415,7 @@
                     </th>
                     ${cars.map(c => { const key = shipCellKey(c, sl.id); return `<td class="p-1.5 border border-slate-200 align-top">${shipCellHtml(key, shipCells[key], edit, false)}</td>`; }).join('')}
                 </tr>`).join('');
-            const empty = shipSlots.length ? '' : `<tr><td colspan="${SHIP_CARS + 1}" class="p-6 text-center text-slate-500">مفيش مواعيد لسه.${edit ? ' اضغط "إضافة موعد" عشان تبدأ.' : ''}</td></tr>`;
+            const empty = shipSlots.length ? '' : `<tr><td colspan="${SHIP_CARS + 1}" class="p-6 text-center text-slate-500">مفيش مواعيد لسه.</td></tr>`;
             return `<div class="overflow-x-auto rounded-2xl border-2 border-slate-300 bg-white"><table class="border-collapse w-max">
                 <thead>${head}</thead><tbody>${rows}${empty}</tbody></table></div>`;
         }
@@ -5503,7 +5503,6 @@
                     ${btn('shipShiftDay(-1)', 'السابق', 'fa-chevron-right', BTN_SECONDARY)}
                     ${btn('shipShiftDay(1)', 'التالي', 'fa-chevron-left', BTN_SECONDARY)}
                     ${btn('shipSetDay(todayISO())', 'النهارده', 'fa-calendar-day', BTN_SECONDARY)}
-                    ${edit ? btn('openShipSlot()', 'إضافة موعد', 'fa-plus', BTN_PRIMARY) : ''}
                     ${edit ? btn('openShipDisplaySettings()', 'إعدادات العرض', 'fa-sliders', BTN_SECONDARY) : ''}
                     ${edit ? btn('openShipCars()', 'أسماء العربيات', 'fa-id-card', BTN_SECONDARY) : ''}
                     ${btn(`window.open(location.pathname + '#/shipping/screen', '_blank')`, 'شاشة العرض للعملاء', 'fa-tv', BTN_SECONDARY)}
@@ -5539,7 +5538,15 @@
             shipSkyTimer = setInterval(shipSkyTick, 30000);
             if (!shipResizeBound) { shipResizeBound = true; window.addEventListener('resize', shipFitSoon); }
             if (document.fonts && document.fonts.ready) document.fonts.ready.then(shipFitSoon);
+            // the Tailwind CDN styles the page a little after render: fit again when the styles change, and at a few timed points
+            if (!shipFitWatch) {
+                shipFitWatch = true;
+                new MutationObserver(() => { clearTimeout(shipFitDebounce); shipFitDebounce = setTimeout(shipFitSoon, 150); })
+                    .observe(document.head, { childList: true, subtree: true, characterData: true });
+            }
+            [500, 1500, 3500].forEach(ms => setTimeout(shipFitSoon, ms));
         }
+        let shipFitWatch = false, shipFitDebounce = null;
         function shipStopSky() { clearInterval(shipSkyTimer); shipSkyTimer = null; }
 
         // شاشة العرض: صفحة كاملة للتليفزيون. القايمة الجانبية مخفية، وزرار السهم بيظهرها ويخفيها.
@@ -8111,5 +8118,5 @@
             });
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e7474ad90f2b24',t:'MTc5NTM0MzYzMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e7474ad90f2b24',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e7a101f9d6da31',t:'MTc5NTM0NzMwNw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e7a101f9d6da31',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
