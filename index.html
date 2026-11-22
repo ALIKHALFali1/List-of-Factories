@@ -161,9 +161,9 @@
         html[data-shadow="strong"] .shadow-sm, html[data-shadow="strong"] .shadow, html[data-shadow="strong"] .shadow-lg { box-shadow: 0 12px 28px -10px rgba(15,23,42,.45) !important; }
 
         /* ---------- page / motion ---------- */
-        .page-enter { animation: pageIn .38s var(--ease) both; }
+        .page-enter { animation: none; } /* content never starts faded/shifted: it read as flicker at opening */
         @keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        .stagger > * { animation: riseIn .45s var(--ease) both; }
+        .stagger > * { animation: none; } /* same: cards appear stable, no rise/fade replay on repaint */
         .stagger > *:nth-child(2) { animation-delay: .03s; } .stagger > *:nth-child(3) { animation-delay: .06s; }
         .stagger > *:nth-child(4) { animation-delay: .09s; } .stagger > *:nth-child(5) { animation-delay: .12s; }
         .stagger > *:nth-child(6) { animation-delay: .15s; } .stagger > *:nth-child(7) { animation-delay: .18s; }
@@ -1910,6 +1910,15 @@
             signingOut = false;
         }
 
+        let cacheRenderTimer = null;
+        function scheduleCacheRender() {
+            if (cacheRenderTimer) return;
+            cacheRenderTimer = setTimeout(() => {
+                cacheRenderTimer = null;
+                if (fbUser && sessionUserId) render();
+            }, 250);
+        }
+
         function onCacheChanged() {
             if (!fbUser || !fbCache) return;
             if (!['users', 'roles', 'companies', 'lists', 'settings'].every(k => fbLoaded[k])) return;
@@ -1945,7 +1954,7 @@
                 enterApp();
                 return;
             }
-            if (sigOf() !== before) render();
+            if (sigOf() !== before) scheduleCacheRender();
         }
 
         async function handleFbUser(user) {
@@ -1977,7 +1986,8 @@
             const _u = currentUser();
             const repLanding = !!(_u && currentRepId() && isRepRoleDef(appData.roles[_u.roleId]) && canAccessRoute('customers'));
             const startHash = repLanding ? '#/customers' : '#/home';
-            if (!keepScreen && location.hash !== startHash) location.hash = startHash;
+            lastAnimatedRoute = '';
+            if (!keepScreen && location.hash !== startHash) { suppressEnterHashRender = true; location.hash = startHash; }
             render();
         }
 
@@ -3794,6 +3804,8 @@
             saveState();
         }
 
+        let lastAnimatedRoute = '';
+        let suppressEnterHashRender = false;
         function render() {
             if (orderFormKeep && parseRoute().name !== 'orders') orderFormKeep = null;
             if (pendingNewOrderImages.length && parseRoute().param !== 'new') pendingNewOrderImages = [];
@@ -3825,7 +3837,13 @@
             el('content').insertAdjacentHTML('afterbegin', checkReportBanner());
             renderChrome(name);
             if (view.after) view.after();
-            if (window.App && App.Motion) { App.Motion.tagTilt(); App.Motion.pageIn(); }
+            const routeKey = name + '/' + (param || '');
+            const animatePage = routeKey !== lastAnimatedRoute;
+            lastAnimatedRoute = routeKey;
+            if (window.App && App.Motion && !(name === 'shipping' && param === 'screen')) {
+                App.Motion.tagTilt();
+                if (animatePage) App.Motion.pageIn();
+            }
             if (window.App && App.Scene) {
                 if (name === 'home') { App.Scene.start(el('homeScene')); App.Scene.heroParallax(document.querySelector('.home-hero')); }
                 else App.Scene.stop();
@@ -6224,8 +6242,17 @@
             b.commit().then(() => { shipSeeding = false; }, err => { shipSeeding = false; shipSaveFailed(err, 'المواعيد الافتراضية'); });
         }
 
+        let shipLiveTimer = null;
         function shipLiveUpdate() {
-            if (parseRoute().name === 'shipping') render();
+            const r = parseRoute();
+            if (r.name !== 'shipping') return;
+            if (r.param !== 'screen') { render(); return; }
+            if (shipLiveTimer) return;
+            shipLiveTimer = setTimeout(() => {
+                shipLiveTimer = null;
+                const n = parseRoute();
+                if (n.name === 'shipping' && n.param === 'screen') render();
+            }, 180);
         }
 
         function shipSetDay(v) {
@@ -6491,7 +6518,7 @@
             return `rgb(${c((n >> 16) & 255)},${c((n >> 8) & 255)},${c(n & 255)})`;
         }
         const shipMotion = () => (window.App && App.Motion && App.Motion.level) || 'balanced';
-        let shipSpotCar = 0, shipSpotTimer = null, shipClockTimer = null, shipCountRaf = null;
+        let shipSpotCar = 0, shipSpotTimer = null, shipClockTimer = null, shipCountRaf = null, shipSpotSig = '', shipCountSig = '';
 
         function shipStageCounts() {
             const counts = Object.fromEntries(SHIP_STAGES.map(([k]) => [k, 0]));
@@ -6569,7 +6596,9 @@
             if (host) {
                 host.innerHTML = shipSpotCardHtml();
                 const card = host.firstElementChild;
-                if (card && shipMotion() !== 'lite') card.classList.add('ship-spot-in');
+                const sig = host.innerHTML;
+                if (card && sig !== shipSpotSig && shipMotion() !== 'lite') card.classList.add('ship-spot-in');
+                shipSpotSig = sig;
             }
             document.querySelectorAll('.ship-cell-tv.ship-cell-focus').forEach(n => n.classList.remove('ship-cell-focus'));
             document.querySelectorAll(`.ship-cell-tv[data-car="${shipSpotCar}"]`).forEach(n => n.classList.add('ship-cell-focus'));
@@ -6593,6 +6622,9 @@
         function shipCountUp() {
             const nums = [...document.querySelectorAll('#shipScreen .ship-kpi-num')];
             if (!nums.length) return;
+            const sig = nums.map(n => (n.dataset.count || '') + (n.dataset.suffix || '')).join(',');
+            if (sig === shipCountSig) { nums.forEach(n => { n.textContent = (n.dataset.count || '0') + (n.dataset.suffix || ''); }); return; }
+            shipCountSig = sig;
             if (shipCountRaf) cancelAnimationFrame(shipCountRaf);
             if (shipMotion() === 'lite') { nums.forEach(n => { n.textContent = (n.dataset.count || '0') + (n.dataset.suffix || ''); }); return; }
             const t0 = performance.now(), dur = 900;
@@ -6625,6 +6657,7 @@
             shipSpotTimer = shipClockTimer = null;
             if (shipCountRaf) cancelAnimationFrame(shipCountRaf);
             shipCountRaf = null;
+            shipSpotSig = ''; shipCountSig = ''; shipTvK = 0;
         }
 
         // the road: a living street with two fixed zones — the company (departure) on the left,
@@ -6782,7 +6815,7 @@
         }
 
         // Fit: the cells use the largest text size that still shows every line (no cut text).
-        let shipResizeBound = false;
+        let shipResizeBound = false, shipTvK = 0;
         function shipFitSoon() { requestAnimationFrame(shipFitTv); }
         function shipFitTv() {
             const screen = document.getElementById('shipScreen');
@@ -6797,12 +6830,13 @@
                 for (const k of kids) { const r = k.getBoundingClientRect(); if (r.top < top) top = r.top; if (r.bottom > bot) bot = r.bottom; }
                 return bot - top > cr.height + 1;
             });
-            let k = 1.15;
+            let k = shipTvK || 1.15;
             screen.style.setProperty('--tvk', k);
             for (let i = 0; i < 20 && k > 0.65 && over(); i++) {
                 k = Math.round((k - 0.05) * 100) / 100;
                 screen.style.setProperty('--tvk', k);
             }
+            shipTvK = k;
         }
 
         function shipToggleNav() { document.body.classList.toggle('ship-nav-open'); }
@@ -9455,11 +9489,8 @@
             },
             pageIn() {
                 const c = el('content'); if (!c || this.level === 'lite') return;
-                const targets = c.querySelectorAll(':scope > *, :scope .kpi, :scope .app-card');
-                if (window.gsap && targets.length) {
-                    gsap.fromTo(targets, { opacity: 0, y: this.level === 'cinematic' ? 16 : 10 },
-                        { opacity: 1, y: 0, duration: this.level === 'cinematic' ? .55 : .38, stagger: .035, ease: 'power3.out', overwrite: 'auto', clearProps: 'transform' });
-                }
+                // page content itself is never faded or shifted in: on real devices that read as a
+                // flicker/distortion at opening. Only counters and charts animate, and only on navigation.
                 this.counters(c); this.chartsIn(c); this.bindTilt();
             },
             chartsIn(root) {
@@ -9848,7 +9879,10 @@
         document.addEventListener('DOMContentLoaded', async () => {
             themeLoad(); applyTheme(); startDigitsObserver(); homeCfgLoad(); App.init(); setTimeout(() => App.Notifications.checkDue(false), 4000);
             appData = normalizeData(defaultData());   // placeholder until the first sync
-            window.addEventListener('hashchange', render);
+            window.addEventListener('hashchange', () => {
+                if (suppressEnterHashRender) { suppressEnterHashRender = false; return; }
+                render();
+            });
 
             if (!firebaseReady()) {
                 showAuth('login');
@@ -9903,5 +9937,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5e9c6dac899e1b7',t:'MTc5NTM2OTgyOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5e9c6dac899e1b7',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5eb1ab5edfd0e5f',t:'MTc5NTM4Mzc1MA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5eb1ab5edfd0e5f',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
