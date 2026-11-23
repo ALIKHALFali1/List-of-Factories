@@ -5450,6 +5450,8 @@
         // المندوب يقدر يشوف الفواتير بس — الكتابة جوّه مستند الفاتورة نفسه كانت هتترفض
         // منه. حالة «اتشاف» محلية لكل جهاز (نفس فكرة جرس الإشعارات).
         let custComments = [];
+        const custCmtPendingDeletes = new Set();
+        let custCmtOpenId = '';
         let custCmtSubbed = false;
         let custCmtEditId = '';
         const custCmtMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
@@ -5457,7 +5459,7 @@
             if (custCmtSubbed || !fbDb || !fbUser || !canCust('view')) return;
             custCmtSubbed = true;
             fbDb.collection('custComments').orderBy('t', 'desc').limit(2000).onSnapshot(snap => {
-                custComments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                custComments = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => !custCmtPendingDeletes.has(x.id));
                 if (parseRoute().name === 'customers') updateCustBody();
             }, err => console.error('custComments listener', err));
         }
@@ -5489,6 +5491,7 @@
             const c = appData.custOrders.find(x => x.id === id);
             if (!c) return toast('الطلبية مش موجودة', 'error');
             custCmtEditId = editId || '';
+            custCmtOpenId = id;
             custEnsureCommentSubs();
             custMarkCmtSeen(id);
             const me = custCmtMe();
@@ -5576,14 +5579,20 @@
             const cm = custComments[i];
             if (!(cm.byId === custCmtMe() || canCust('manage'))) return toast('تقدر تحذف تعليقاتك بس', 'error');
             custComments.splice(i, 1);
+            custCmtPendingDeletes.add(cid);   // a server snapshot must not bring it back
             openCustComments(orderId);
             updateCustBody();
-            scheduleUndo('تم حذف التعليق', () => {
-                custComments.splice(Math.min(i, custComments.length), 0, cm);
+            const bringBack = () => {
+                custCmtPendingDeletes.delete(cid);
+                if (!custComments.some(x => x.id === cid)) custComments.splice(Math.min(i, custComments.length), 0, cm);
                 if (parseRoute().name === 'customers') updateCustBody();
-            }, () => {
-                if (fbDb && fbUser) fbDb.collection('custComments').doc(cid).delete().catch(custCmtSaveFailed);
-            });
+                if (custCmtOpenId === orderId && !el('modalHost')?.classList.contains('hidden')) openCustComments(orderId);
+            };
+            // delete on the server NOW (waiting out the undo window lost deletions when the app closed early)
+            if (fbDb && fbUser) {
+                fbDb.collection('custComments').doc(cid).delete().catch(err => { bringBack(); custCmtSaveFailed(err); });
+            }
+            scheduleUndo('تم حذف التعليق', () => { bringBack(); custCmtWrite(cm); }, () => {});
         }
 
         let custOrderSnapshots = {};       // key -> map of orders from one listener (repId / repName / all)
@@ -10762,5 +10771,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec3862ce0f8473',t:'MTc5NTM5NTQ1MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec3862ce0f8473',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec43aa59aced15',t:'MTc5NTM5NTkxMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec43aa59aced15',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
