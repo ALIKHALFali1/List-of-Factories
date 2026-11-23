@@ -9811,10 +9811,25 @@
             homeTickerIdx = ((homeTickerIdx + delta) % items.length + items.length) % items.length;
             const box = document.getElementById('homeTickerBox');
             if (!box) return;
-            const show = () => { box.innerHTML = homeTickerItemHtml(items[homeTickerIdx], homeTickerIdx, items.length); };
+            const show = () => {
+                box.innerHTML = homeTickerItemHtml(items[homeTickerIdx], homeTickerIdx, items.length);
+                if (box.animate) box.animate(
+                    [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'translateY(0)' }],
+                    { duration: 450, easing: 'cubic-bezier(.22,1,.36,1)' });
+            };
             if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { show(); return; }
-            box.classList.add('is-out');
-            setTimeout(() => { show(); box.classList.remove('is-out'); }, 300);
+            if (box.animate) {
+                const out = box.animate(
+                    [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-12px)' }],
+                    { duration: 280, easing: 'ease-in', fill: 'forwards' });
+                let done = false;
+                const swap = () => { if (done) return; done = true; try { out.cancel(); } catch (e) { /* already finished */ } show(); };
+                out.onfinish = swap;
+                setTimeout(swap, 420);   // safety net if the animation is interrupted (e.g. a repaint)
+            } else {
+                box.classList.add('is-out');
+                setTimeout(() => { show(); box.classList.remove('is-out'); }, 300);
+            }
         }
         // new alerts: a short sound and/or vibration (both off by default; set in الإعدادات)
         function homeBeep() {
@@ -9913,7 +9928,7 @@
                 .home-hero[data-period="night"] .home-ticker { background: rgba(255, 255, 255, .08); }
                 .home-ticker-title { display: block; font-size: 11px; font-weight: 700; color: var(--hero-sub); margin-bottom: 4px; }
                 .home-ticker-box { min-height: 28px; transition: opacity .4s ease, transform .4s ease; }
-                #homeTickerBox { transition: opacity .45s ease, transform .45s ease !important; }
+                #homeTickerBox { transition: opacity .45s ease, transform .45s ease !important; will-change: opacity, transform; }
                 .home-ticker-box.is-out { opacity: 0; transform: translateY(6px); }
                 .home-ticker-item { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; background: none; border: 0; color: var(--hero-ink); font-size: 14px; font-weight: 700; cursor: pointer; padding: 2px; }
                 .home-ticker-count { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgb(var(--brand-600)); color: #fff; direction: ltr; }
@@ -12715,5 +12730,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f3ab297d2fbab1',t:'MTc5NTQ3MzU1Mg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f3ab297d2fbab1',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f3be1ece18baaf',t:'MTc5NTQ3NDMyOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f3be1ece18baaf',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
