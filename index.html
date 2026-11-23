@@ -1668,17 +1668,21 @@
                 ? 'إعدادات النظام'
                 : (o.data?.name || o.prevData?.name
                     || (o.data?.number || o.prevData?.number ? 'شيك رقم ' + (o.data?.number || o.prevData?.number) : ((o.data?.no || o.prevData?.no) ? 'طلبية ' + String(o.data?.no || o.prevData?.no).padStart(4, '0') : o.key.split('/')[1])))))];
+            const NOTIF_TARGET_COLS = ['custOrders', 'orders', 'checks', 'companies', 'lists', 'partners', 'users', 'roles', 'custReps', 'settings'];
+            const tOp = real.find(o => NOTIF_TARGET_COLS.includes(o.key.split('/')[0]) && o.key.split('/')[1]);
             return {
                 verb: NOTIF_VERB[verbs.length === 1 ? verbs[0] : 'edit'],
                 kind: kinds.join('، '),
-                detail: names.slice(0, 2).join('، ') + (names.length > 2 ? ` و${names.length - 2} غيرها` : '')
+                detail: names.slice(0, 2).join('، ') + (names.length > 2 ? ` و${names.length - 2} غيرها` : ''),
+                ...(tOp ? { target: { col: tOp.key.split('/')[0], id: tOp.key.split('/')[1] } } : {})
             };
         }
 
         function newNotification(info) {
             return {
                 id: uid('NTF-'), t: new Date().toISOString(), uid: fbUser.uid,
-                user: currentUser()?.name || 'مستخدم', verb: info.verb, kind: info.kind, detail: info.detail
+                user: currentUser()?.name || 'مستخدم', verb: info.verb, kind: info.kind, detail: info.detail,
+                ...(info.target ? { target: info.target } : {})
             };
         }
 
@@ -1689,9 +1693,9 @@
         }
 
         // a change that is written on its own (PDF upload or removal)
-        function notifyDirect(verb, kind, detail) {
+        function notifyDirect(verb, kind, detail, target) {
             if (!fbDb || !fbUser) return;
-            const n = newNotification({ verb, kind, detail });
+            const n = newNotification({ verb, kind, detail, target });
             fbDb.collection('notifications').doc(n.id).set(n).catch(err => console.warn('notification not saved:', err && err.code));
         }
 
@@ -1736,6 +1740,34 @@
             renderNotifs();
         }
 
+        // items the user already opened (per device). The timestamp stays the baseline for older entries.
+        function notifSeenIds() {
+            try { return new Set(JSON.parse(localStorage.getItem('notifSeenIds:' + (fbUser?.uid || 'anon')) || '[]')); } catch (e) { return new Set(); }
+        }
+        function notifMarkSeen(id) {
+            if (!id) return;
+            const seen = notifSeenIds();
+            if (seen.has(id)) return;
+            seen.add(id);
+            try { localStorage.setItem('notifSeenIds:' + (fbUser?.uid || 'anon'), JSON.stringify([...seen].slice(-300))); } catch (e) { /* storage blocked */ }
+        }
+        const notifUnread = n => n.t > notifSeenAt() && !notifSeenIds().has(n.id);
+
+        function notifIcon(kind = '') {
+            if (kind.includes('تعليق')) return ['fa-comments', 'bg-amber-100 text-amber-700'];
+            if (kind.includes('PDF') || kind.includes('لستة')) return ['fa-file-pdf', 'bg-rose-100 text-rose-700'];
+            if (kind.includes('طلبية عميل')) return ['fa-file-invoice', 'bg-brand-100 text-brand-700'];
+            if (kind.includes('طلبية')) return ['fa-truck-ramp-box', 'bg-sky-100 text-sky-700'];
+            if (kind.includes('شيك')) return ['fa-money-check-dollar', 'bg-emerald-100 text-emerald-700'];
+            if (kind.includes('شركة')) return ['fa-industry', 'bg-violet-100 text-violet-700'];
+            if (kind.includes('مستفيد')) return ['fa-handshake', 'bg-teal-100 text-teal-700'];
+            if (kind.includes('دور')) return ['fa-user-shield', 'bg-indigo-100 text-indigo-700'];
+            if (kind.includes('مستخدم')) return ['fa-user', 'bg-indigo-100 text-indigo-700'];
+            if (kind.includes('مندوب')) return ['fa-user-tie', 'bg-cyan-100 text-cyan-700'];
+            if (kind.includes('إعدادات')) return ['fa-gear', 'bg-slate-200 text-slate-600'];
+            return ['fa-bell', 'bg-slate-100 text-slate-500'];
+        }
+
         // everyone's entries except the user's own changes
         function visibleNotifs() {
             const me = fbUser?.uid;
@@ -1746,19 +1778,25 @@
             const badge = el('notifBadge');
             const list = el('notifList');
             if (!badge || !list) return;
-            const seen = notifSeenAt();
             const items = visibleNotifs();
-            const unread = items.filter(n => n.t > seen).length;
+            const unread = items.filter(notifUnread).length;
             badge.textContent = unread > 9 ? '9+' : String(unread);
             badge.classList.toggle('hidden', unread === 0);
-            const fresh = notifHighlightAfter || seen;
             list.innerHTML = items.length
-                ? items.map(n => `
-                    <div class="px-4 py-3 ${n.t > fresh ? 'bg-brand-50' : ''}">
-                        <p class="text-sm text-slate-800"><b class="text-brand-700">${esc(n.user)}</b> ${esc(n.verb)} <b>${esc(n.kind)}</b></p>
-                        ${n.detail ? `<p class="text-sm text-slate-600 mt-0.5 break-words">${esc(n.detail)}</p>` : ''}
-                        <p class="text-xs text-slate-500 mt-1">${esc(timeAgo(n.t))}</p>
-                    </div>`).join('')
+                ? items.map(n => {
+                    const un = notifUnread(n);
+                    const [icon, chip] = notifIcon(n.kind || '');
+                    return `<button type="button" onclick="openNotification('${esc(n.id)}')" title="اضغط للانتقال لمكان الإشعار" class="w-full flex items-start gap-3 px-4 py-3 text-start transition-colors hover:bg-brand-50 ${un ? 'bg-brand-50/80' : ''}">
+                        <span class="w-9 h-9 shrink-0 rounded-xl ${chip} flex items-center justify-center"><i class="fa-solid ${icon}"></i></span>
+                        <span class="flex-1 min-w-0">
+                            <span class="block text-sm text-slate-800"><b class="text-brand-700">${esc(n.user)}</b> ${esc(n.verb)} <b>${esc(n.kind)}</b></span>
+                            ${n.detail ? `<span class="block text-sm text-slate-600 mt-0.5 break-words">${esc(n.detail)}</span>` : ''}
+                            <span class="block text-xs text-slate-500 mt-1">${esc(timeAgo(n.t))}</span>
+                        </span>
+                        ${un ? '<span class="mt-1.5 w-2.5 h-2.5 shrink-0 rounded-full bg-rose-500" title="غير مقروء"></span>' : ''}
+                        <i class="fa-solid fa-chevron-left mt-1.5 text-[10px] text-slate-300 shrink-0"></i>
+                    </button>`;
+                }).join('')
                 : '<p class="px-4 py-8 text-center text-sm text-slate-500">لا توجد إشعارات بعد</p>';
         }
 
@@ -1766,9 +1804,8 @@
             if (e) e.stopPropagation();
             if (notifOpen) return closeNotifPanel();
             notifOpen = true;
-            notifHighlightAfter = notifSeenAt();   // what was new when the panel opened stays highlighted
             el('notifPanel').classList.remove('hidden');
-            markNotifsSeen();
+            renderNotifs();
         }
 
         function closeNotifPanel() {
@@ -1781,6 +1818,85 @@
         document.addEventListener('click', e => {
             if (notifOpen && !el('notifHost')?.contains(e.target)) closeNotifPanel();
         });
+
+        function notifGuard(route) {
+            if (canAccessRoute(route)) return true;
+            toast('معندكش صلاحية تفتح القسم ده', 'error');
+            return false;
+        }
+
+        function openNotification(id) {
+            const n = notifs.find(x => x.id === id);
+            if (!n) return;
+            notifMarkSeen(id);
+            closeNotifPanel();
+            const go = notifResolve(n);
+            if (go) setTimeout(go, 80);
+        }
+
+        function notifOpenCust(id, comments) {
+            if (!notifGuard('customers')) return;
+            navigate('customers');
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c) return toast('الفاتورة دي مش موجودة دلوقتي', 'error');
+            if (currentRepRecord() && !custBelongsToCurrentRep(c) && !canCust('manage')) return toast('دي فاتورة مندوب تاني', 'error');
+            setTimeout(() => (comments ? openCustComments(c.id) : openCustDetail(c.id)), 350);
+        }
+
+        function notifResolve(n) {
+            const t = n.target || {};
+            if (t.col === 'custOrders' && t.id) return () => notifOpenCust(t.id, !!t.comments);
+            if (t.col === 'orders' && t.id) return () => { if (notifGuard('orders')) navigate('orders/' + t.id); };
+            if (t.col === 'checks' && t.id) return () => {
+                if (!notifGuard('checks')) return;
+                navigate('checks');
+                const k = appData.checks.find(x => x.id === t.id);
+                if (k) setTimeout(() => openCheckModal(k.id), 350); else toast('الشيك ده مش موجود دلوقتي', 'error');
+            };
+            if (t.col === 'companies' && t.id) return () => { if (notifGuard('companies')) navigate(appData.companies.some(c => c.id === t.id) ? 'companies/' + t.id : 'companies'); };
+            if (t.col === 'lists' && t.id) return () => {
+                if (!notifGuard('lists')) return;
+                navigate('lists');
+                if ((appData.companies || []).some(c => (c.lists || []).some(l => l.id === t.id))) setTimeout(() => openListModal({ listId: t.id }), 350);
+            };
+            if (t.col === 'partners') return () => { if (notifGuard('checks')) navigate('checks'); };
+            if (t.col === 'users') return () => { if (notifGuard('users')) navigate('users'); };
+            if (t.col === 'roles') return () => { if (!notifGuard('users')) return; navigate('users'); setTimeout(() => setUsersTab('roles'), 150); };
+            if (t.col === 'settings') return () => navigate('settings');
+            if (t.col === 'custReps') return () => { if (!notifGuard('customers')) return; navigate('customers'); setTimeout(() => { if (canCust('manage')) openCustRepsModal(); }, 350); };
+            // إشعارات قديمة من غير هدف محفوظ: نستنتج الوجهة من النوع والتفاصيل
+            const kind = n.kind || '', detail = n.detail || '';
+            const num = (detail.match(/\d+/) || [])[0];
+            const byNo = comments => () => {
+                if (!notifGuard('customers')) return;
+                navigate('customers');
+                if (!num) return;
+                const c = appData.custOrders.find(x => String(x.no) === String(Number(num)));
+                if (!c) return toast('مش لاقي الفاتورة دي دلوقتي', 'error');
+                if (currentRepRecord() && !custBelongsToCurrentRep(c) && !canCust('manage')) return toast('دي فاتورة مندوب تاني', 'error');
+                setTimeout(() => (comments ? openCustComments(c.id) : openCustDetail(c.id)), 350);
+            };
+            if (kind.includes('تعليق')) return byNo(true);
+            if (kind.includes('طلبية عميل')) return byNo(false);
+            if (kind.includes('شيك')) return () => {
+                if (!notifGuard('checks')) return;
+                navigate('checks');
+                const k = num ? appData.checks.find(x => String(x.number) === String(Number(num))) : null;
+                if (k) setTimeout(() => openCheckModal(k.id), 350); else if (num) toast('الشيك ده مش موجود دلوقتي', 'error');
+            };
+            if (kind.includes('طلبية')) return () => {
+                if (!notifGuard('orders')) return;
+                const o = num ? appData.orders.find(x => String(x.no) === String(Number(num))) : null;
+                navigate(o ? 'orders/' + o.id : 'orders');
+            };
+            if (kind.includes('شركة')) return () => { if (notifGuard('companies')) navigate('companies'); };
+            if (kind.includes('لستة') || kind.includes('PDF')) return () => { if (notifGuard('lists')) navigate('lists'); };
+            if (kind.includes('دور')) return () => { if (!notifGuard('users')) return; navigate('users'); setTimeout(() => setUsersTab('roles'), 150); };
+            if (kind.includes('مستخدم')) return () => { if (notifGuard('users')) navigate('users'); };
+            if (kind.includes('مندوب')) return () => { if (notifGuard('customers')) navigate('customers'); };
+            if (kind.includes('إعدادات')) return () => navigate('settings');
+            return null;
+        }
 
         function timeAgo(iso) {
             const sec = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -2233,13 +2349,13 @@
                 chunks.push(bytesToBase64(bytes.subarray(i, i + PDF_CHUNK_BYTES)));
             }
             await rtdb.ref('pdfs/' + listId).set({ total: chunks.length, chunks });
-            notifyDirect('أضاف', 'ملف PDF', listNameById(listId));
+            notifyDirect('أضاف', 'ملف PDF', listNameById(listId), { col: 'lists', id: listId });
         }
 
         async function pdfRemove(listId) {
             try {
                 await rtdb.ref('pdfs/' + listId).remove();
-                notifyDirect('حذف', 'ملف PDF', listNameById(listId));
+                notifyDirect('حذف', 'ملف PDF', listNameById(listId), { col: 'lists', id: listId });
             } catch (err) { console.error(err); }
         }
 
@@ -5417,7 +5533,7 @@
                 const cm = { id: uid('CMT-'), orderId: id, no: custNoLabel(c), repId: c.repId || '', byId: custCmtMe(), by: (currentUser() && currentUser().name) || 'مستخدم', text, t: now, editedAt: '', handled: false };
                 custComments.unshift(cm);
                 custCmtWrite(cm);
-                notifyDirect('علّق', 'تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}: ${text.slice(0, 60)}`);
+                notifyDirect('علّق', 'تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}: ${text.slice(0, 60)}`, { col: 'custOrders', id: c.id, comments: true });
                 log('تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}`);
                 toast('تم إرسال التعليق', 'success');
             }
@@ -10604,5 +10720,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ebed883c634c51',t:'MTc5NTM5MjM4NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ebed883c634c51',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec0626980dee97',t:'MTc5NTM5MzM5Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec0626980dee97',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
