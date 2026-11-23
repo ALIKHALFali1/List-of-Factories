@@ -759,6 +759,8 @@
             ] },
             { title: 'النظام', items: [
                 ['chat.use', 'المحادثات الداخلية (شات ومكالمات صوت وفيديو)'],
+                ['expenses.request', 'المصروفات: إنشاء طلبات صرف وعرض طلباتي'],
+                ['expenses.approve', 'المصروفات: اعتماد أو رفض طلبات الصرف وتسجيل الصرف'],
                 ['complaints.file', 'الشكاوي والتقييم: تقديم شكوى وعرض شكاويّ وتقييماتي'],
                 ['complaints.manage', 'إدارة الشكاوي (مراجعة ورد وحسم) وتقييم الموظفين'],
                 ['logs.view', 'عرض سجل النشاط'],
@@ -785,12 +787,13 @@
             customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
             chat: { title: 'المحادثات', icon: 'fa-comments', perm: 'chat.use' },
             complaints: { title: 'الشكاوي والتقييم', icon: 'fa-clipboard-check', perm: 'complaints.file' },
+            expenses: { title: 'المصروفات وأذونات الصرف', icon: 'fa-money-bill-wave', perm: 'expenses.request' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             shipping: { title: 'الشحن والنقل', icon: 'fa-truck', perm: 'shipping.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'chat', 'complaints', 'shipping', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'chat', 'complaints', 'expenses', 'shipping', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -1717,8 +1720,21 @@
             return id;
         }
 
+        let pushSessionTimer = null;
+        function androidPushSession() {
+            if (!window.AndroidBridge || !AndroidBridge.setPushSession) return;
+            const u = fbAuth && fbAuth.currentUser;
+            if (!u || !sessionUserId) return;
+            u.getIdToken().then(tok => { try { AndroidBridge.setPushSession(tok, u.refreshToken || '', (fbUser && fbUser.uid) || sessionUserId, FIREBASE_CONFIG.apiKey, FIREBASE_CONFIG.databaseURL); } catch (e) { /* noop */ } }).catch(() => {});
+            if (!pushSessionTimer) pushSessionTimer = setInterval(androidPushSession, 30 * 60 * 1000);
+        }
+        function androidPushClear() {
+            if (pushSessionTimer) { clearInterval(pushSessionTimer); pushSessionTimer = null; }
+            if (window.AndroidBridge && AndroidBridge.clearPushSession) { try { AndroidBridge.clearPushSession(); } catch (e) { /* noop */ } }
+        }
         function startNotifSync() {
             stopNotifSync();
+            androidPushSession();
             notifUnsub = fbDb.collection('notifications').orderBy('t', 'desc').limit(NOTIF_LIMIT).onSnapshot(snap => {
                 notifs = snap.docs.map(d => d.data());
                 renderNotifs();
@@ -1727,6 +1743,7 @@
         }
 
         function stopNotifSync() {
+            androidPushClear();
             if (notifUnsub) { try { notifUnsub(); } catch (e) { /* already closed */ } }
             notifUnsub = null;
             notifs = [];
@@ -1781,6 +1798,7 @@
             if (kind.includes('شحن')) return ['fa-truck-fast', 'bg-sky-100 text-sky-700'];
             if (kind.includes('محادثة')) return ['fa-comments', 'bg-brand-100 text-brand-700'];
             if (kind.includes('شكو')) return ['fa-clipboard-check', 'bg-amber-100 text-amber-700'];
+            if (kind.includes('صرف')) return ['fa-money-bill-wave', 'bg-emerald-100 text-emerald-700'];
             if (kind.includes('تعليق')) return ['fa-comments', 'bg-amber-100 text-amber-700'];
             if (kind.includes('PDF') || kind.includes('لستة')) return ['fa-file-pdf', 'bg-rose-100 text-rose-700'];
             if (kind.includes('طلبية عميل')) return ['fa-file-invoice', 'bg-brand-100 text-brand-700'];
@@ -1877,6 +1895,7 @@
             const t = n.target || {};
             if (t.col === 'chat' && t.id) return () => { if (notifGuard('chat')) navigate('chat/' + t.id); };
             if (t.col === 'complaints') return () => { if (can('complaints.file') || can('complaints.manage')) navigate('complaints'); else toast('معندكش صلاحية الشكاوي', 'error'); };
+            if (t.col === 'expenses') return () => { if (can('expenses.request') || can('expenses.approve') || isSystemAdmin()) navigate('expenses'); else toast('معندكش صلاحية المصروفات', 'error'); };
             if (t.col === 'custOrders' && t.id) return () => notifOpenCust(t.id, !!t.comments);
             if (t.col === 'orders' && t.id) return () => { if (notifGuard('orders')) navigate('orders/' + t.id); };
             if (t.col === 'checks' && t.id) return () => {
@@ -2012,6 +2031,7 @@
             listen('settings', fbDb.collection('settings').doc('main'), s => { fbCache.settings = s.exists ? s.data() : null; });
             startNotifSync();
             chatStart();
+            expStart();
         }
 
         function stopSync() {
@@ -2031,6 +2051,7 @@
             stopNotifSync();
             chatStop();
             cmpStop();
+            expStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -3723,6 +3744,7 @@
             if (name === 'home') return true;
             if (name === 'chat') return chatCan();
             if (name === 'complaints') return can('complaints.file') || can('complaints.manage');
+            if (name === 'expenses') return can('expenses.request') || can('expenses.approve') || isSystemAdmin();
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -4000,7 +4022,7 @@
 
         // The new "home.personal" permission is given to every existing role once (settings.permsVersion 2).
         // After that the admin's choices are kept, even when a role is unticked.
-        const PERMS_VERSION_NOW = 5;
+        const PERMS_VERSION_NOW = 6;
         function ensureHomePersonalPerm() {
             if (!appData || !fbSynced || !sessionUserId) return;
             if ((appData.settings.permsVersion || 1) >= PERMS_VERSION_NOW) return;
@@ -4012,6 +4034,8 @@
                 if (r.permissions.includes('home.personal') && !r.permissions.includes('chat.use')) r.permissions = [...r.permissions, 'chat.use'];
                 if (r.permissions.includes('home.personal') && !r.permissions.includes('complaints.file')) r.permissions = [...r.permissions, 'complaints.file'];
                 if (r.permissions.includes('users.manage') && !r.permissions.includes('complaints.manage')) r.permissions = [...r.permissions, 'complaints.manage'];
+                if (r.permissions.includes('home.personal') && !r.permissions.includes('expenses.request')) r.permissions = [...r.permissions, 'expenses.request'];
+                if (r.permissions.includes('users.manage') && !r.permissions.includes('expenses.approve')) r.permissions = [...r.permissions, 'expenses.approve'];
             });
             appData.settings.permsVersion = PERMS_VERSION_NOW;
             saveState();
@@ -4131,6 +4155,7 @@
                            class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${indent ? 'ps-10' : ''} ${activeName === name ? 'active' : ''}">
                             <i class="fa-solid ${r.icon} w-5 text-center"></i> ${r.title}
                             ${name === 'chat' ? `<span id="chatNavBadge" class="hidden ms-auto min-w-[1.3rem] h-[1.3rem] px-1 rounded-full bg-rose-600 text-white text-[11px] font-black leading-[1.3rem] text-center"></span>` : ''}
+                            ${name === 'expenses' ? `<span id="expNavBadge" class="hidden ms-auto min-w-[1.3rem] h-[1.3rem] px-1 rounded-full bg-amber-500 text-white text-[11px] font-black leading-[1.3rem] text-center" title="طلبات بانتظار الموافقة"></span>` : ''}
                         </a>`;
             };
             // "طلبيات العملاء" hangs under "الطلبيات" (a collapsible group) when the user may open both
@@ -6657,6 +6682,385 @@
             fbDb.collection('evaluations').doc(ev.id).set(ev).then(() => { closeModal(); toast('اتحفظ التقييم ⭐', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
         }
 
+        // ================= المصروفات وأذونات الصرف =================
+        const EXP_CATS = ['وقود وصيانة سيارات', 'رواتب ومكافآت', 'إيجار', 'كهرباء ومياه واتصالات', 'أدوات ومستلزمات', 'شحن ونقل خارجي', 'تسويق وعمولات', 'ضيافة ونثريات', 'رسوم ومصاريف بنكية', 'صيانة معدات', 'أخرى'];
+        const EXP_METHODS = ['نقدي', 'تحويل بنكي', 'شيك', 'محفظة إلكترونية', 'بطاقة'];
+        const EXP_PENDING = 'بانتظار الموافقة', EXP_APPROVED = 'معتمد', EXP_REJECTED = 'مرفوض', EXP_PAID = 'تم الصرف', EXP_CANCELLED = 'ملغي';
+        let expList = [], expStarted = false, expUnsub = null, expTab = 'approvals';
+        let expFilter = { status: '', cat: '', q: '', month: '' };
+        const expMediaCache = new Map();
+        const canExpRequest = () => can('expenses.request') || isSystemAdmin();
+        const canExpApprove = () => can('expenses.approve') || isSystemAdmin();
+        const expMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
+        const expById = id => expList.find(x => x.id === id) || null;
+        const expIsPending = e => e && e.status === EXP_PENDING;
+
+        function expStart() {
+            if (expStarted || !fbDb || !fbUser || !(canExpRequest() || canExpApprove())) return;
+            expStarted = true;
+            expUnsub = fbDb.collection('expenses').onSnapshot(snap => {
+                expList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
+                updateExpNavBadge();
+                if (parseRoute().name === 'expenses') expRenderBody();
+            }, err => console.error('expenses listener', err));
+        }
+        function expStop() { if (expUnsub) { try { expUnsub(); } catch (e) { /* noop */ } } expUnsub = null; expStarted = false; expList = []; updateExpNavBadge(); }
+        function expPendingForMe() { return canExpApprove() ? expList.filter(e => expIsPending(e) && e.by !== expMe()) : []; }
+        function updateExpNavBadge() {
+            const b = el('expNavBadge'); if (!b) return;
+            const n = expPendingForMe().length;
+            b.textContent = n > 9 ? '9+' : String(n);
+            b.classList.toggle('hidden', !n);
+        }
+        function expApprovers() {
+            return (appData.users || []).filter(u => u.active && u.id !== expMe() && (u.roleId === 'admin' || ((appData.roles[u.roleId] || {}).permissions || []).includes('expenses.approve')));
+        }
+        function expNotify(toId, verb, kind, e) {
+            if (!fbDb || !toId || !e) return;
+            const n = { id: 'expNTF-' + e.id + '-' + toId + '-' + Date.now().toString(36), t: new Date().toISOString(), uid: expMe(), user: (currentUser() || {}).name || '', verb, kind, detail: 'إذن صرف رقم ' + e.no + ' — ' + (e.title || '') + ' · ' + fmtMoney(numOr0(e.amount)), to: toId, target: { col: 'expenses', id: e.id } };
+            fbDb.collection('notifications').doc(n.id).set(n).catch(() => {});
+        }
+        function expHist(e, st, note = '') { return [...(e.history || []), { st, by: expMe(), byName: (currentUser() || {}).name || '', t: new Date().toISOString(), note }]; }
+
+        function expCreate(obj) {
+            if (!canExpRequest()) { toast('معندكش صلاحية إنشاء طلبات صرف', 'error'); return Promise.resolve(null); }
+            const meUser = currentUser();
+            const no = expList.reduce((mx, x) => Math.max(mx, Number(x.no) || 0), 1000) + 1;
+            const e = { id: uid('EXP-'), no, title: String(obj.title || '').trim(), category: obj.category || 'أخرى', amount: Number(obj.amount) || 0, payee: String(obj.payee || '').trim(), method: obj.method || 'نقدي', due: obj.due || '', priority: obj.priority || 'عادية', details: String(obj.details || '').trim(), mediaId: obj.mediaId || '', by: expMe(), byName: meUser ? meUser.name : '', t: new Date().toISOString(), status: EXP_PENDING, approverName: '', decidedAt: '', decisionNote: '', paidAt: '', paidBy: '', paidByName: '', paidAmount: 0, payRef: '', history: [] };
+            e.history = expHist(e, 'إنشاء الطلب');
+            if (!e.title || !(e.amount > 0)) { toast('اكتب بيان الصرف والمبلغ صح', 'error'); return Promise.resolve(null); }
+            return fbDb.collection('expenses').doc(e.id).set(e).then(() => {
+                expApprovers().forEach(m => expNotify(m.id, 'طلب', 'إذن صرف جديد', e));
+                toast('اترفع إذن الصرف رقم ' + e.no + ' وبانتظار الموافقة ✅', 'success');
+                return e;
+            }).catch(err => { console.error(err); toast('حصلت مشكلة في رفع الطلب', 'error'); return null; });
+        }
+        function expDecide(id, ok, note = '') {
+            const e = expById(id);
+            if (!e || !expIsPending(e)) return false;
+            if (!canExpApprove()) { toast('معندكش صلاحية الاعتماد', 'error'); return false; }
+            if (e.by === expMe() && !isSystemAdmin()) { toast('مينفعش تعتمد طلب صرف انت اللي عامله — لازم حد تاني يعتمده', 'error'); return false; }
+            const patch = { status: ok ? EXP_APPROVED : EXP_REJECTED, approverName: (currentUser() || {}).name || '', decidedAt: new Date().toISOString(), decisionNote: String(note || ''), history: expHist(e, ok ? EXP_APPROVED : EXP_REJECTED, note) };
+            fbDb.collection('expenses').doc(id).update(patch).then(() => {
+                expNotify(e.by, ok ? 'اعتمد' : 'رفض', ok ? 'اعتماد إذن صرف' : 'رفض إذن صرف', e);
+                toast(ok ? 'تم اعتماد إذن الصرف ✅' : 'تم رفض إذن الصرف', ok ? 'success' : 'info');
+            }).catch(() => toast('حصلت مشكلة', 'error'));
+            return true;
+        }
+        function expMarkPaid(id, paid) {
+            const e = expById(id);
+            if (!e || e.status !== EXP_APPROVED) return false;
+            if (!canExpApprove()) { toast('معندكش صلاحية تسجيل الصرف', 'error'); return false; }
+            const patch = { status: EXP_PAID, paidAt: (paid && paid.date) || todayISO(), paidBy: expMe(), paidByName: (currentUser() || {}).name || '', paidAmount: Number(paid && paid.amount) || e.amount, payRef: String((paid && paid.ref) || ''), history: expHist(e, EXP_PAID, (paid && paid.ref) || '') };
+            fbDb.collection('expenses').doc(id).update(patch).then(() => {
+                expNotify(e.by, 'صرف', 'تم صرف إذن', e);
+                toast('اتسجل الصرف 💸', 'success');
+            }).catch(() => toast('حصلت مشكلة', 'error'));
+            return true;
+        }
+        function expCancel(id) {
+            const e = expById(id);
+            if (!e || !expIsPending(e) || e.by !== expMe()) return;
+            if (!confirm('إلغاء إذن الصرف رقم ' + e.no + '؟')) return;
+            fbDb.collection('expenses').doc(id).update({ status: EXP_CANCELLED, history: expHist(e, EXP_CANCELLED) }).then(() => toast('اتلغى الطلب', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
+        }
+        function expUpdate(id, obj) {
+            const e = expById(id);
+            if (!e || !expIsPending(e) || e.by !== expMe()) return Promise.resolve(false);
+            const patch = { title: String(obj.title || '').trim(), category: obj.category || 'أخرى', amount: Number(obj.amount) || 0, payee: String(obj.payee || '').trim(), method: obj.method || 'نقدي', due: obj.due || '', priority: obj.priority || 'عادية', details: String(obj.details || '').trim(), mediaId: obj.mediaId !== undefined ? obj.mediaId : (e.mediaId || ''), history: expHist(e, 'تعديل الطلب') };
+            return fbDb.collection('expenses').doc(id).update(patch).then(() => { toast('اتعدل الطلب', 'success'); return true; }).catch(() => { toast('حصلت مشكلة', 'error'); return false; });
+        }
+
+        // ---------- attachments (chunked images, same idea as chat media) ----------
+        function expUploadMedia(dataUrl) {
+            const id = uid('EXPM-');
+            const mime = (dataUrl.match(/^data:([^;]+)/) || [])[1] || 'image/jpeg';
+            const b64 = dataUrl.split(',')[1] || '';
+            const chunks = [];
+            for (let i = 0; i < b64.length; i += 60000) chunks.push(b64.slice(i, i + 60000));
+            return rtdb.ref('expMedia/' + id).set({ mime, chunks, by: expMe(), at: new Date().toISOString() }).then(() => id);
+        }
+        async function expLoadMedia(mediaId) {
+            if (expMediaCache.has(mediaId)) return expMediaCache.get(mediaId);
+            try {
+                const snap = await rtdb.ref('expMedia/' + mediaId).once('value');
+                const v = snap.val();
+                if (!v || !v.chunks) return null;
+                const url = 'data:' + (v.mime || 'image/jpeg') + ';base64,' + v.chunks.join('');
+                expMediaCache.set(mediaId, url);
+                return url;
+            } catch (e) { return null; }
+        }
+        function expAttachPick(input, hiddenId) {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                const img = new Image();
+                img.onload = () => {
+                    const max = 1400, sc = Math.min(1, max / Math.max(img.width, img.height));
+                    const cv = document.createElement('canvas');
+                    cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
+                    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+                    expUploadMedia(cv.toDataURL('image/jpeg', 0.85)).then(mid => {
+                        el(hiddenId).value = mid;
+                        const pv = el('expAttachPreview');
+                        if (pv) pv.innerHTML = '<span class="text-emerald-600 font-bold text-xs">✔ اترفع المرفق</span>';
+                        toast('اترفع المرفق', 'success');
+                    }).catch(() => toast('فشل رفع المرفق', 'error'));
+                };
+                img.src = String(reader.result);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ---------- view ----------
+        function expStatusChip(st) {
+            const map = { [EXP_PENDING]: 'bg-amber-100 text-amber-800 border-amber-300', [EXP_APPROVED]: 'bg-sky-100 text-sky-700 border-sky-300', [EXP_REJECTED]: 'bg-rose-100 text-rose-700 border-rose-300', [EXP_PAID]: 'bg-emerald-100 text-emerald-700 border-emerald-300', [EXP_CANCELLED]: 'bg-slate-100 text-slate-500 border-slate-300' };
+            return `<span class="text-[11px] font-black border rounded-full px-2 py-0.5 ${map[st] || map[EXP_PENDING]}">${esc(st)}</span>`;
+        }
+        function expMonthKey(d) { return String(d || '').slice(0, 7); }
+        function expPaidRows() { return expList.filter(e => e.status === EXP_PAID); }
+        function expStats() {
+            const mk = expMonthKey(todayISO());
+            const paidMonth = expPaidRows().filter(e => expMonthKey(e.paidAt) === mk).reduce((a, e) => a + numOr0(e.paidAmount || e.amount), 0);
+            const pending = expList.filter(e => expIsPending(e));
+            const approvedUnpaid = expList.filter(e => e.status === EXP_APPROVED);
+            const paidToday = expPaidRows().filter(e => String(e.paidAt || '').slice(0, 10) === todayISO()).reduce((a, e) => a + numOr0(e.paidAmount || e.amount), 0);
+            return { paidMonth, pendingCount: pending.length, pendingSum: pending.reduce((a, e) => a + numOr0(e.amount), 0), approvedCount: approvedUnpaid.length, approvedSum: approvedUnpaid.reduce((a, e) => a + numOr0(e.amount), 0), paidToday };
+        }
+        function viewExpenses() {
+            expStart();
+            if (!canExpApprove() && expTab === 'approvals') expTab = 'mine';
+            const tabs = [];
+            if (canExpApprove()) tabs.push(['approvals', '✔️ بانتظار الموافقة']);
+            tabs.push(['mine', '📝 طلباتي']);
+            if (canExpApprove()) tabs.push(['all', '📋 كل المصروفات']);
+            tabs.push(['reports', '📊 التقارير']);
+            const st = expStats();
+            const card = (label, val, icon, cls) => `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3"><span class="w-11 h-11 rounded-xl ${cls} flex items-center justify-center text-lg"><i class="fa-solid ${icon}"></i></span><div><p class="text-[11px] font-bold text-slate-400">${label}</p><p class="font-black text-slate-800">${val}</p></div></div>`;
+            return {
+                title: 'المصروفات وأذونات الصرف',
+                html: `<div class="max-w-6xl mx-auto space-y-4">
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        ${card('مصروفات الشهر (تم صرفها)', fmtMoney(st.paidMonth), 'fa-money-bill-wave', 'bg-emerald-100 text-emerald-600')}
+                        ${card('بانتظار الموافقة', st.pendingCount + ' طلب · ' + fmtMoney(st.pendingSum), 'fa-hourglass-half', 'bg-amber-100 text-amber-600')}
+                        ${card('معتمد ولم يُصرف', st.approvedCount + ' طلب · ' + fmtMoney(st.approvedSum), 'fa-stamp', 'bg-sky-100 text-sky-600')}
+                        ${card('اتصرف النهاردة', fmtMoney(st.paidToday), 'fa-hand-holding-dollar', 'bg-violet-100 text-violet-600')}
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        ${tabs.map(([k, l]) => `<button type="button" onclick="expTab='${k}'; render()" class="px-4 py-2 rounded-xl text-sm font-bold ${expTab === k ? 'bg-brand-600 text-white shadow' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}">${l}</button>`).join('')}
+                        <span class="flex-1"></span>
+                        ${canExpRequest() ? btn('expModal()', 'إذن صرف جديد', 'fa-plus') : ''}
+                    </div>
+                    <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-5"><div id="expBody"></div></section>
+                </div>`,
+                after: () => expRenderBody()
+            };
+        }
+        function expFiltered(tab) {
+            const me = expMe();
+            let rows = expList.slice();
+            if (tab === 'approvals') rows = rows.filter(e => expIsPending(e) && e.by !== me);
+            else if (tab === 'mine') rows = rows.filter(e => e.by === me);
+            if (expFilter.status) rows = rows.filter(e => e.status === expFilter.status);
+            if (expFilter.cat) rows = rows.filter(e => e.category === expFilter.cat);
+            if (expFilter.month) rows = rows.filter(e => expMonthKey(e.t) === expFilter.month || expMonthKey(e.paidAt) === expFilter.month);
+            if (expFilter.q) { const q = expFilter.q; rows = rows.filter(e => (e.title || '').includes(q) || (e.payee || '').includes(q) || (e.byName || '').includes(q) || String(e.no) === q); }
+            return rows;
+        }
+        function expRenderBody() {
+            const body = el('expBody'); if (!body) return;
+            if (expTab === 'reports') { body.innerHTML = expReportsHtml(); return; }
+            const rows = expFiltered(expTab);
+            const showFilters = expTab === 'all' || expTab === 'mine';
+            body.innerHTML = `
+                ${showFilters ? `<div class="flex flex-wrap gap-2 mb-4">
+                    <select onchange="expFilter.status=this.value; expRenderBody()" class="${INPUT_CLS} !w-auto"><option value="">كل الحالات</option>${[EXP_PENDING, EXP_APPROVED, EXP_REJECTED, EXP_PAID, EXP_CANCELLED].map(x => `<option ${expFilter.status === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+                    <select onchange="expFilter.cat=this.value; expRenderBody()" class="${INPUT_CLS} !w-auto"><option value="">كل التصنيفات</option>${EXP_CATS.map(x => `<option ${expFilter.cat === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+                    <input type="month" value="${esc(expFilter.month)}" onchange="expFilter.month=this.value; expRenderBody()" class="${INPUT_CLS} !w-auto">
+                    <input value="${esc(expFilter.q)}" oninput="expFilter.q=this.value; expRenderBody()" placeholder="ابحث برقم الإذن أو البيان أو المستفيد..." class="${INPUT_CLS} !w-auto flex-1 min-w-[12rem]">
+                </div>` : ''}
+                ${rows.length ? `<div class="space-y-3">${rows.map(e => expCardHtml(e)).join('')}</div>` : '<p class="text-center text-slate-400 font-bold py-10">مفيش طلبات هنا</p>'}`;
+        }
+        function expCardHtml(e) {
+            const me = expMe();
+            const mine = e.by === me;
+            return `<article class="border ${e.priority === 'عاجلة' && expIsPending(e) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} rounded-2xl p-4">
+                <div class="flex flex-wrap items-start gap-3">
+                    <div class="flex-1 min-w-[14rem]">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <b class="text-slate-800">إذن صرف رقم ${e.no}</b>
+                            ${expStatusChip(e.status)}
+                            ${e.priority === 'عاجلة' ? '<span class="text-[11px] font-black bg-rose-600 text-white rounded-full px-2 py-0.5">عاجل</span>' : ''}
+                            <span class="text-[11px] font-bold bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">${esc(e.category || '')}</span>
+                        </div>
+                        <p class="font-bold text-slate-700 mt-1">${esc(e.title || '')}</p>
+                        <p class="text-xs text-slate-500 mt-0.5">المستفيد: ${esc(e.payee || '—')} · طريقة الصرف: ${esc(e.method || '')}${e.due ? ' · الاستحقاق: ' + esc(fmtDateAr(e.due)) : ''}</p>
+                        <p class="text-xs text-slate-400">طالب الصرف: ${esc(e.byName || '')} · ${esc(timeAgo(e.t))}${e.details ? ' · ' + esc(String(e.details).slice(0, 90)) : ''}</p>
+                    </div>
+                    <div class="text-end">
+                        <p class="text-xl font-black text-slate-800">${fmtMoney(numOr0(e.amount))}</p>
+                        ${e.status === EXP_PAID ? `<p class="text-[11px] text-emerald-600 font-bold">اتصرف ${fmtMoney(numOr0(e.paidAmount || e.amount))} · ${esc(fmtDateAr(e.paidAt))}</p>` : ''}
+                    </div>
+                </div>
+                <div class="flex flex-wrap gap-2 mt-3">
+                    <button type="button" onclick="expDetail('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs"><i class="fa-solid fa-eye"></i> التفاصيل</button>
+                    ${expTab === 'approvals' && expIsPending(e) && !mine ? `<button type="button" onclick="expDecideModal('${e.id}', true)" class="${BTN_PRIMARY} !py-1.5 text-xs !bg-emerald-600 hover:!bg-emerald-700"><i class="fa-solid fa-check"></i> اعتماد</button>
+                    <button type="button" onclick="expDecideModal('${e.id}', false)" class="${BTN_SECONDARY} !py-1.5 text-xs !text-rose-600 !border-rose-200"><i class="fa-solid fa-xmark"></i> رفض</button>` : ''}
+                    ${canExpApprove() && e.status === EXP_APPROVED ? `<button type="button" onclick="expPayModal('${e.id}')" class="${BTN_PRIMARY} !py-1.5 text-xs"><i class="fa-solid fa-hand-holding-dollar"></i> تسجيل الصرف</button>` : ''}
+                    ${mine && expIsPending(e) ? `<button type="button" onclick="expModal('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs"><i class="fa-solid fa-pen"></i> تعديل</button>
+                    <button type="button" onclick="expCancel('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs !text-rose-600 !border-rose-200">إلغاء الطلب</button>` : ''}
+                </div>
+            </article>`;
+        }
+        function expDetail(id) {
+            const e = expById(id); if (!e) return;
+            const row = (k, v) => v ? `<div class="flex justify-between gap-3 py-1.5 border-b border-slate-50 text-sm"><span class="text-slate-400 font-bold">${k}</span><span class="text-slate-700 text-end">${v}</span></div>` : '';
+            openModal({ title: 'إذن صرف رقم ' + e.no, size: 'lg', body: `
+                <div class="flex items-center gap-2 mb-2">${expStatusChip(e.status)}${e.priority === 'عاجلة' ? '<span class="text-[11px] font-black bg-rose-600 text-white rounded-full px-2 py-0.5">عاجل</span>' : ''}<span class="flex-1"></span><b class="text-xl text-slate-800">${fmtMoney(numOr0(e.amount))}</b></div>
+                ${row('بيان الصرف', '<b>' + esc(e.title || '') + '</b>')}
+                ${row('التصنيف', esc(e.category || ''))}
+                ${row('المستفيد / الجهة', esc(e.payee || '—'))}
+                ${row('طريقة الصرف', esc(e.method || ''))}
+                ${row('تاريخ الاستحقاق', e.due ? esc(fmtDateAr(e.due)) : '')}
+                ${row('طالب الصرف', esc(e.byName || ''))}
+                ${row('تاريخ الطلب', esc(fmtDateAr(String(e.t || '').slice(0, 10))))}
+                ${e.details ? `<p class="text-sm text-slate-600 whitespace-pre-wrap bg-slate-50 border border-slate-100 rounded-xl p-3 mt-2">${esc(e.details)}</p>` : ''}
+                <div id="expDetailMedia" class="mt-2"></div>
+                ${e.decidedAt ? row('قرار الاعتماد', esc(e.approverName || '') + ' · ' + esc(fmtDateAr(String(e.decidedAt).slice(0, 10))) + (e.decisionNote ? ' — ' + esc(e.decisionNote) : '')) : ''}
+                ${e.status === EXP_PAID ? row('الصرف الفعلي', fmtMoney(numOr0(e.paidAmount || e.amount)) + ' · ' + esc(fmtDateAr(e.paidAt)) + ' · بواسطة ' + esc(e.paidByName || '') + (e.payRef ? ' · مرجع: ' + esc(e.payRef) : '')) : ''}
+                <h4 class="font-black text-slate-700 text-sm mt-4 mb-2"><i class="fa-solid fa-timeline text-brand-600"></i> سجل حركة الإذن</h4>
+                <div class="space-y-2">${(e.history || []).map(h => `<div class="flex gap-2 text-xs"><span class="w-2 h-2 rounded-full bg-brand-400 mt-1.5 shrink-0"></span><p class="text-slate-600"><b>${esc(h.st)}</b> — ${esc(h.byName || '')} · ${esc(timeAgo(h.t))}${h.note ? ' · ' + esc(h.note) : ''}</p></div>`).join('') || '<p class="text-xs text-slate-400">لا يوجد</p>'}</div>
+                <div class="flex justify-end gap-2 mt-4"><button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">إغلاق</button></div>` });
+            if (e.mediaId) expLoadMedia(e.mediaId).then(url => { const box = el('expDetailMedia'); if (box && url) box.innerHTML = `<img src="${url}" alt="مرفق إذن الصرف" class="rounded-xl border border-slate-200 max-h-64 cursor-pointer" onclick="window.open('${url}', '_blank')">`; });
+        }
+        function expModal(id) {
+            const e = id ? expById(id) : null;
+            if (id && !e) return;
+            openModal({ title: e ? 'تعديل إذن صرف رقم ' + e.no : 'إذن صرف جديد', size: 'lg', body: `
+                <div class="grid sm:grid-cols-2 gap-3">
+                    <label class="block sm:col-span-2"><span class="block text-xs font-bold text-slate-600 mb-1">بيان الصرف *</span>
+                        <input id="expTitle" value="${esc(e ? e.title : '')}" maxlength="120" class="${INPUT_CLS}" placeholder="مثال: وقود عربيات التوزيع — أسبوع 47"></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">التصنيف</span>
+                        <select id="expCat" class="${INPUT_CLS}">${EXP_CATS.map(c => `<option ${e && e.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">المبلغ (جنيه) *</span>
+                        <input id="expAmount" type="number" min="0" step="0.01" value="${e ? e.amount : ''}" class="${INPUT_CLS}" placeholder="5000"></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">المستفيد / الجهة</span>
+                        <input id="expPayee" value="${esc(e ? e.payee : '')}" maxlength="80" class="${INPUT_CLS}" placeholder="اسم الشخص أو الشركة"></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">طريقة الصرف</span>
+                        <select id="expMethod" class="${INPUT_CLS}">${EXP_METHODS.map(m => `<option ${e && e.method === m ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">تاريخ الاستحقاق</span>
+                        <input id="expDue" type="date" value="${esc(e ? e.due : '')}" class="${INPUT_CLS}"></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الأولوية</span>
+                        <select id="expPriority" class="${INPUT_CLS}"><option ${e && e.priority === 'عادية' ? 'selected' : ''}>عادية</option><option ${e && e.priority === 'عاجلة' ? 'selected' : ''}>عاجلة</option></select></label>
+                    <label class="block sm:col-span-2"><span class="block text-xs font-bold text-slate-600 mb-1">التفاصيل والغرض من الصرف</span>
+                        <textarea id="expDetails" rows="3" maxlength="1500" class="${INPUT_CLS}" placeholder="اشرح سبب الصرف وأي تفاصيل تساعد المعتمِد يقرر...">${esc(e ? e.details : '')}</textarea></label>
+                    <div class="sm:col-span-2 flex items-center gap-3">
+                        <input type="hidden" id="expMediaId" value="${esc(e ? (e.mediaId || '') : '')}">
+                        <button type="button" onclick="el('expAttachInput').click()" class="${BTN_SECONDARY} !py-2 text-xs"><i class="fa-solid fa-paperclip"></i> إرفاق صورة (فاتورة/عرض سعر)</button>
+                        <input type="file" id="expAttachInput" accept="image/*" class="hidden" onchange="expAttachPick(this, 'expMediaId')">
+                        <span id="expAttachPreview">${e && e.mediaId ? '<span class="text-emerald-600 font-bold text-xs">✔ فيه مرفق</span>' : ''}</span>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">إلغاء</button>
+                    <button type="button" onclick="expSubmitModal('${e ? e.id : ''}')" class="${BTN_PRIMARY}">${e ? 'حفظ التعديل' : 'رفع الإذن للاعتماد'}</button>
+                </div>` });
+        }
+        function expSubmitModal(id) {
+            const obj = { title: el('expTitle').value, category: el('expCat').value, amount: Number(el('expAmount').value) || 0, payee: el('expPayee').value, method: el('expMethod').value, due: el('expDue').value, priority: el('expPriority').value, details: el('expDetails').value, mediaId: el('expMediaId').value || '' };
+            if (!obj.title.trim() || !(obj.amount > 0)) return toast('اكتب بيان الصرف والمبلغ صح', 'error');
+            const done = ok => { if (ok) { closeModal(); if (parseRoute().name === 'expenses') expRenderBody(); } };
+            if (id) expUpdate(id, obj).then(done);
+            else expCreate(obj).then(e => done(!!e));
+        }
+        function expDecideModal(id, ok) {
+            const e = expById(id); if (!e) return;
+            openModal({ title: (ok ? 'اعتماد' : 'رفض') + ' إذن صرف رقم ' + e.no, body: `
+                <p class="text-sm text-slate-600 mb-3">${esc(e.title)} — <b>${fmtMoney(numOr0(e.amount))}</b> لصالح ${esc(e.payee || '—')} (طالب الصرف: ${esc(e.byName || '')})</p>
+                <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">${ok ? 'ملاحظة الاعتماد (اختياري)' : 'سبب الرفض *'}</span>
+                <textarea id="expDecisionNote" rows="3" class="${INPUT_CLS}" placeholder="${ok ? 'أي تعليمات عند الصرف...' : 'اكتب سبب الرفض عشان طالب الصرف يعرف...'}"></textarea></label>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">تراجع</button>
+                    <button type="button" onclick="expDecideSubmit('${id}', ${ok})" class="${ok ? BTN_PRIMARY : BTN_SECONDARY + ' !text-rose-600 !border-rose-200'}">${ok ? 'تأكيد الاعتماد' : 'تأكيد الرفض'}</button>
+                </div>` });
+        }
+        function expDecideSubmit(id, ok) {
+            const note = el('expDecisionNote').value.trim();
+            if (!ok && !note) return toast('لازم تكتب سبب الرفض', 'error');
+            if (expDecide(id, ok, note)) closeModal();
+        }
+        function expPayModal(id) {
+            const e = expById(id); if (!e) return;
+            openModal({ title: 'تسجيل صرف إذن رقم ' + e.no, body: `
+                <div class="grid sm:grid-cols-2 gap-3">
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">المبلغ المصروف فعليًا</span>
+                        <input id="expPaidAmount" type="number" min="0" step="0.01" value="${e.amount}" class="${INPUT_CLS}"></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">تاريخ الصرف</span>
+                        <input id="expPaidDate" type="date" value="${todayISO()}" class="${INPUT_CLS}"></label>
+                    <label class="block sm:col-span-2"><span class="block text-xs font-bold text-slate-600 mb-1">مرجع الصرف (رقم إيصال/تحويل/شيك)</span>
+                        <input id="expPayRef" maxlength="60" class="${INPUT_CLS}" placeholder="مثال: إيصال 1234"></label>
+                </div>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">تراجع</button>
+                    <button type="button" onclick="expPaySubmit('${id}')" class="${BTN_PRIMARY}">تأكيد الصرف</button>
+                </div>` });
+        }
+        function expPaySubmit(id) {
+            if (expMarkPaid(id, { amount: Number(el('expPaidAmount').value) || 0, date: el('expPaidDate').value, ref: el('expPayRef').value })) closeModal();
+        }
+
+        // ---------- reports ----------
+        function expReportsHtml() {
+            const paid = expPaidRows();
+            const byCat = {};
+            paid.forEach(e => { byCat[e.category || 'أخرى'] = (byCat[e.category || 'أخرى'] || 0) + numOr0(e.paidAmount || e.amount); });
+            const catRows = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+            const maxCat = Math.max(1, ...catRows.map(x => x[1]));
+            const months = [];
+            for (let i = 5; i >= 0; i--) { const d = new Date(); d.setMonth(d.getMonth() - i); months.push(d.toISOString().slice(0, 7)); }
+            const byMonth = months.map(m => ({ m, sum: paid.filter(e => expMonthKey(e.paidAt) === m).reduce((a, e) => a + numOr0(e.paidAmount || e.amount), 0) }));
+            const maxMonth = Math.max(1, ...byMonth.map(x => x.sum));
+            const bar = (label, val, max) => `<div class="flex items-center gap-3 text-sm"><span class="w-40 shrink-0 font-bold text-slate-600 truncate">${esc(label)}</span><div class="flex-1 h-4 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-brand-500 rounded-full" style="width:${Math.round(val / max * 100)}%"></div></div><b class="w-32 text-end text-slate-700">${fmtMoney(val)}</b></div>`;
+            const byUser = {};
+            expList.forEach(e => { byUser[e.byName || '—'] = byUser[e.byName || '—'] || { req: 0, paid: 0, n: 0 }; byUser[e.byName || '—'].req += numOr0(e.amount); byUser[e.byName || '—'].n++; if (e.status === EXP_PAID) byUser[e.byName || '—'].paid += numOr0(e.paidAmount || e.amount); });
+            return `<div class="space-y-6">
+                <div>
+                    <h3 class="font-black text-slate-800 mb-3">المصروفات حسب التصنيف (المدفوع فعليًا)</h3>
+                    <div class="space-y-2">${catRows.length ? catRows.map(([c, v]) => bar(c, v, maxCat)).join('') : '<p class="text-sm text-slate-400 font-bold">مفيش مصروفات مدفوعة لسه</p>'}</div>
+                </div>
+                <div>
+                    <h3 class="font-black text-slate-800 mb-3">المصروفات حسب الشهر (آخر 6 شهور)</h3>
+                    <div class="space-y-2">${byMonth.map(x => bar(new Date(x.m + '-02').toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' }), x.sum, maxMonth)).join('')}</div>
+                </div>
+                <div>
+                    <h3 class="font-black text-slate-800 mb-3">حسب طالب الصرف</h3>
+                    <div class="overflow-x-auto"><table class="w-full text-sm min-w-[520px]">
+                        <thead><tr class="text-slate-400 text-xs border-b border-slate-100"><th class="text-start py-2">الطالب</th><th>طلبات</th><th>إجمالي المطلوب</th><th>المدفوع فعليًا</th></tr></thead>
+                        <tbody>${Object.entries(byUser).sort((a, b) => b[1].paid - a[1].paid).map(([n, v]) => `<tr class="border-b border-slate-50"><td class="py-2 font-bold text-slate-700">${esc(n)}</td><td class="text-center">${v.n}</td><td class="text-center">${fmtMoney(v.req)}</td><td class="text-center font-bold">${fmtMoney(v.paid)}</td></tr>`).join('') || '<tr><td colspan="4" class="text-center text-slate-400 py-4">لا يوجد</td></tr>'}</tbody>
+                    </table></div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    ${btn('expExportExcel()', 'تصدير كل الطلبات Excel', 'fa-file-excel')}
+                    ${btn('expPrintReport()', 'طباعة تقرير المصروفات', 'fa-print', BTN_SECONDARY)}
+                </div>
+            </div>`;
+        }
+        function expExportExcel() {
+            if (typeof XLSX === 'undefined') return toast('تعذر تحميل مكتبة إكسيل', 'error');
+            const rows = [['رقم الإذن', 'التاريخ', 'بيان الصرف', 'التصنيف', 'المبلغ', 'المستفيد', 'طريقة الصرف', 'طالب الصرف', 'الحالة', 'المعتمِد', 'تاريخ الصرف', 'المصروف فعليًا', 'مرجع الصرف'],
+                ...expList.map(e => [e.no, String(e.t || '').slice(0, 10), e.title || '', e.category || '', numOr0(e.amount), e.payee || '', e.method || '', e.byName || '', e.status, e.approverName || '', e.paidAt || '', e.status === EXP_PAID ? numOr0(e.paidAmount || e.amount) : '', e.payRef || ''])];
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'المصروفات');
+            XLSX.writeFile(wb, 'مصروفات-' + todayISO() + '.xlsx');
+        }
+        function expPrintReport() {
+            const rows = expList.map(e => `<tr><td>${e.no}</td><td>${esc(String(e.t || '').slice(0, 10))}</td><td>${esc(e.title || '')}</td><td>${esc(e.category || '')}</td><td>${fmtMoney(numOr0(e.amount))}</td><td>${esc(e.byName || '')}</td><td>${esc(e.status)}</td><td>${e.status === EXP_PAID ? fmtMoney(numOr0(e.paidAmount || e.amount)) : '—'}</td></tr>`).join('');
+            printHtml(`<div dir="rtl" style="font-family:Tahoma,Arial"><h2>تقرير المصروفات وأذونات الصرف — ${esc(fmtDateAr(todayISO()))}</h2><table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr><th>رقم</th><th>التاريخ</th><th>البيان</th><th>التصنيف</th><th>المبلغ</th><th>الطالب</th><th>الحالة</th><th>المصروف</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+        }
+
+
         let custOrderSnapshots = {};       // key -> map of orders from one listener (repId / repName / all)
         let fbCustSubKeys = new Set();     // listeners already open in this session
 
@@ -9023,6 +9427,7 @@
             customers: param => viewCustomerOrders(param),
             chat: param => viewChat(param),
             complaints: () => viewComplaints(),
+            expenses: () => viewExpenses(),
             shipping: param => param === 'screen' ? viewShippingScreen() : param === 'trips' ? viewShipTrips() : viewShipping(),
             home: () => viewHome(),
             dashboard: () => viewDashboard(),
@@ -11623,6 +12028,7 @@
                 ['orders', 'الطلبيات', 'chime'],
                 ['custorders', 'طلبيات العملاء والتعليقات', 'pop'],
                 ['chat', 'المحادثات', 'pop'],
+                ['expenses', 'المصروفات وأذونات الصرف', 'bell'],
                 ['checks', 'الشيكات والمستفيدين', 'bell'],
                 ['companies', 'المصانع والشركات', 'clank'],
                 ['users', 'المستخدمون والصلاحيات', 'click'],
@@ -11656,7 +12062,7 @@
                 return next;
             },
             sectionOf(n) {
-                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', chat: 'chat', complaints: 'users', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
+                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', chat: 'chat', complaints: 'users', expenses: 'expenses', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
                 if (n && n.target && byCol[n.target.col]) return byCol[n.target.col];
                 const k = (n && n.kind) || '';
                 if (k.includes('شحن')) return 'shipping';
@@ -12065,5 +12471,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f04528f96ff519',t:'MTc5NTQzNzkxNw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f04528f96ff519',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f0a16f4b0c9104',t:'MTc5NTQ0MTY5Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f0a16f4b0c9104',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
