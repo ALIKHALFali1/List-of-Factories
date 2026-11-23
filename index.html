@@ -1346,7 +1346,8 @@
                     ...c, id: String(c.id), no: Number(c.no) || 0, amount: numOr0(c.amount), paid: numOr0(c.paid),
                     date: String(c.date || ''), customer: String(c.customer || ''), repId: String(c.repId || ''), repName: String(c.repName || ''),
                     category: String(c.category || ''), completeness: String(c.completeness || ''), validUntil: String(c.validUntil || ''),
-                    delivery: CUST_DELIVERY.includes(c.delivery) ? c.delivery : 'لم تُسلم', booking: String(c.booking || ''), notes: String(c.notes || ''), customerPhone: String(c.customerPhone || '')
+                    delivery: CUST_DELIVERY.includes(c.delivery) ? c.delivery : 'لم تُسلم', booking: String(c.booking || ''), notes: String(c.notes || ''), customerPhone: String(c.customerPhone || ''),
+                    transport: CUST_TRANSPORT.includes(c.transport) ? c.transport : 'بدون نقل', payMethod: CUST_PAYMETHODS.includes(c.payMethod) ? c.payMethod : 'نقدي'
                 }));
             d.logs = (Array.isArray(d.logs) ? d.logs : []).slice(0, LOG_LIMIT);
             return d;
@@ -5495,6 +5496,8 @@
         const CUST_CATEGORIES = ['سيراميك', 'صحي', 'أبواب'];
         const CUST_COMPLETENESS = ['كاملة', 'ناقصة'];
         const CUST_DELIVERY = ['لم تُسلم', 'تم التسليم', 'مؤجل', 'ملغي', 'مرتجع'];
+        const CUST_TRANSPORT = ['نقل', 'بدون نقل'];
+        const CUST_PAYMETHODS = ['نقدي', 'انستاباي', 'تحويل بنكي'];
         const CUST_DELIVERY_CLS = {
             'لم تُسلم': 'bg-slate-100 text-slate-700', 'تم التسليم': 'bg-emerald-100 text-emerald-800', 'مؤجل': 'bg-amber-100 text-amber-800',
             'ملغي': 'bg-rose-100 text-rose-800', 'مرتجع': 'bg-violet-100 text-violet-800'
@@ -7275,7 +7278,7 @@
                         <th class="py-3 px-3 text-start">الرقم</th><th class="py-3 px-3 text-start">التاريخ</th><th class="py-3 px-3 text-start">العميل</th>
                         <th class="py-3 px-3 text-start">المندوب</th><th class="py-3 px-3 text-start">الصنف</th><th class="py-3 px-3 text-start">الحالة</th>
                         <th class="py-3 px-3 text-start">المبلغ</th><th class="py-3 px-3 text-start">المدفوع</th><th class="py-3 px-3 text-start">الباقي</th>
-                        <th class="py-3 px-3 text-start">مدة الطلبية</th><th class="py-3 px-3 text-start">التسليم</th><th class="py-3 px-3 text-start">موعد الحجز</th>
+                        <th class="py-3 px-3 text-start">مدة الطلبية</th><th class="py-3 px-3 text-start">التسليم</th><th class="py-3 px-3 text-start">الشحن والنقل</th><th class="py-3 px-3 text-start">طريقة الدفع</th>
                         <th class="py-3 px-3 text-center">إجراءات</th></tr></thead>
                     <tbody class="divide-y divide-slate-200">${rows.map(c => `<tr class="hover:bg-slate-50">
                         <td class="py-3 px-3 font-mono font-bold">${custNoLabel(c)}</td>
@@ -7289,7 +7292,8 @@
                         <td class="py-3 px-3 whitespace-nowrap font-bold ${custRemaining(c) > 0 ? 'text-rose-700' : ''}">${fmtMoney(custRemaining(c))}</td>
                         <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.validUntil) || '—')}</td>
                         <td class="py-3 px-3">${custDeliveryBadge(c)}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.booking) || '—')}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${c.transport === 'نقل' ? '<span class="text-sky-700 font-bold"><i class="fa-solid fa-truck"></i> نقل</span>' : '<span class="text-slate-400">بدون نقل</span>'}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${esc(c.payMethod || 'نقدي')}</td>
                         <td class="py-3 px-3">${custActionsHtml(c)}</td>
                     </tr>`).join('')}</tbody>
                 </table>
@@ -7301,7 +7305,7 @@
                     <p class="text-sm">المندوب: ${esc(c.repName || '—')} · ${esc(c.category || '—')} · ${esc(c.completeness || '—')}</p>
                     <p class="text-sm">المبلغ ${fmtMoney(numOr0(c.amount))} · المدفوع ${fmtMoney(numOr0(c.paid))} · <b class="${custRemaining(c) > 0 ? 'text-rose-700' : ''}">الباقي ${fmtMoney(custRemaining(c))}</b></p>
                     ${c.validUntil ? `<p class="text-sm">مدة الطلبية حتى ${esc(fmtDateAr(c.validUntil))}</p>` : ''}
-                    ${c.booking ? `<p class="text-sm">موعد الحجز: ${esc(fmtDateAr(c.booking))}</p>` : ''}
+                    <p class="text-sm">الشحن والنقل: ${c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل'} · طريقة الدفع: <b>${esc(c.payMethod || 'نقدي')}</b></p>
                     <div class="flex justify-end">${custActionsHtml(c)}</div>
                 </div>`).join('')}
             </div>`;
@@ -7324,7 +7328,7 @@
                         <div class="rounded-xl bg-rose-50 border border-rose-200 p-2"><p class="text-[11px] font-bold text-rose-700">الباقي</p><p class="font-bold text-sm whitespace-nowrap ${custRemaining(c) > 0 ? 'text-rose-700' : ''}">${fmtMoney(custRemaining(c))}</p></div>
                     </div>
                     ${c.validUntil ? `<p class="text-sm text-slate-600">مدة الطلبية حتى ${esc(fmtDateAr(c.validUntil))}</p>` : ''}
-                    ${c.booking ? `<p class="text-sm text-slate-600">موعد الحجز: ${esc(fmtDateAr(c.booking))}</p>` : ''}
+                    <p class="text-sm text-slate-600">الشحن والنقل: ${c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل'} · طريقة الدفع: <b>${esc(c.payMethod || 'نقدي')}</b></p>
                     ${c.notes ? `<p class="text-sm text-slate-600 whitespace-pre-wrap">${esc(c.notes)}</p>` : ''}
                     <div class="flex justify-end">${custActionsHtml(c)}</div>
                 </article>`).join('')}</div>`;
@@ -7421,7 +7425,7 @@
             return `<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">${cols}</div>`;
         }
 
-        const CUST_REPORT_HEAD = ['رقم الطلب', 'التاريخ', 'اسم العميل', 'تليفون العميل', 'المندوب', 'الصنف', 'حالة الطلبية', 'مبلغ الطلبية', 'المدفوع', 'الباقي', 'مدة الطلبية (حتى)', 'حالة التسليم', 'موعد الحجز', 'ملاحظات'];
+        const CUST_REPORT_HEAD = ['رقم الطلب', 'التاريخ', 'اسم العميل', 'تليفون العميل', 'المندوب', 'الصنف', 'حالة الطلبية', 'مبلغ الطلبية', 'المدفوع', 'الباقي', 'مدة الطلبية (حتى)', 'حالة التسليم', 'الشحن والنقل', 'طريقة الدفع', 'ملاحظات'];
 
         function custReportsHtml() {
             const rows = filteredCustOrders();
@@ -7468,12 +7472,12 @@
         }
 
         // ---- Excel export / import for customer orders (the exported file imports back as-is) ----
-        const CUST_XLSX_COLS = [10, 12, 22, 15, 16, 10, 12, 13, 13, 13, 14, 12, 12, 30].map(wch => ({ wch }));
+        const CUST_XLSX_COLS = [10, 12, 22, 15, 16, 10, 12, 13, 13, 13, 14, 12, 12, 13, 30].map(wch => ({ wch }));
 
         function custExportRow(c) {
             return [Number(c.no) || '', c.date || '', c.customer || '', c.customerPhone || '', c.repName || '',
                 c.category || '', c.completeness || '', numOr0(c.amount), numOr0(c.paid), custRemaining(c),
-                c.validUntil || '', c.delivery || '', c.booking || '', c.notes || ''];
+                c.validUntil || '', c.delivery || '', c.transport || 'بدون نقل', c.payMethod || 'نقدي', c.notes || ''];
         }
 
         function exportCustOrdersXlsx() {
@@ -7597,6 +7601,10 @@
                 if (!CUST_COMPLETENESS.includes(completeness)) { completeness = 'كاملة'; warnings++; }
                 let delivery = String(pickValue(row, ['حالة التسليم', 'التسليم', 'Delivery']) || '').trim() || 'لم تُسلم';
                 if (!CUST_DELIVERY.includes(delivery)) { delivery = 'لم تُسلم'; warnings++; }
+                let transport = String(pickValue(row, ['الشحن والنقل', 'الشحن', 'النقل', 'Transport']) || '').trim() || 'بدون نقل';
+                if (!CUST_TRANSPORT.includes(transport)) { transport = 'بدون نقل'; warnings++; }
+                let payMethod = String(pickValue(row, ['طريقة الدفع', 'الدفع', 'Payment']) || '').trim() || 'نقدي';
+                if (!CUST_PAYMETHODS.includes(payMethod)) { payMethod = 'نقدي'; warnings++; }
                 const repNameRaw = String(pickValue(row, ['المندوب', 'اسم المندوب', 'Rep', 'Sales Rep']) || '').trim();
                 if (!forced && repNameRaw && !repKeys.has(custRepNameKey(repNameRaw)) && !newRepNames.some(n => custRepNameKey(n) === custRepNameKey(repNameRaw))) newRepNames.push(repNameRaw);
                 valid.push({
@@ -7605,7 +7613,7 @@
                         no: custImportNo(pickValue(row, ['رقم الطلب', 'الرقم', 'رقم الفاتورة', 'No', 'Order No'])),
                         date, customer,
                         customerPhone: custLatinDigits(pickValue(row, ['تليفون العميل', 'التليفون', 'رقم التليفون', 'الهاتف', 'الموبايل', 'Phone'])).trim(),
-                        repNameRaw, category, completeness, amount, paid, validUntil, delivery, booking,
+                        repNameRaw, category, completeness, amount, paid, validUntil, delivery, booking, transport, payMethod,
                         notes: String(pickValue(row, ['ملاحظات', 'الملاحظات', 'Notes']) || '').trim()
                     }
                 });
@@ -7802,7 +7810,10 @@
                         ${field('الباقي (ج.م)', `<div id="custRemainPreview" class="${INPUT_CLS} bg-slate-50 font-bold">0.00 ج.م</div>`)}
                         ${field('مدة الطلبية (تاريخ الانتهاء)', `<input name="validUntil" type="date" value="${esc(c?.validUntil)}" class="${INPUT_CLS}">`, 'اختياري')}
                     </div>
-                    ${field('موعد الحجز', `<input name="booking" type="date" value="${esc(c?.booking)}" class="${INPUT_CLS}">`)}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${sel('transport', 'الشحن والنقل', CUST_TRANSPORT, c ? c.transport : 'بدون نقل')}
+                        ${sel('payMethod', 'طريقة الدفع', CUST_PAYMETHODS, c ? c.payMethod : 'نقدي')}
+                    </div>
                     ${field('ملاحظات', `<textarea name="notes" rows="2" class="${INPUT_CLS}">${esc(c?.notes)}</textarea>`)}`,
                 onOpen: custRemainingPreview,
                 onSubmit: fd => saveCustFromForm(fd, c)
@@ -7825,8 +7836,10 @@
             if (!(paid >= 0)) return toast('المدفوع مش ممكن يكون سالب', 'error'), false;
             if (paid > amount) return toast('المدفوع أكبر من مبلغ الطلبية', 'error'), false;
             if (validUntil && validUntil < date) return toast('مدة الطلبية لازم تكون بعد التاريخ', 'error'), false;
-            const booking = String(fd.get('booking') || '').trim();
-            if (booking && !/^\d{4}-\d{2}-\d{2}$/.test(booking)) return toast('اختار موعد الحجز من التقويم', 'error'), false;
+            const transport = String(fd.get('transport') || 'بدون نقل');
+            if (!CUST_TRANSPORT.includes(transport)) return toast('اختر الشحن والنقل من القائمة', 'error'), false;
+            const payMethod = String(fd.get('payMethod') || 'نقدي');
+            if (!CUST_PAYMETHODS.includes(payMethod)) return toast('اختر طريقة الدفع من القائمة', 'error'), false;
             if (category && !CUST_CATEGORIES.includes(category)) return toast('اختر الصنف من القائمة', 'error'), false;
             if (!CUST_COMPLETENESS.includes(completeness)) return toast('اختر حالة الطلبية', 'error'), false;
             if (!CUST_DELIVERY.includes(delivery)) return toast('اختر حالة التسليم', 'error'), false;
@@ -7839,7 +7852,8 @@
                 no, date, customer, category, completeness, amount, paid, validUntil, delivery,
                 repId: rep ? rep.id : (keepOld ? repId : ''),
                 repName: rep ? rep.name : (keepOld ? c.repName : ''),
-                booking,
+                booking: c ? (c.booking || '') : '',
+                transport, payMethod,
                 customerPhone: String(fd.get('customerPhone') || '').trim(),
                 notes: String(fd.get('notes') || '').trim()
             };
@@ -7945,12 +7959,12 @@
             const body = `<style>@page { size: A4 landscape; margin: 8mm; } table { font-size: 9pt; }</style>
                 <h1>${esc(title)}</h1><div class="meta">${esc(meta)} · ${esc(fmtDateAr(todayISO()))}</div>
                 <table><thead><tr><th>الرقم</th><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>الصنف</th><th>الحالة</th>
-                <th>المبلغ</th><th>المدفوع</th><th>الباقي</th><th>مدة الطلبية</th><th>التسليم</th><th>موعد الحجز</th></tr></thead>
+                <th>المبلغ</th><th>المدفوع</th><th>الباقي</th><th>مدة الطلبية</th><th>التسليم</th><th>الشحن</th><th>الدفع</th></tr></thead>
                 <tbody>${rows.map(c => `<tr><td>${custNoLabel(c)}</td><td>${esc(fmtDateAr(c.date) || '')}</td><td>${esc(c.customer)}</td>
                     <td>${esc(c.repName || '')}</td><td>${esc(c.category || '')}</td><td>${esc(c.completeness || '')}</td>
                     <td>${fmtDigits(numOr0(c.amount))}</td><td>${fmtDigits(numOr0(c.paid))}</td><td>${fmtDigits(custRemaining(c))}</td>
-                    <td>${esc(fmtDateAr(c.validUntil) || '')}</td><td>${esc(c.delivery || '')}</td><td>${esc(fmtDateAr(c.booking) || '')}</td></tr>`).join('')
-                    || '<tr><td colspan="12">مفيش طلبيات</td></tr>'}</tbody>
+                    <td>${esc(fmtDateAr(c.validUntil) || '')}</td><td>${esc(c.delivery || '')}</td><td>${esc(c.transport || 'بدون نقل')}</td><td>${esc(c.payMethod || 'نقدي')}</td></tr>`).join('')
+                    || '<tr><td colspan="13">مفيش طلبيات</td></tr>'}</tbody>
                 ${rows.length ? `<tfoot><tr class="tot"><td colspan="6">الإجمالي (${rows.length})</td><td>${fmtDigits(sum('amount'))}</td>
                     <td>${fmtDigits(sum('paid'))}</td><td>${fmtDigits(r2(sum('amount') - sum('paid')))}</td><td colspan="3"></td></tr></tfoot>` : ''}
                 </table>`;
@@ -7976,7 +7990,9 @@
                 ${row('الباقي', `<b class="${rem > 0 ? 'text-rose-700' : ''}">${fmtMoney(rem)}</b>`)}
                 ${row('مدة الطلبية', esc(fmtDateAr(c.validUntil) || '—'))}
                 ${row('حالة التسليم', custDeliveryBadge(c))}
-                ${row('موعد الحجز', esc(fmtDateAr(c.booking) || '—'))}
+                ${row('الشحن والنقل', c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل')}
+                ${row('طريقة الدفع', esc(c.payMethod || 'نقدي'))}
+                ${/^\d{4}-/.test(c.booking || '') ? row('موعد الحجز (قديم)', esc(fmtDateAr(c.booking) || '—')) : ''}
                 ${row('الملاحظات', c.notes ? `<span class="whitespace-pre-wrap">${esc(c.notes)}</span>` : '—')}
                 ${row('أنشأها', stamp(c.createdBy, c.createdAt))}
                 ${row('آخر تعديل', stamp(c.updatedBy, c.updatedAt))}
@@ -12540,5 +12556,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f0fea6c9b9a9cc',t:'MTc5NTQ0NTUxNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f0fea6c9b9a9cc',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f345c0bcdde1d8',t:'MTc5NTQ2OTM5OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f345c0bcdde1d8',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
