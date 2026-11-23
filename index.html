@@ -632,6 +632,10 @@
                         <i class="fa-solid fa-magnifying-glass text-lg"></i>
                     </button>
                     <div id="topActions" class="flex items-center gap-2 shrink-0"></div>
+                    <button type="button" id="chatTopBtn" onclick="navigate('chat')" class="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-brand-600" aria-label="المحادثات" title="المحادثات">
+                        <i class="fa-regular fa-comments text-lg"></i>
+                        <span id="chatTopBadge" class="hidden absolute top-0 left-0 min-w-[20px] h-5 px-1 rounded-full bg-rose-600 text-white text-[11px] font-bold flex items-center justify-center shadow"></span>
+                    </button>
                     <div id="notifHost" class="shrink-0">
                         <button type="button" onclick="toggleNotifPanel(event)" class="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="الإشعارات" title="الإشعارات">
                             <i class="fa-regular fa-bell text-lg"></i>
@@ -4132,6 +4136,8 @@
                     </div>` + (ordersOpen ? navLink('customers', true) : '');
             });
             el('sideNav').innerHTML = links.join('') || '<p class="text-sm text-slate-400 p-3">لا توجد أقسام متاحة</p>';
+            const chatTopBtn = el('chatTopBtn');
+            if (chatTopBtn) chatTopBtn.classList.toggle('hidden', !canAccessRoute('chat'));
 
             if (u) {
                 el('sideUser').innerHTML = `${avatarHtml(u.name)}
@@ -5636,10 +5642,12 @@
         const metaSansId = m => { const { id, ...rest } = m; return rest; };
         function chatUnreadTotal() { const me = chatMe(); return chatMetas.reduce((n, m) => n + (((m.unread || {})[me]) || 0), 0); }
         function updateChatNavBadge() {
-            const b = el('chatNavBadge'); if (!b) return;
             const n = chatUnreadTotal();
-            b.textContent = n > 9 ? '9+' : String(n);
-            b.classList.toggle('hidden', !n);
+            ['chatNavBadge', 'chatTopBadge'].forEach(id => {
+                const b = el(id); if (!b) return;
+                b.textContent = n > 9 ? '9+' : String(n);
+                b.classList.toggle('hidden', !n);
+            });
         }
         function chatWriteFailed(err) {
             console.error('chat write refused', err);
@@ -5734,15 +5742,31 @@
         }
 
         // ---------- views ----------
-        function chatPeople() {
+        function chatFlags(u, m) {
             const me = chatMe();
-            return (appData.users || []).filter(u => u.active && u.id !== me)
-                .map(u => ({ u, m: chatMetaFor(u.id) }))
+            if (!m) return { unread: 0, awaiting: false, typing: false, score: 0 };
+            const unread = ((m.unread || {})[me]) || 0;
+            const awaiting = !!m.lastBy && m.lastBy === u.id;            // his message is the last one — my reply is pending
+            const typing = m.typingBy === u.id && (Date.now() - new Date(m.typingAt || 0).getTime() < 4500);
+            const score = typing ? 4 : unread > 0 ? 3 : awaiting ? 2 : 1;
+            return { unread, awaiting, typing, score };
+        }
+        function chatPeople() {
+            return (appData.users || []).filter(u => u.active && u.id !== chatMe())
+                .map(u => { const m = chatMetaFor(u.id); return { u, m, f: chatFlags(u, m) }; })
                 .sort((a, b) => {
+                    if (a.f.score !== b.f.score) return b.f.score - a.f.score;
                     const at = a.m ? (a.m.lastAt || '') : '', bt = b.m ? (b.m.lastAt || '') : '';
                     if (at !== bt) return at < bt ? 1 : -1;
                     return (a.u.name || '').localeCompare(b.u.name || '', 'ar');
                 });
+        }
+        function chatMsgsSeenByOther(m) {
+            if (chatActiveWith && chatIdFor(chatMe(), chatActiveWith) === m.id) {
+                const mine = [...chatMsgsList].reverse().find(x => x.by === chatMe() && !x.deleted);
+                return !!(mine && mine.seen);
+            }
+            return (((m.unread || {})[m.lastBy === m.p1 ? m.p2 : m.p1]) || 0) === 0 && !!m.lastAt;
         }
         function chatPreviewText(m, me) {
             let t = m.lastType === 'img' ? '📷 صورة' : m.lastType === 'audio' ? '🎤 رسالة صوتية' : (m.lastText || '');
@@ -5818,17 +5842,21 @@
             const me = chatMe();
             const q = chatListQuery.trim();
             const rows = chatPeople().filter(({ u }) => !q || (u.name || '').includes(q));
-            box.innerHTML = rows.length ? rows.map(({ u, m }) => {
-                const unread = m ? (((m.unread || {})[me]) || 0) : 0;
+            box.innerHTML = rows.length ? rows.map(({ u, m, f }) => {
+                const unread = f.unread;
                 const active = chatActiveWith === u.id;
-                return `<button type="button" onclick="navigate('chat/${u.id}')" class="w-full flex items-center gap-3 px-3 py-2.5 text-start transition-colors ${active ? 'bg-brand-50' : 'hover:bg-slate-50'}">
-                    <span class="relative shrink-0">${avatarHtml(u.name)}<span class="absolute bottom-0 start-0 w-3 h-3 rounded-full border-2 border-white ${chatIsOnline(u.id) ? 'bg-emerald-500' : 'bg-slate-300'}"></span></span>
+                const myLastSeen = !!(m && m.lastBy === me && chatMsgsSeenByOther(m));
+                const preview = f.typing
+                    ? '<span class="text-brand-600 font-bold">بيكتب الآن…</span>'
+                    : esc(m ? chatPreviewText(m, me) : 'ابدأ محادثة جديدة');
+                return `<button type="button" onclick="navigate('chat/${u.id}')" class="w-full flex items-center gap-3 px-3 py-2.5 text-start transition-colors ${active ? 'bg-brand-50' : unread ? 'bg-rose-50/50 hover:bg-rose-50' : 'hover:bg-slate-50'}">
+                    <span class="relative shrink-0">${avatarHtml(u.name)}<span class="absolute bottom-0 start-0 w-3 h-3 rounded-full border-2 border-white ${chatIsOnline(u.id) ? 'bg-emerald-500' : 'bg-slate-300'}"></span>${f.awaiting ? '<span class="chat-await-dot absolute -top-0.5 -end-0.5 flex w-3.5 h-3.5" title="بانتظار ردّك"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-60"></span><span class="relative inline-flex rounded-full w-3.5 h-3.5 bg-rose-600 border-2 border-white"></span></span>' : ''}</span>
                     <span class="flex-1 min-w-0">
-                        <span class="flex items-baseline gap-2"><b class="text-sm text-slate-800 truncate">${esc(u.name)}</b><span class="text-[10px] text-slate-400 shrink-0">${esc(roleName(u.roleId) || '')}</span></span>
-                        <span class="block text-xs ${unread ? 'text-slate-800 font-bold' : 'text-slate-500'} truncate">${esc(m ? chatPreviewText(m, me) : 'ابدأ محادثة جديدة')}</span>
+                        <span class="flex items-baseline gap-2"><b class="text-sm text-slate-800 truncate">${esc(u.name)}</b><span class="text-[10px] text-slate-400 shrink-0">${esc(roleName(u.roleId) || '')}</span>${f.awaiting ? '<span class="text-[10px] font-black text-rose-600 shrink-0">• بانتظار ردّك</span>' : ''}</span>
+                        <span class="block text-xs ${unread ? 'text-slate-800 font-bold' : 'text-slate-500'} truncate">${m && m.lastBy === me && !f.typing ? `<span class="${myLastSeen ? 'text-sky-500' : 'text-slate-400'} font-black">✓✓</span> ` : ''}${preview}</span>
                     </span>
                     <span class="flex flex-col items-end gap-1 shrink-0">
-                        ${m && m.lastAt ? `<span class="text-[10px] text-slate-400">${esc(timeAgo(m.lastAt))}</span>` : ''}
+                        ${m && m.lastAt ? `<span class="text-[10px] ${unread ? 'text-rose-600 font-bold' : 'text-slate-400'}">${esc(timeAgo(m.lastAt))}</span>` : ''}
                         ${unread ? `<span class="min-w-[1.25rem] h-5 px-1 rounded-full bg-rose-600 text-white text-[11px] font-black leading-5 text-center">${unread}</span>` : ''}
                     </span>
                 </button>`;
@@ -11595,5 +11623,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ef9e1b9f2ebae0',t:'MTc5NTQzMTA3NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ef9e1b9f2ebae0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5efb0352f2cad93',t:'MTc5NTQzMTgxNg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5efb0352f2cad93',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
