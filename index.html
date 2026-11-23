@@ -1776,6 +1776,7 @@
 
         function notifIcon(kind = '') {
             if (kind.includes('شحن')) return ['fa-truck-fast', 'bg-sky-100 text-sky-700'];
+            if (kind.includes('محادثة')) return ['fa-comments', 'bg-brand-100 text-brand-700'];
             if (kind.includes('تعليق')) return ['fa-comments', 'bg-amber-100 text-amber-700'];
             if (kind.includes('PDF') || kind.includes('لستة')) return ['fa-file-pdf', 'bg-rose-100 text-rose-700'];
             if (kind.includes('طلبية عميل')) return ['fa-file-invoice', 'bg-brand-100 text-brand-700'];
@@ -1793,7 +1794,7 @@
         // everyone's entries except the user's own changes
         function visibleNotifs() {
             const me = fbUser?.uid;
-            return notifs.filter(n => n.uid !== me);
+            return notifs.filter(n => n.uid !== me && (!n.to || n.to === me));
         }
 
         function renderNotifs() {
@@ -1868,6 +1869,7 @@
 
         function notifResolve(n) {
             const t = n.target || {};
+            if (t.col === 'chat' && t.id) return () => { if (notifGuard('chat')) navigate('chat/' + t.id); };
             if (t.col === 'custOrders' && t.id) return () => notifOpenCust(t.id, !!t.comments);
             if (t.col === 'orders' && t.id) return () => { if (notifGuard('orders')) navigate('orders/' + t.id); };
             if (t.col === 'checks' && t.id) return () => {
@@ -5975,6 +5977,14 @@
             fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: type === 'text' ? text.slice(0, 120) : (type === 'img' ? '📷 صورة' : '🎤 رسالة صوتية'), lastType: type, lastAt: now, lastBy: me, unread, typingBy: '', typingAt: '' }).catch(err => chatWriteFailed(err));
             chatReplyTo = null;
             chatRenderReplyBar();
+            chatNotifyPeer(otherId, msg);
+        }
+        function chatNotifyPeer(otherId, msg) {
+            if (!fbDb || !otherId || !msg) return;
+            const meUser = currentUser();
+            const detail = msg.type === 'img' ? (msg.text || '📷 صورة') : msg.type === 'audio' ? '🎤 رسالة صوتية' : String(msg.text || '').slice(0, 100);
+            const n = { id: 'chatNTF-' + msg.id, t: msg.t, uid: chatMe(), user: meUser ? meUser.name : '', verb: 'أرسل', kind: 'رسالة محادثة', detail, to: otherId, target: { col: 'chat', id: chatMe() } };
+            fbDb.collection('notifications').doc(n.id).set(n).catch(err => console.warn('chat notification not saved:', err && err.code));
         }
         function chatSend() {
             const ta = el('chatInput'); if (!ta || !chatActiveWith) return;
@@ -11347,6 +11357,8 @@
                 const popupOn = this.enabled() && ('Notification' in window) && Notification.permission === 'granted';
                 fresh.forEach(n => {
                     pushed.add(n.id);
+                    const inThread = !!(n.target && n.target.col === 'chat' && chatActiveWith === n.target.id && parseRoute().name === 'chat' && !document.hidden);
+                    if (inThread) return;
                     if (popupOn) this.fire(n);
                     if (window.App && App.Sounds) App.Sounds.playFor(n);
                 });
@@ -11648,5 +11660,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5efc72e8f275640',t:'MTc5NTQzMjc1Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5efc72e8f275640',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5efeac418bccac8',t:'MTc5NTQzNDIxNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5efeac418bccac8',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
