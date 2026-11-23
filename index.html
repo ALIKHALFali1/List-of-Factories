@@ -5306,13 +5306,154 @@
             'لم تُسلم': 'bg-slate-100 text-slate-700', 'تم التسليم': 'bg-emerald-100 text-emerald-800', 'مؤجل': 'bg-amber-100 text-amber-800',
             'ملغي': 'bg-rose-100 text-rose-800', 'مرتجع': 'bg-violet-100 text-violet-800'
         };
-        const CUST_FILTER_DEFAULT = { q: '', rep: '', category: '', delivery: 'all', from: '', to: '' };
+        const CUST_FILTER_DEFAULT = { q: '', rep: '', category: '', delivery: 'all', from: '', to: '', cmtPending: false };
         let custFilter = { ...CUST_FILTER_DEFAULT };
 
         const custNoLabel = c => String(c.no || 0).padStart(4, '0');
         const custRemaining = c => r2(numOr0(c.amount) - numOr0(c.paid));
         const custSorted = list => [...list].sort((a, b) => (b.no || 0) - (a.no || 0));
         function nextCustNo() { return Math.max(0, ...appData.custOrders.map(c => Number(c.no) || 0)) + 1; }
+
+        // ---- تعليقات الفواتير: نقاش بين المندوب ورئيس القسم على كل فاتورة ----
+        // التعليقات عايشة في custComments/{id} (زي سجل النشاط والإشعارات)، لأن حساب
+        // المندوب يقدر يشوف الفواتير بس — الكتابة جوّه مستند الفاتورة نفسه كانت هتترفض
+        // منه. حالة «اتشاف» محلية لكل جهاز (نفس فكرة جرس الإشعارات).
+        let custComments = [];
+        let custCmtSubbed = false;
+        let custCmtEditId = '';
+        const custCmtMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
+        function custEnsureCommentSubs() {
+            if (custCmtSubbed || !fbDb || !fbUser || !canCust('view')) return;
+            custCmtSubbed = true;
+            fbDb.collection('custComments').orderBy('t', 'desc').limit(2000).onSnapshot(snap => {
+                custComments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                if (parseRoute().name === 'customers') updateCustBody();
+            }, err => console.error('custComments listener', err));
+        }
+        const custCommentsFor = orderId => custComments.filter(x => x.orderId === orderId).sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+        function custCmtSeenMap() {
+            try { return JSON.parse(localStorage.getItem('cmtSeen:' + (fbUser?.uid || custCmtMe())) || '{}'); } catch (e) { return {}; }
+        }
+        function custMarkCmtSeen(orderId) {
+            const m = custCmtSeenMap();
+            m[orderId] = new Date().toISOString();
+            try { localStorage.setItem('cmtSeen:' + (fbUser?.uid || custCmtMe()), JSON.stringify(m)); } catch (e) { /* storage blocked */ }
+        }
+        const custCmtUnseen = c => { const seen = custCmtSeenMap()[c.id] || ''; return custCommentsFor(c.id).filter(x => x.byId !== custCmtMe() && x.t > seen).length; };
+        const custCmtUnhandled = c => custCommentsFor(c.id).some(x => !x.handled);
+        const custCmtPendingCount = rows => rows.filter(custCmtUnhandled).length;
+        function toggleCustCmtFilter() { custFilter.cmtPending = !custFilter.cmtPending; render(); }
+        function custCmtSaveFailed(err) {
+            console.error('cust comment refused', err);
+            const denied = err && (err.code === 'permission-denied' || /permission/i.test(String(err.message || '')));
+            toast(denied ? 'السيرفر رفض حفظ التعليق: قواعد الحماية محتاجة تحديث (ملف القواعد الجديد)' : 'ماتحفظش التعليق، جرّب تاني', 'error', null, 7000);
+        }
+        function custCmtWrite(cm) {
+            if (!fbDb || !fbUser) return;
+            fbDb.collection('custComments').doc(cm.id).set(cm).catch(custCmtSaveFailed);
+        }
+
+        function openCustComments(id, editId = '') {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c) return toast('الطلبية مش موجودة', 'error');
+            custCmtEditId = editId || '';
+            custEnsureCommentSubs();
+            custMarkCmtSeen(id);
+            const me = custCmtMe();
+            const list = custCommentsFor(id);
+            const editTarget = editId ? list.find(x => x.id === editId) : null;
+            const mgr = canCust('manage');
+            const anyOpen = list.some(x => !x.handled);
+            const thread = list.length ? list.map(x => {
+                const mine = x.byId === me;
+                const isRepAuthor = !!(c.repId && appData.users.find(u => u.id === x.byId && u.repId === c.repId));
+                return `<div class="rounded-xl border ${x.handled ? 'border-slate-200 bg-slate-50' : 'border-amber-200 bg-amber-50/60'} p-3">
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <span class="font-black text-slate-800">${esc(x.by || '')}</span>
+                        ${isRepAuthor ? '<span class="px-1.5 py-0.5 rounded bg-brand-100 text-brand-700 font-bold">المندوب</span>' : ''}
+                        <span class="text-slate-400">${esc(fmtDateTime(x.t))}</span>
+                        ${x.editedAt ? '<span class="text-slate-400">(اتعدّل)</span>' : ''}
+                        ${x.handled ? '<span class="ms-auto font-bold text-emerald-700"><i class="fa-solid fa-circle-check"></i> تم التعامل</span>' : '<span class="ms-auto font-bold text-amber-700">بانتظار إجراء</span>'}
+                    </div>
+                    <p class="text-sm text-slate-700 whitespace-pre-wrap mt-1">${esc(x.text)}</p>
+                    ${(mine || mgr) ? `<div class="flex gap-3 mt-1.5">
+                        ${mine ? `<button type="button" onclick="openCustComments('${id}', '${x.id}')" class="text-xs font-bold text-brand-700 hover:underline"><i class="fa-solid fa-pen"></i> تعديل</button>` : ''}
+                        <button type="button" onclick="custDeleteComment('${id}', '${x.id}')" class="text-xs font-bold text-rose-600 hover:underline"><i class="fa-solid fa-trash-can"></i> حذف</button>
+                    </div>` : ''}
+                </div>`;
+            }).join('') : '<p class="text-sm text-slate-400 font-bold text-center py-3">مفيش تعليقات لسه — اكتب أول تعليق</p>';
+            openModal({
+                title: `تعليقات فاتورة ${custNoLabel(c)}`,
+                size: 'lg',
+                submitText: editTarget ? 'حفظ التعديل' : 'إرسال التعليق',
+                onSubmit: fd => custSaveComment(id, fd),
+                body: `
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm flex flex-wrap items-center gap-2">
+                        <span class="font-black">${esc(c.customer || '')}</span><span class="text-slate-500">المندوب: ${esc(c.repName || '—')}</span>${custDeliveryBadge(c)}
+                    </div>
+                    ${mgr && anyOpen ? `<div class="flex justify-end"><button type="button" onclick="custHandleThread('${id}')" class="${BTN_SECONDARY} !text-emerald-700"><i class="fa-solid fa-circle-check"></i> تعليم الكل كمُتعامل معه</button></div>` : ''}
+                    <div class="space-y-2 max-h-[45vh] overflow-y-auto pe-1">${thread}</div>
+                    ${field(editTarget ? 'تعديل التعليق' : 'تعليق جديد', `<textarea name="cmtText" rows="3" maxlength="1000" required class="${INPUT_CLS}" placeholder="اكتب ملحوظة عن حالة الفاتورة — حاجة اتغيرت، إضافة، أو محتاجة إجراء...">${esc(editTarget ? editTarget.text : '')}</textarea>`)}
+                    ${editTarget ? `<button type="button" onclick="openCustComments('${id}')" class="text-xs font-bold text-slate-500 hover:underline">إلغاء التعديل</button>` : ''}`
+            });
+            updateCustBody();
+        }
+
+        function custSaveComment(id, fd) {
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c || !canCust('view')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const text = String(fd.get('cmtText') || '').trim().slice(0, 1000);
+            if (!text) { toast('اكتب التعليق الأول', 'error'); return false; }
+            const now = new Date().toISOString();
+            if (custCmtEditId) {
+                const cm = custComments.find(x => x.id === custCmtEditId && x.orderId === id);
+                if (!cm || cm.byId !== custCmtMe()) { toast('تقدر تعدّل تعليقاتك بس', 'error'); return false; }
+                cm.text = text; cm.editedAt = now;
+                custCmtWrite(cm);
+                log('تعديل تعليق فاتورة', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}`);
+                toast('تم تعديل التعليق', 'success');
+            } else {
+                const cm = { id: uid('CMT-'), orderId: id, no: custNoLabel(c), repId: c.repId || '', byId: custCmtMe(), by: (currentUser() && currentUser().name) || 'مستخدم', text, t: now, editedAt: '', handled: false };
+                custComments.unshift(cm);
+                custCmtWrite(cm);
+                notifyDirect('علّق', 'تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}: ${text.slice(0, 60)}`);
+                log('تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}`);
+                toast('تم إرسال التعليق', 'success');
+            }
+            custMarkCmtSeen(id);
+            openCustComments(id);
+            return false;
+        }
+
+        function custHandleThread(id) {
+            if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = appData.custOrders.find(x => x.id === id);
+            let n = 0;
+            custCommentsFor(id).forEach(x => {
+                if (!x.handled) { x.handled = true; x.handledBy = (currentUser() && currentUser().name) || ''; x.handledAt = new Date().toISOString(); custCmtWrite(x); n++; }
+            });
+            if (c && n) log('تعامل مع تعليقات فاتورة', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}`);
+            custMarkCmtSeen(id);
+            openCustComments(id);
+            updateCustBody();
+        }
+
+        function custDeleteComment(orderId, cid) {
+            const i = custComments.findIndex(x => x.id === cid && x.orderId === orderId);
+            if (i < 0) return;
+            const cm = custComments[i];
+            if (!(cm.byId === custCmtMe() || canCust('manage'))) return toast('تقدر تحذف تعليقاتك بس', 'error');
+            custComments.splice(i, 1);
+            openCustComments(orderId);
+            updateCustBody();
+            scheduleUndo('تم حذف التعليق', () => {
+                custComments.splice(Math.min(i, custComments.length), 0, cm);
+                if (parseRoute().name === 'customers') updateCustBody();
+            }, () => {
+                if (fbDb && fbUser) fbDb.collection('custComments').doc(cid).delete().catch(custCmtSaveFailed);
+            });
+        }
 
         let custOrderSnapshots = {};       // key -> map of orders from one listener (repId / repName / all)
         let fbCustSubKeys = new Set();     // listeners already open in this session
@@ -5415,6 +5556,7 @@
                 if (f.rep && c.repId !== f.rep) return false;
                 if (f.category && c.category !== f.category) return false;
                 if (f.delivery !== 'all' && c.delivery !== f.delivery) return false;
+                if (f.cmtPending && !custCmtUnhandled(c)) return false;
                 if (f.from && (!c.date || c.date < f.from)) return false;
                 if (f.to && (!c.date || c.date > f.to)) return false;
                 if (q && !`${custNoLabel(c)} ${c.customer} ${c.repName} ${c.booking} ${c.notes}`.toLowerCase().includes(q)) return false;
@@ -5438,8 +5580,11 @@
 
         function custActionsHtml(c) {
             const id = esc(c.id);
+            const unseen = custCmtUnseen(c);
+            const pending = custCmtUnhandled(c);
             return `<div class="flex items-center justify-center gap-1">
                 <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
+                ${canCust('view') ? `<button type="button" onclick="openCustComments('${id}')" title="تعليقات الفاتورة" aria-label="تعليقات الفاتورة" class="${BTN_ICON} relative ${pending ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'}"><i class="fa-solid fa-comments"></i>${unseen ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${unseen}</span>` : ''}</button>` : ''}
                 <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
                 ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
@@ -5549,6 +5694,7 @@
                     ${field('التاريخ (من - إلى)', `<div class="grid grid-cols-2 gap-2 min-w-0"><input type="date" value="${esc(f.from)}" onchange="custFilter.from = this.value; updateCustBody()" class="${INPUT_CLS}"><input type="date" value="${esc(f.to)}" onchange="custFilter.to = this.value; updateCustBody()" class="${INPUT_CLS}"></div>`)}
                 </div>
                 <div class="flex flex-wrap gap-2 justify-end">
+                    ${canCust('view') ? btn('toggleCustCmtFilter()', `تعليقات بانتظار إجراء (${custCmtPendingCount(filteredCustOrders())})`, 'fa-comments', custFilter.cmtPending ? BTN_PRIMARY : BTN_SECONDARY) : ''}
                     ${btn('clearCustFilter()', 'مسح الفلاتر', 'fa-filter-circle-xmark', BTN_SECONDARY)}
                     ${canCust('view') ? btn('printCustList()', 'طباعة القائمة', 'fa-print', BTN_SECONDARY) : ''}
                 </div>
@@ -5922,6 +6068,7 @@
 
         function viewCustomerOrders(param = '') {
             if (!canCust('view')) return { title: 'طلبيات العملاء', html: noOrderAccessHtml() };
+            custEnsureCommentSubs();
             custTab = param === 'schedule' || param === 'reports' ? param : 'list';
             const tools = `<div class="flex flex-wrap gap-2 justify-end">
                 ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
@@ -6167,6 +6314,7 @@
             const cid = esc(c.id);
             const actions = `<div class="flex flex-wrap gap-2 pt-2">
                 <button type="button" onclick="printCustOrder('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-print"></i> طباعة</button>
+                <button type="button" onclick="openCustComments('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-comments"></i> تعليقات الفاتورة</button>
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
             </div>`;
             openModal({ title: `تفاصيل طلبية ${esc(custNoLabel(c))}`, body: custDetailHtml(c) + actions, size: 'lg' });
@@ -10456,5 +10604,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ebc68a1c69e209',t:'MTc5NTM5MDc4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ebc68a1c69e209',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ebed883c634c51',t:'MTc5NTM5MjM4NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ebed883c634c51',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
