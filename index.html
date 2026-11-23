@@ -7988,6 +7988,7 @@
                 ${row('المبلغ', fmtMoney(numOr0(c.amount)))}
                 ${row('المدفوع', fmtMoney(numOr0(c.paid)))}
                 ${row('الباقي', `<b class="${rem > 0 ? 'text-rose-700' : ''}">${fmtMoney(rem)}</b>`)}
+                ${rem > 0 && custBalanceDueDate(c) ? row('آخر موعد لسداد الباقي', `<b class="text-rose-700">${esc(fmtDateAr(custBalanceDueDate(c)))}</b> <span class="text-xs text-slate-500">(7 أيام من تاريخ حجز الفاتورة)</span>`) : ''}
                 ${row('مدة الطلبية', esc(fmtDateAr(c.validUntil) || '—'))}
                 ${row('حالة التسليم', custDeliveryBadge(c))}
                 ${row('الشحن والنقل', c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل')}
@@ -8013,6 +8014,11 @@
             openModal({ title: `تفاصيل طلبية ${esc(custNoLabel(c))}`, body: custDetailHtml(c) + actions, size: 'lg' });
         }
 
+        function custHoldDate(c) {
+            const valid = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+            return valid(c?.booking) || valid(c?.date) || valid(String(c?.createdAt || '').slice(0, 10));
+        }
+        function custBalanceDueDate(c) { const d = custHoldDate(c); return d ? addDays(d, 7) : ''; }
         function custWaPhone(raw) {
             let p = String(raw || '').replace(/[^0-9]/g, '');
             if (p.startsWith('00')) p = p.slice(2);
@@ -8025,11 +8031,18 @@
             if (!c) return;
             const phone = custWaPhone(c.customerPhone);
             if (!phone) return toast('الفاتورة دي مفيهاش رقم تليفون عميل — ضيفه من تعديل الفاتورة', 'error');
+            const remaining = custRemaining(c);
+            const holdDate = custHoldDate(c), dueDate = custBalanceDueDate(c);
+            const paymentText = remaining > 0 ? [
+                'برجاء سداد المبلغ المتبقي في موعد أقصاه ' + (dueDate ? fmtDateAr(dueDate) : 'خلال 7 أيام من تاريخ حجز الفاتورة') + ' (7 أيام من تاريخ حجز الفاتورة' + (holdDate ? ' بتاريخ ' + fmtDateAr(holdDate) : '') + ').',
+                'وفي حال عدم السداد خلال المهلة، سيتم فك حجز البضاعة، وسيُرحَّل المبلغ المدفوع كرصيد لصالحكم في حسابكم لدينا.',
+                'شكرًا لتعاونكم 🙏'
+            ].join('\n') : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏';
             const lines = [
                 'أهلاً ' + (c.customer || '') + ' 🌟',
                 'فاتورة رقم ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' بتاريخ ' + fmtDateAr(c.date) : ''),
-                'الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' · المدفوع: ' + fmtMoney(numOr0(c.paid)) + ' · المتبقي: ' + fmtMoney(custRemaining(c)),
-                custRemaining(c) > 0 ? 'برجاء سداد المبلغ المتبقي في أقرب وقت، وشكرًا لتعاونكم 🙏' : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏',
+                'الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' · المدفوع: ' + fmtMoney(numOr0(c.paid)) + ' · المتبقي: ' + fmtMoney(remaining),
+                paymentText,
                 '— ' + (appData.settings.systemName || 'الرحمة')
             ];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
@@ -12556,5 +12569,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f345c0bcdde1d8',t:'MTc5NTQ2OTM5OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f345c0bcdde1d8',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f35f184fd3ed50',t:'MTc5NTQ3MDQzNw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f35f184fd3ed50',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
