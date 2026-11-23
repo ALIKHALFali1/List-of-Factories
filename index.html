@@ -683,6 +683,7 @@
     <div id="paletteHost"></div>
     <input type="file" id="excelFileInput" class="hidden" accept=".xlsx,.xls,.csv" onchange="handleExcelImport(event)">
     <input type="file" id="custExcelFileInput" class="hidden" accept=".xlsx,.xls,.csv" onchange="handleCustExcelImport(event)">
+    <input type="file" id="checksExcelFileInput" class="hidden" accept=".xlsx,.xls,.csv" onchange="handleChecksExcelImport(event)">
     <input type="file" id="backupFileInput" class="hidden" accept=".json,application/json" onchange="restoreBackup(event)">
 
 
@@ -898,13 +899,13 @@
             return 'نشطة';
         }
 
-        function calculateEffectiveDiscount(d1 = 0, d2 = 0, d3 = 0, d4 = 0) {
-            const factor = [d1, d2, d3, d4].reduce((acc, d) => acc * (1 - (parseFloat(d) || 0) / 100), 1);
+        function calculateEffectiveDiscount(d1 = 0, d2 = 0, d3 = 0) {
+            const factor = [d1, d2, d3].reduce((acc, d) => acc * (1 - (parseFloat(d) || 0) / 100), 1);
             return ((1 - factor) * 100).toFixed(2);
         }
 
         function effValue(list) {
-            return parseFloat(calculateEffectiveDiscount(list.discount1, list.discount2, list.discount3, list.flatDiscount));
+            return parseFloat(calculateEffectiveDiscount(list.discount1, list.discount2, list.discount3));
         }
 
         function pct(value) {
@@ -1329,7 +1330,9 @@
                     discount1: parseFloat(l.discount1) || 0,
                     discount2: parseFloat(l.discount2) || 0,
                     discount3: parseFloat(l.discount3) || 0,
-                    flatDiscount: parseFloat(l.flatDiscount) || 0,
+                    flatIncrease: parseFloat(l.flatIncrease != null ? l.flatIncrease : l.flatDiscount) || 0,
+                    palletValue: parseFloat(l.palletValue) || 0,
+                    notes: String(l.notes || ''),
                     startDate: String(l.startDate || ''),
                     endDate: String(l.endDate || ''),
                     pdfFile: String(l.pdfFile || ''),
@@ -2740,7 +2743,10 @@
                                placeholder="${isP ? 'ابحث باسم المستفيد' : 'ابحث برقم الشيك أو البنك أو المستفيد'}"
                                class="${INPUT_CLS} pr-9">
                     </div>
-                    ${addBtn}
+                    <div class="flex flex-wrap gap-2">
+                        ${!isP && can('checks.manage') ? btn("el('checksExcelFileInput').click()", 'استيراد', 'fa-file-import', BTN_SECONDARY) : ''}
+                        ${addBtn}
+                    </div>
                 </div>${isP ? '' : checksFilterBar()}`;
             } else if (tab === 'reports') {
                 tools = reportFilterHtml();
@@ -2937,7 +2943,10 @@
                 return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-8 text-center">
                     <i class="fa-solid fa-money-check-dollar text-4xl text-slate-300 mb-3"></i>
                     <p class="text-slate-700 font-bold mb-4">مفيش شيكات مسجلة لسه</p>
-                    ${can('checks.manage') ? btn('openCheckModal()', 'شيك جديد', 'fa-plus') : ''}
+                    <div class="flex flex-wrap gap-2 justify-center">
+                        ${can('checks.manage') ? btn("el('checksExcelFileInput').click()", 'استيراد', 'fa-file-import', BTN_SECONDARY) : ''}
+                        ${can('checks.manage') ? btn('openCheckModal()', 'شيك جديد', 'fa-plus') : ''}
+                    </div>
                 </div>`;
             }
             const rows = filteredChecksList();
@@ -3716,6 +3725,65 @@
             const p = appData.partners.find(x => x.id === id);
             if (!p) return;
             exportChecksXlsx(appData.checks.filter(c => c.payeeId === p.id).sort(byDue), 'كشف-' + p.name, p.name);
+        }
+
+        // ---------- checks Excel import (same columns as the checks export) ----------
+        function handleChecksExcelImport(event) {
+            const file = event.target.files[0];
+            event.target.value = '';
+            if (!file) return;
+            if (!can('checks.manage')) return toast('ليس لديك صلاحية الاستيراد — الاستيراد محتاج صلاحية إدارة الشيكات', 'error');
+            if (typeof XLSX === 'undefined') return toast('تعذر تحميل مكتبة الإكسيل. تأكد من الإنترنت', 'error', null, 5000);
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+                    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+                    if (rows.length) processImportedChecks(rows);
+                    else toast('الملف لا يحتوي على بيانات قابلة للقراءة', 'error');
+                } catch (err) {
+                    console.error(err);
+                    toast('حدث خطأ أثناء قراءة ملف الإكسيل: ' + err.message, 'error', null, 5000);
+                }
+            };
+            reader.onerror = () => toast('تعذر قراءة الملف', 'error');
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processImportedChecks(rows) {
+            if (!can('checks.manage')) { toast('ليس لديك صلاحية الاستيراد', 'error'); return; }
+            let imported = 0, skipped = 0, dups = 0, newPartners = 0;
+            const seen = new Set(appData.checks.map(c => `${c.number}|${c.bank}`));
+            rows.forEach(rawRow => {
+                const row = {};
+                Object.keys(rawRow || {}).forEach(k => { row[String(k).trim()] = rawRow[k]; });
+                const number = String(pickValue(row, ['رقم الشيك', 'رقم', 'Number', 'Check Number']) || '').trim();
+                const bank = String(pickValue(row, ['البنك', 'Bank']) || '').trim();
+                const payeeName = String(pickValue(row, ['المستفيد', 'اسم المستفيد', 'Payee']) || '').trim();
+                const amount = parseMoneyValue(pickValue(row, ['المبلغ', 'Amount']));
+                const dueDate = normalizeDate(pickValue(row, ['تاريخ الاستحقاق', 'الاستحقاق', 'Due Date', 'DueDate']), '');
+                if (!number || !bank || !payeeName || !(amount > 0) || amount > CHECK_MAX_AMOUNT || !dueDate) { skipped++; return; }
+                const key = number + '|' + bank;
+                if (seen.has(key)) { dups++; return; }
+                let partner = appData.partners.find(p => p.name.trim() === payeeName);
+                if (!partner) {
+                    partner = { id: uid('PAY-'), name: payeeName, notes: 'تم الاستيراد من ملف إكسيل', limit: 0 };
+                    appData.partners.push(partner);
+                    newPartners++;
+                }
+                const statusText = String(pickValue(row, ['الحالة', 'Status']) || '');
+                const cashed = statusText.includes('مصروف') || /^cashed$/i.test(statusText.trim());
+                appData.checks.push({ id: uid('CHK-'), number, bank, amount: r2(amount), dueDate, payeeId: partner.id, payeeName: partner.name, cashed });
+                seen.add(key);
+                imported++;
+            });
+            if (imported) log('استيراد شيكات إكسيل', `${imported} شيك`);
+            saveState();
+            render();
+            let msg = `تم استيراد ${imported} شيك بنجاح${newPartners ? ` (وإضافة ${newPartners} مستفيد جديد)` : ''}.`;
+            if (dups) msg += `\nتم تجاهل ${dups} شيك مكرر (نفس الرقم والبنك).`;
+            if (skipped) msg += `\nتم تجاهل ${skipped} صف ناقص أو غير صالح.`;
+            toast(msg, imported ? 'success' : 'error', null, 6000);
         }
 
         // ============ AUTH & PERMISSIONS ============
@@ -10350,7 +10418,8 @@
                 <th class="py-3.5 px-4 text-center">خصم 1</th>
                 <th class="py-3.5 px-4 text-center">خصم 2</th>
                 <th class="py-3.5 px-4 text-center">خصم 3</th>
-                <th class="py-3.5 px-4 text-center">خصم قطعي</th>
+                <th class="py-3.5 px-4 text-center">زيادة قطعية</th>
+                <th class="py-3.5 px-4 text-center">قيمة البالتة</th>
                 <th class="py-3.5 px-4 text-center bg-slate-100/70">الصافي الفعلي</th>
                 <th class="py-3.5 px-4 whitespace-nowrap">البداية</th>
                 <th class="py-3.5 px-4 whitespace-nowrap">النهاية</th>
@@ -10367,8 +10436,9 @@
                     <td class="py-3.5 px-4 text-center font-bold">${pct(l.discount1)}</td>
                     <td class="py-3.5 px-4 text-center font-bold">${pct(l.discount2)}</td>
                     <td class="py-3.5 px-4 text-center font-bold">${pct(l.discount3)}</td>
-                    <td class="py-3.5 px-4 text-center font-bold">${pct(l.flatDiscount)}</td>
-                    <td class="py-3.5 px-4 text-center font-bold text-emerald-600 bg-emerald-50/50 whitespace-nowrap">${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount)}%</td>
+                    <td class="py-3.5 px-4 text-center font-bold whitespace-nowrap">${numOr0(l.flatIncrease) ? fmtMoney(numOr0(l.flatIncrease)) : '—'}</td>
+                    <td class="py-3.5 px-4 text-center font-bold whitespace-nowrap">${numOr0(l.palletValue) ? fmtMoney(numOr0(l.palletValue)) : '—'}</td>
+                    <td class="py-3.5 px-4 text-center font-bold text-emerald-600 bg-emerald-50/50 whitespace-nowrap">${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%</td>
                     <td class="py-3.5 px-4 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">${esc(l.startDate)}</td>
                     <td class="py-3.5 px-4 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">${listEndText(l)}</td>
                     <td class="py-3.5 px-4 text-center">${statusBadgeHtml(st)}</td>
@@ -10379,7 +10449,7 @@
 
             el(scope + 'Cards').innerHTML = items.map(({ c, l }, i) => {
                 const st = listState(l);
-                const net = calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount);
+                const net = calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3);
                 return `<article class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg shadow-slate-300/60 p-4 space-y-4">
                     <div class="flex items-start justify-between gap-3">
                         <div class="min-w-0 flex items-center gap-3">
@@ -10393,16 +10463,19 @@
                         <div class="shrink-0">${statusBadgeHtml(st)}</div>
                     </div>
                     <div class="grid grid-cols-4 gap-2 text-center">
-                        ${[l.discount1, l.discount2, l.discount3, l.flatDiscount].map((d, k) => `<div class="bg-slate-50 rounded-lg py-2 border border-slate-100"><p class="text-xs font-bold text-slate-500">${k === 3 ? 'خصم قطعي' : 'خصم ' + (k + 1)}</p><p class="font-extrabold text-slate-800">${pct(d)}</p></div>`).join('')}
+                        ${[l.discount1, l.discount2, l.discount3].map((d, k) => `<div class="bg-slate-50 rounded-lg py-2 border border-slate-100"><p class="text-xs font-bold text-slate-500">${'خصم ' + (k + 1)}</p><p class="font-extrabold text-slate-800">${pct(d)}</p></div>`).join('')}
+                        <div class="bg-sky-50 rounded-lg py-2 border border-sky-100"><p class="text-xs font-bold text-slate-500">زيادة قطعية</p><p class="font-extrabold text-sky-700">${numOr0(l.flatIncrease) ? fmtMoney(numOr0(l.flatIncrease)) : '—'}</p></div>
                     </div>
                     <div class="flex items-center justify-between gap-2 bg-emerald-50 rounded-lg px-3 py-2.5">
                         <span class="text-sm font-bold text-slate-700">صافي الخصم الفعلي</span>
                         <span class="text-lg font-extrabold text-emerald-600">${net}%</span>
                     </div>
-                    <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="grid grid-cols-3 gap-2 text-sm">
                         <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-xs font-bold text-slate-500">البداية</span><span class="font-bold font-mono text-slate-800">${esc(l.startDate)}</span></div>
                         <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-xs font-bold text-slate-500">النهاية</span><span class="font-bold font-mono text-slate-800">${listEndText(l)}</span></div>
+                        <div class="bg-slate-50 rounded-lg px-3 py-2"><span class="block text-xs font-bold text-slate-500">قيمة البالتة</span><span class="font-bold text-slate-800">${numOr0(l.palletValue) ? fmtMoney(numOr0(l.palletValue)) : '—'}</span></div>
                     </div>
+                    ${l.notes ? `<p class="text-sm text-slate-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 whitespace-pre-wrap">${esc(l.notes)}</p>` : ''}
                     <div class="flex items-center gap-2 pt-3 border-t border-slate-100">
                         <div class="flex-1 min-w-0">${pdfButtonHtml(l, true)}</div>
                         ${listActionsHtml(l.id)}
@@ -11302,7 +11375,10 @@
             if (!target) return toast('اختر شركة صحيحة', 'error'), false;
 
             const name = String(fd.get('name') || '').trim();
-            const discounts = [1, 2, 3, 4].map(n => parseFloat(fd.get('d' + n)) || 0);
+            const discounts = [1, 2, 3].map(n => parseFloat(fd.get('d' + n)) || 0);
+            const flatIncrease = parseFloat(fd.get('d4')) || 0;
+            const palletValue = parseFloat(fd.get('palletValue')) || 0;
+            const listNotes = String(fd.get('notes') || '').trim();
             const startDate = String(fd.get('start') || '');
             const endDate = String(fd.get('end') || '');
             const urlValue = String(fd.get('pdfUrl') || '').trim();
@@ -11310,6 +11386,7 @@
             if (pendingBigPdf) return toast('الملف لسه أكبر من 8 ميجا. اضغطه الأول أو امسحه', 'error', null, 6000), false;
             if (!name) return toast('اكتب اسم اللستة', 'error'), false;
             if (discounts.some(d => d < 0 || d > 100)) return toast('نسب الخصم لازم تكون بين 0 و 100', 'error'), false;
+            if (flatIncrease < 0 || flatIncrease > 999999999.99 || palletValue < 0 || palletValue > 999999999.99) return toast('الزيادة القطعية وقيمة البالتة لازم تكون مبالغ صحيحة (صفر أو أكتر)', 'error'), false;
             if (!startDate) return toast('حدد تاريخ البداية', 'error'), false;
             if (endDate && endDate < startDate) return toast('تاريخ النهاية لازم يكون بعد تاريخ البداية أو نفس اليوم', 'error'), false;
 
@@ -11339,7 +11416,7 @@
                 return false;
             }
 
-            const data = { id: listId, name, discount1: discounts[0], discount2: discounts[1], discount3: discounts[2], flatDiscount: discounts[3], startDate, endDate, ...pdfState };
+            const data = { id: listId, name, discount1: discounts[0], discount2: discounts[1], discount3: discounts[2], flatIncrease, palletValue, notes: listNotes, startDate, endDate, ...pdfState };
 
             if (found) {
                 if (found.c.id !== target.id) {
@@ -11494,19 +11571,20 @@
                             <label class="block text-[11px] sm:text-xs font-bold text-slate-700 mb-1">خصم ${n} (%)</label>
                             <input type="number" step="0.01" min="0" max="100" inputmode="decimal" name="d${n}" value="${v?.[`discount${n}`] || ''}" oninput="previewDiscount()" class="w-full px-2 py-2 sm:py-1.5 border border-slate-200 rounded-lg text-sm font-semibold text-center focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white">
                         </div>`).join('')}
-                        <div class="col-span-3 min-w-0">
-                            <label class="block text-[11px] sm:text-xs font-bold text-slate-700 mb-1">خصم قطعي (%)</label>
-                            <input type="number" step="0.01" min="0" max="100" inputmode="decimal" name="d4" value="${v?.flatDiscount || ''}" oninput="previewDiscount()" placeholder="0" class="w-full px-2 py-2 sm:py-1.5 border border-slate-200 rounded-lg text-sm font-semibold text-center focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white">
-                        </div>
                         <div class="col-span-3 pt-2 border-t border-slate-200 flex justify-between items-center gap-2 text-xs text-slate-600">
                             <span>الصافي الفعلي بعد الخصم التراكمي:</span>
                             <span id="effPreview" class="font-bold text-emerald-600 text-sm whitespace-nowrap">0.00%</span>
                         </div>
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('زيادة قطعية (ج.م)', `<input name="d4" type="number" step="0.01" min="0" value="${v?.flatIncrease || v?.flatDiscount || ''}" placeholder="0" dir="ltr" class="${INPUT_CLS} font-mono">`, 'مبلغ ثابت بيتزاد — مش نسبة %')}
+                        ${field('إضافة قيمة البالتة (ج.م)', `<input name="palletValue" type="number" step="0.01" min="0" value="${v?.palletValue || ''}" placeholder="0" dir="ltr" class="${INPUT_CLS} font-mono">`)}
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('تاريخ البداية *', `<input type="date" name="start" required value="${esc(v ? v.startDate : (dup ? dup.start : todayISO()))}" class="${INPUT_CLS}">`)}
                         ${field('تاريخ النهاية (اختياري)', `<div class="flex gap-2"><input type="date" id="listEndInput" name="end" value="${esc(v ? v.endDate : (dup ? dup.end : ''))}" class="${INPUT_CLS} flex-1 min-w-0"><button type="button" onclick="el('listEndInput').value=''" class="${BTN_SECONDARY} whitespace-nowrap">بدون تاريخ</button></div><p class="text-[11px] text-slate-400 mt-1">سيبه فاضي لو اللستة مالهاش تاريخ انتهاء</p>`)}
                     </div>
+                    ${field('ملاحظات', `<textarea name="notes" rows="2" class="${INPUT_CLS}" placeholder="أي ملاحظات على اللستة...">${esc(v?.notes || '')}</textarea>`)}
                     <div class="space-y-2">
                         <span class="block text-xs font-bold text-slate-700">ملف PDF للوحة</span>
                         <div class="flex flex-col sm:flex-row gap-2">
@@ -11528,8 +11606,8 @@
         function previewDiscount() {
             const f = el('modalForm');
             if (!f || !el('effPreview')) return;
-            const d = [1, 2, 3, 4].map(n => f.elements['d' + n]?.value);
-            el('effPreview').textContent = `${calculateEffectiveDiscount(d[0], d[1], d[2], d[3])}%`;
+            const d = [1, 2, 3].map(n => f.elements['d' + n]?.value);
+            el('effPreview').textContent = `${calculateEffectiveDiscount(d[0], d[1], d[2])}%`;
         }
 
         function refreshPdfPreview() {
@@ -11668,14 +11746,25 @@
             const price = parseFloat(el('calcPriceInput').value) || 0;
             let current = price;
             const rows = [];
-            [found.l.discount1, found.l.discount2, found.l.discount3, found.l.flatDiscount].forEach((d, i) => {
+            [found.l.discount1, found.l.discount2, found.l.discount3].forEach((d, i) => {
                 const v = parseFloat(d) || 0;
                 if (!v) return;
                 current = current * (1 - v / 100);
                 rows.push(`<div class="flex justify-between items-center gap-2 text-sm">
-                    <span class="text-slate-500">${i === 3 ? 'بعد الخصم القطعي' : 'بعد خصم ' + (i + 1)} (${v}%)</span>
+                    <span class="text-slate-500">${'بعد خصم ' + (i + 1)} (${v}%)</span>
                     <span class="font-semibold text-slate-700 whitespace-nowrap">${fmtMoney(current)}</span></div>`);
             });
+            const flatInc = parseFloat(found.l.flatIncrease) || 0;
+            if (flatInc) {
+                current += flatInc;
+                rows.push(`<div class="flex justify-between items-center gap-2 text-sm">
+                    <span class="text-slate-500">بعد الزيادة القطعية (+${fmtMoney(flatInc)})</span>
+                    <span class="font-semibold text-slate-700 whitespace-nowrap">${fmtMoney(current)}</span></div>`);
+            }
+            const palletVal = parseFloat(found.l.palletValue) || 0;
+            if (palletVal) rows.push(`<div class="flex justify-between items-center gap-2 text-sm">
+                    <span class="text-slate-500">قيمة البالتة (منفصلة عن سعر المنتج)</span>
+                    <span class="font-semibold text-slate-700 whitespace-nowrap">${fmtMoney(palletVal)}</span></div>`);
             const saving = price - current;
             const savingPct = price ? (saving / price) * 100 : 0;
             el('calcRows').innerHTML = rows.length ? rows.join('') : '<p class="text-sm text-slate-400 text-center">لا توجد خصومات في هذه اللستة</p>';
@@ -11707,15 +11796,18 @@
             if (!found) return;
             const { c, l } = found;
             const st = listState(l);
-            const discounts = [l.discount1, l.discount2, l.discount3, l.flatDiscount].map(d => parseFloat(d) || 0).filter(d => d > 0).map(d => `${d}%`);
+            const discounts = [l.discount1, l.discount2, l.discount3].map(d => parseFloat(d) || 0).filter(d => d > 0).map(d => `${d}%`);
             const lines = [
                 `*${c.name}*${c.agent ? ` - ${c.agent}` : ''}`,
                 `اللستة: ${l.name}`,
                 `الخصومات: ${discounts.length ? discounts.join(' + ') : 'بدون خصم'}`,
-                `صافي الخصم الفعلي: ${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount)}%`,
+                `صافي الخصم الفعلي: ${calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)}%`,
                 l.endDate ? `الفترة: من ${l.startDate} إلى ${l.endDate}` : `الفترة: من ${l.startDate} (بدون تاريخ انتهاء)`,
                 `الحالة: ${statusLabel(st)}`
             ];
+            if (numOr0(l.flatIncrease)) lines.push(`زيادة قطعية: ${fmtMoney(numOr0(l.flatIncrease))}`);
+            if (numOr0(l.palletValue)) lines.push(`قيمة البالتة: ${fmtMoney(numOr0(l.palletValue))}`);
+            if (l.notes) lines.push(`ملاحظات: ${l.notes}`);
             if (l.pdfFile) lines.push(`${l.hasPdf ? 'الملف' : 'الرابط'}: ${l.pdfFile}`);
             copyText(lines.join('\n'));
         }
@@ -11733,12 +11825,14 @@
                 'خصم 1': parseFloat(l.discount1) || 0,
                 'خصم 2': parseFloat(l.discount2) || 0,
                 'خصم 3': parseFloat(l.discount3) || 0,
-                'خصم قطعي': parseFloat(l.flatDiscount) || 0,
+                'زيادة قطعية (ج.م)': parseFloat(l.flatIncrease) || 0,
+                'قيمة البالتة (ج.م)': parseFloat(l.palletValue) || 0,
                 'تاريخ البداية': l.startDate,
                 'تاريخ النهاية': l.endDate,
                 'الحالة': statusLabel(listState(l)),
-                'صافي الخصم الفعلي %': parseFloat(calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3, l.flatDiscount)),
-                'الملف': l.pdfFile || ''
+                'صافي الخصم الفعلي %': parseFloat(calculateEffectiveDiscount(l.discount1, l.discount2, l.discount3)),
+                'الملف': l.pdfFile || '',
+                'ملاحظات': l.notes || ''
             }));
             const ws = XLSX.utils.json_to_sheet(rows);
             ws['!cols'] = Object.keys(rows[0]).map(k => ({ wch: Math.max(14, k.length + 4) }));
@@ -11773,6 +11867,12 @@
             if (v === '' || v === null || v === undefined) return 0;
             if (typeof v === 'number') return (v > 0 && v < 1) ? +(v * 100).toFixed(4) : v;
             const n = parseFloat(String(v).replace('%', '').replace(',', '.'));
+            return isNaN(n) ? 0 : n;
+        }
+
+        function parseMoneyValue(v) {
+            if (typeof v === 'number') return isNaN(v) ? 0 : v;
+            const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, ''));
             return isNaN(n) ? 0 : n;
         }
 
@@ -11832,7 +11932,9 @@
                 const d1 = parsePercent(pickValue(row, ['خصم 1', 'نسبة الخصم 1', 'Discount 1']));
                 const d2 = parsePercent(pickValue(row, ['خصم 2', 'نسبة الخصم 2', 'Discount 2']));
                 const d3 = parsePercent(pickValue(row, ['خصم 3', 'نسبة الخصم 3', 'Discount 3']));
-                const d4 = parsePercent(pickValue(row, ['خصم قطعي', 'نسبة الخصم القطعي', 'خصم قطعي %', 'Flat Discount']));
+                const d4 = parseMoneyValue(pickValue(row, ['زيادة قطعية', 'زيادة قطعية (ج.م)', 'خصم قطعي', 'Flat Increase']));
+                const palletValue = parseMoneyValue(pickValue(row, ['إضافة قيمة البالتة', 'قيمة البالتة', 'قيمة البالتة (ج.م)', 'Pallet Value']));
+                const listNotesImp = String(pickValue(row, ['ملاحظات', 'الملاحظات', 'Notes']) || '').trim();
                 const startDate = normalizeDate(pickValue(row, ['تاريخ البداية', 'البداية', 'Start Date']), today);
                 const endDate = normalizeDate(pickValue(row, ['تاريخ النهاية', 'النهاية', 'End Date']), '');
 
@@ -11843,7 +11945,7 @@
                     newCompanies++;
                 }
                 company.lists.push({
-                    id: uid('LST-'), name: listName, discount1: d1, discount2: d2, discount3: d3, flatDiscount: d4,
+                    id: uid('LST-'), name: listName, discount1: d1, discount2: d2, discount3: d3, flatIncrease: d4, palletValue, notes: listNotesImp,
                     startDate, endDate, pdfFile: '', hasPdf: false
                 });
                 imported++;
@@ -12361,10 +12463,10 @@
                 const rows = [];
                 for (const c of appData.companies) for (const l of c.lists) {
                     const st = listState(l);
-                    rows.push([c.name, l.name, l.discount1 || 0, l.discount2 || 0, l.discount3 || 0, l.flatDiscount || 0, effValue(l).toFixed(2) + '%', l.startDate || '', l.endDate || 'بدون انتهاء', statusLabel(st)]);
+                    rows.push([c.name, l.name, l.discount1 || 0, l.discount2 || 0, l.discount3 || 0, l.flatIncrease || 0, l.palletValue || 0, effValue(l).toFixed(2) + '%', l.startDate || '', l.endDate || 'بدون انتهاء', statusLabel(st)]);
                 }
                 this.xlsx('تقرير المصانع واللستات والخصومات — ' + new Date().toLocaleDateString('ar-EG'),
-                    ['المصنع', 'اللستة', 'خصم 1 %', 'خصم 2 %', 'خصم 3 %', 'خصم قطعي %', 'الخصم الفعلي', 'البداية', 'النهاية', 'الحالة'],
+                    ['المصنع', 'اللستة', 'خصم 1 %', 'خصم 2 %', 'خصم 3 %', 'زيادة قطعية (ج.م)', 'قيمة البالتة (ج.م)', 'الخصم الفعلي', 'البداية', 'النهاية', 'الحالة'],
                     rows, 'تقرير-المصانع-والخصومات.xlsx');
             }
         };
@@ -12569,5 +12671,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f35f184fd3ed50',t:'MTc5NTQ3MDQzNw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f35f184fd3ed50',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f385483f644bea',t:'MTc5NTQ3MjAwMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f385483f644bea',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
