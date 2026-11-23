@@ -754,6 +754,7 @@
                 ['custorders.delete', 'حذف طلبيات العملاء']
             ] },
             { title: 'النظام', items: [
+                ['chat.use', 'المحادثات الداخلية (شات ومكالمات صوت وفيديو)'],
                 ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
                 ['settings.manage', 'تعديل الإعدادات وإعادة الضبط'],
@@ -776,12 +777,13 @@
             checks: { title: 'الشيكات', icon: 'fa-money-check-dollar', perm: 'checks.view' },
             orders: { title: 'الطلبيات', icon: 'fa-truck-ramp-box', perm: 'orders.view' },
             customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
+            chat: { title: 'المحادثات', icon: 'fa-comments', perm: 'chat.use' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             shipping: { title: 'الشحن والنقل', icon: 'fa-truck', perm: 'shipping.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'shipping', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'chat', 'shipping', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -1996,6 +1998,7 @@
             listen('lists', fbDb.collection('lists'), s => { fbCache.lists = mapDocs(s); });
             listen('settings', fbDb.collection('settings').doc('main'), s => { fbCache.settings = s.exists ? s.data() : null; });
             startNotifSync();
+            chatStart();
         }
 
         function stopSync() {
@@ -2013,6 +2016,7 @@
             if (fbLogsUnsub) { try { fbLogsUnsub(); } catch (e) { /* already closed */ } }
             fbLogsUnsub = null;
             stopNotifSync();
+            chatStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -3702,6 +3706,7 @@
 
         function canAccessRoute(name) {
             if (name === 'home') return true;
+            if (name === 'chat') return chatCan();
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -3979,7 +3984,7 @@
 
         // The new "home.personal" permission is given to every existing role once (settings.permsVersion 2).
         // After that the admin's choices are kept, even when a role is unticked.
-        const PERMS_VERSION_NOW = 3;
+        const PERMS_VERSION_NOW = 4;
         function ensureHomePersonalPerm() {
             if (!appData || !fbSynced || !sessionUserId) return;
             if ((appData.settings.permsVersion || 1) >= PERMS_VERSION_NOW) return;
@@ -3988,6 +3993,7 @@
                 if (r.locked) return;
                 if (!r.permissions.includes('home.personal')) r.permissions = [...r.permissions, 'home.personal'];
                 if (r.permissions.includes('custorders.view') && !r.permissions.includes('custorders.comments')) r.permissions = [...r.permissions, 'custorders.comments'];
+                if (r.permissions.includes('home.personal') && !r.permissions.includes('chat.use')) r.permissions = [...r.permissions, 'chat.use'];
             });
             appData.settings.permsVersion = PERMS_VERSION_NOW;
             saveState();
@@ -4106,6 +4112,7 @@
                 return `<a href="#/${name}" onclick="toggleSidebar(false)"
                            class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${indent ? 'ps-10' : ''} ${activeName === name ? 'active' : ''}">
                             <i class="fa-solid ${r.icon} w-5 text-center"></i> ${r.title}
+                            ${name === 'chat' ? `<span id="chatNavBadge" class="hidden ms-auto min-w-[1.3rem] h-[1.3rem] px-1 rounded-full bg-rose-600 text-white text-[11px] font-black leading-[1.3rem] text-center"></span>` : ''}
                         </a>`;
             };
             // "طلبيات العملاء" hangs under "الطلبيات" (a collapsible group) when the user may open both
@@ -5602,6 +5609,639 @@
             }
             scheduleUndo('تم حذف التعليق', () => { bringBack(); custCmtWrite(cm); }, () => {});
         }
+
+        // ================= المحادثات الداخلية (شات فوري + مكالمات صوت وفيديو) =================
+        const chatCan = () => can('chat.use') || ((appData?.settings?.permsVersion || 1) < 4 && !!sessionUserId);
+        let chatMetas = [], chatPresence = {}, chatMsgsList = [];
+        let chatActiveWith = null, chatThreadFor = null;
+        let chatThreadUnsub = null, chatMetaUnsub = null, chatPresenceUnsub = null, chatCallUnsub = null;
+        let chatStarted = false, chatPresenceTimer = null, chatUiTimer = null;
+        let chatListQuery = '', chatReplyTo = null, chatEditId = null, chatLastTypePing = 0;
+        let chatAlertedAt = {};
+        const chatMediaCache = new Map();
+        const CHAT_EMOJIS = ['😀','😁','😂','🤣','😊','😍','😘','😎','🤔','😮','😢','😡','👍','👎','🙏','❤️','🔥','⭐','✅','💯','🎉','📦','🚚','💵','🏭','📞','👋','💪','🤝'];
+        const CHAT_REACTS = ['❤️','👍','😂','😮','😢','🙏'];
+
+        const chatMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
+        const chatIdFor = (a, b) => [a, b].sort().join('__');
+        const chatUserById = id => (appData.users || []).find(u => u.id === id) || null;
+        const chatNameOf = id => { const u = chatUserById(id); return u ? u.name : ''; };
+        function chatIsOnline(id) { const p = chatPresence[id]; return !!(p && p.online && (Date.now() - new Date(p.at).getTime() < 90000)); }
+        function chatPresenceText(id) {
+            if (chatIsOnline(id)) return 'متصل الآن';
+            const p = chatPresence[id];
+            return p && p.at ? 'آخر ظهور ' + timeAgo(p.at) : 'غير متصل';
+        }
+        const chatMetaFor = otherId => chatMetas.find(m => m.id === chatIdFor(chatMe(), otherId)) || null;
+        const metaSansId = m => { const { id, ...rest } = m; return rest; };
+        function chatUnreadTotal() { const me = chatMe(); return chatMetas.reduce((n, m) => n + (((m.unread || {})[me]) || 0), 0); }
+        function updateChatNavBadge() {
+            const b = el('chatNavBadge'); if (!b) return;
+            const n = chatUnreadTotal();
+            b.textContent = n > 9 ? '9+' : String(n);
+            b.classList.toggle('hidden', !n);
+        }
+        function chatWriteFailed(err) {
+            console.error('chat write refused', err);
+            const denied = err && (err.code === 'permission-denied' || /permission/i.test(String(err.message || (err && err.code) || '')));
+            toast(denied ? 'السيرفر رفض عملية المحادثة: قواعد الحماية محتاجة تحديث (ملف قواعد الشات)' : 'حصلت مشكلة في الإرسال، جرّب تاني', 'error', null, 7000);
+        }
+        function chatAlertSound() {
+            if (!(window.App && App.Sounds)) return;
+            const p = App.Sounds.prefs();
+            if (!p.enabled) return;
+            const k = p.sections.chat || 'pop';
+            if (k !== 'none') App.Sounds.play(k);
+        }
+
+        function chatStart() {
+            if (chatStarted || !fbDb || !fbUser || !sessionUserId || !chatCan()) return;
+            chatStarted = true;
+            const meUser = currentUser();
+            try {
+                const ref = rtdb.ref('presence/' + chatMe());
+                ref.set({ name: meUser ? meUser.name : '', online: true, at: new Date().toISOString() });
+                ref.onDisconnect().set({ name: meUser ? meUser.name : '', online: false, at: new Date().toISOString() });
+                chatPresenceTimer = setInterval(() => { if (sessionUserId) rtdb.ref('presence/' + chatMe()).update({ online: true, at: new Date().toISOString() }).catch(() => {}); }, 25000);
+            } catch (e) { /* presence is optional */ }
+            chatPresenceUnsub = fbDb.collection('presence').onSnapshot(snap => {
+                chatPresence = {};
+                snap.docs.forEach(d => { chatPresence[d.id] = d.data(); });
+                if (parseRoute().name === 'chat') { chatRenderList(); chatRenderHead(); }
+            }, err => console.error('presence listener', err));
+            chatMetaUnsub = fbDb.collection('chatMeta').onSnapshot(snap => {
+                const before = {};
+                chatMetas.forEach(m => { before[m.id] = m.lastAt || ''; });
+                chatMetas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                updateChatNavBadge();
+                chatMetas.forEach(m => {
+                    const otherId = m.p1 === chatMe() ? m.p2 : m.p1;
+                    if (m.lastBy && m.lastBy !== chatMe() && m.lastAt && m.lastAt !== (before[m.id] || '') && chatAlertedAt[m.id] !== m.lastAt) {
+                        chatAlertedAt[m.id] = m.lastAt;
+                        if (chatActiveWith !== otherId || document.hidden) chatAlertSound();
+                    }
+                });
+                if (parseRoute().name === 'chat') chatRenderList();
+            }, err => console.error('chatMeta listener', err));
+            chatCallUnsub = fbDb.collection('calls').where('to', '==', chatMe()).limit(20).onSnapshot(snap => {
+                snap.docs.forEach(d => {
+                    const c = { id: d.id, ...d.data() };
+                    if (c.state === 'ringing' && !callState && (Date.now() - new Date(c.t).getTime() < 60000)) callIncoming(c);
+                });
+            }, err => console.error('calls listener', err));
+        }
+
+        function chatStop() {
+            [chatThreadUnsub, chatMetaUnsub, chatPresenceUnsub, chatCallUnsub].forEach(u => { if (u) { try { u(); } catch (e) { /* noop */ } } });
+            chatThreadUnsub = chatMetaUnsub = chatPresenceUnsub = chatCallUnsub = null;
+            if (chatPresenceTimer) { clearInterval(chatPresenceTimer); chatPresenceTimer = null; }
+            if (chatUiTimer) { clearInterval(chatUiTimer); chatUiTimer = null; }
+            chatStarted = false;
+            chatMetas = []; chatPresence = {}; chatMsgsList = []; chatActiveWith = null;
+            try { if (sessionUserId) rtdb.ref('presence/' + chatMe()).update({ online: false, at: new Date().toISOString() }).catch(() => {}); } catch (e) { /* noop */ }
+            if (callState) callCleanup();
+        }
+
+        // ---------- subscriptions for the open thread ----------
+        function chatSubThread(otherId) {
+            const cid = chatIdFor(chatMe(), otherId);
+            if (chatThreadFor === cid && chatThreadUnsub) return;
+            chatUnsubThread();
+            chatThreadFor = cid;
+            chatMsgsList = [];
+            chatThreadUnsub = fbDb.collection('chatMsgs').where('chatId', '==', cid).limit(400).onSnapshot(snap => {
+                chatMsgsList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+                if (parseRoute().name === 'chat') chatMarkSeen(cid);
+                if (parseRoute().name === 'chat' && chatActiveWith) { chatRenderThread(); chatRenderHead(); }
+            }, err => console.error('chatMsgs listener', err));
+        }
+        function chatUnsubThread() { if (chatThreadUnsub) { try { chatThreadUnsub(); } catch (e) { /* noop */ } } chatThreadUnsub = null; chatThreadFor = null; }
+        function chatMarkSeen(cid) {
+            const me = chatMe();
+            chatMsgsList.forEach(m => {
+                if (m.by !== me && !m.seen && !m.deleted) {
+                    m.seen = true; m.seenAt = new Date().toISOString();
+                    fbDb.collection('chatMsgs').doc(m.id).update({ seen: true, seenAt: m.seenAt }).catch(() => {});
+                }
+            });
+            const meta = chatMetas.find(x => x.id === cid);
+            if (meta && (((meta.unread || {})[me]) || 0) > 0) {
+                meta.unread = { ...(meta.unread || {}), [me]: 0 };
+                fbDb.collection('chatMeta').doc(cid).update({ unread: { ...meta.unread } }).catch(() => {});
+                updateChatNavBadge();
+                if (parseRoute().name === 'chat') chatRenderList();
+            }
+        }
+
+        // ---------- views ----------
+        function chatPeople() {
+            const me = chatMe();
+            return (appData.users || []).filter(u => u.active && u.id !== me)
+                .map(u => ({ u, m: chatMetaFor(u.id) }))
+                .sort((a, b) => {
+                    const at = a.m ? (a.m.lastAt || '') : '', bt = b.m ? (b.m.lastAt || '') : '';
+                    if (at !== bt) return at < bt ? 1 : -1;
+                    return (a.u.name || '').localeCompare(b.u.name || '', 'ar');
+                });
+        }
+        function chatPreviewText(m, me) {
+            let t = m.lastType === 'img' ? '📷 صورة' : m.lastType === 'audio' ? '🎤 رسالة صوتية' : (m.lastText || '');
+            return m.lastBy === me ? 'أنت: ' + t : t;
+        }
+        function viewChat(param) {
+            chatStart();
+            const other = param ? chatUserById(param) : null;
+            if (param && !other) return { title: 'المحادثات', html: '<div class="bg-white rounded-2xl border border-slate-200 p-8 text-center font-bold text-slate-500">المستخدم ده مش موجود</div>' };
+            chatActiveWith = other ? other.id : null;
+            if (other) chatSubThread(other.id); else chatUnsubThread();
+            return {
+                title: 'المحادثات',
+                html: `<div class="grid lg:grid-cols-[340px,1fr] gap-4 items-start max-w-6xl mx-auto">
+                    <section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden ${other ? 'hidden lg:block' : ''}">
+                        <div class="p-3 border-b border-slate-100">
+                            <input id="chatSearch" value="${esc(chatListQuery)}" oninput="chatListQuery=this.value; chatRenderList()" placeholder="ابحث عن شخص..." class="${INPUT_CLS} !py-2">
+                        </div>
+                        <div id="chatList" class="max-h-[72vh] overflow-y-auto divide-y divide-slate-50"></div>
+                    </section>
+                    <section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden ${other ? 'flex' : 'hidden lg:flex'} flex-col" style="min-height:72vh">
+                        ${other ? chatThreadHtml(other) : '<div class="flex-1 flex flex-col items-center justify-center text-slate-400 p-10 gap-2"><i class="fa-regular fa-comments text-5xl"></i><p class="font-bold">اختار شخص من القايمة وابدأ المحادثة</p></div>'}
+                    </section>
+                </div>`,
+                after: () => chatAfterRender()
+            };
+        }
+        function chatThreadHtml(other) {
+            return `
+            <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100">
+                <button type="button" onclick="navigate('chat')" class="lg:hidden ${BTN_ICON} text-slate-500" aria-label="رجوع"><i class="fa-solid fa-arrow-right"></i></button>
+                ${avatarHtml(other.name)}
+                <div class="flex-1 min-w-0">
+                    <p class="font-black text-sm text-slate-800 truncate">${esc(other.name)}</p>
+                    <p id="chatHeadStatus" class="text-[11px] text-slate-400">${esc(chatPresenceText(other.id))}</p>
+                </div>
+                <button type="button" onclick="startCall('${other.id}', 'audio')" class="${BTN_ICON} text-emerald-600 hover:bg-emerald-50" title="مكالمة صوتية"><i class="fa-solid fa-phone"></i></button>
+                <button type="button" onclick="startCall('${other.id}', 'video')" class="${BTN_ICON} text-brand-600 hover:bg-brand-50" title="مكالمة فيديو"><i class="fa-solid fa-video"></i></button>
+            </div>
+            <div id="chatMsgs" class="flex-1 overflow-y-auto px-3 py-4 space-y-1.5 bg-slate-50" style="min-height:50vh;max-height:62vh"></div>
+            <div id="chatTyping" class="px-3 bg-slate-50"></div>
+            <div id="chatReplyBar" class="bg-white"></div>
+            <div class="border-t border-slate-100 p-2.5 relative">
+                <div id="chatEmojiPanel" class="hidden absolute bottom-full mb-2 start-2 bg-white border border-slate-200 shadow-xl rounded-2xl p-2 grid grid-cols-8 gap-1 w-72 z-20">${CHAT_EMOJIS.map(e => `<button type="button" onclick="chatInsertEmoji('${e}')" class="text-xl p-1 hover:bg-slate-100 rounded-lg">${e}</button>`).join('')}</div>
+                <div id="chatRecBar" class="hidden items-center gap-2 pb-2"></div>
+                <div class="flex items-end gap-1.5">
+                    <button type="button" onclick="el('chatEmojiPanel').classList.toggle('hidden')" class="${BTN_ICON} text-slate-500 shrink-0" title="إيموجي"><i class="fa-regular fa-face-smile"></i></button>
+                    <button type="button" onclick="el('chatImgInput').click()" class="${BTN_ICON} text-slate-500 shrink-0" title="إرسال صورة"><i class="fa-regular fa-image"></i></button>
+                    <input type="file" id="chatImgInput" accept="image/*" class="hidden" onchange="chatSendImage(this)">
+                    <textarea id="chatInput" rows="1" maxlength="4000" placeholder="اكتب رسالة..." class="${INPUT_CLS} flex-1 resize-none !py-2.5 max-h-32" oninput="chatInputGrow(this)" onkeydown="chatInputKey(event)"></textarea>
+                    <button type="button" onclick="chatToggleRecord()" class="${BTN_ICON} text-slate-500 shrink-0" title="رسالة صوتية"><i class="fa-solid fa-microphone"></i></button>
+                    <button type="button" onclick="chatSend()" class="w-10 h-10 shrink-0 rounded-xl bg-brand-600 hover:bg-brand-700 text-white flex items-center justify-center" title="إرسال"><i class="fa-solid fa-paper-plane"></i></button>
+                </div>
+            </div>`;
+        }
+        function chatAfterRender() {
+            chatRenderList();
+            if (chatActiveWith) {
+                const box = el('chatMsgs');
+                if (box) { box.innerHTML = chatThreadInnerHtml(); chatHydrateMedia(box); box.scrollTop = box.scrollHeight; box.dataset.init = '1'; }
+                chatRenderHead();
+                chatMarkSeen(chatIdFor(chatMe(), chatActiveWith));
+                setTimeout(() => { const ta = el('chatInput'); if (ta && window.matchMedia && matchMedia('(pointer:fine)').matches) ta.focus(); }, 60);
+            }
+            if (chatUiTimer) clearInterval(chatUiTimer);
+            chatUiTimer = setInterval(() => {
+                if (parseRoute().name !== 'chat') { clearInterval(chatUiTimer); chatUiTimer = null; return; }
+                chatRenderHead();
+            }, 1500);
+        }
+        function chatRenderList() {
+            const box = el('chatList'); if (!box) return;
+            const me = chatMe();
+            const q = chatListQuery.trim();
+            const rows = chatPeople().filter(({ u }) => !q || (u.name || '').includes(q));
+            box.innerHTML = rows.length ? rows.map(({ u, m }) => {
+                const unread = m ? (((m.unread || {})[me]) || 0) : 0;
+                const active = chatActiveWith === u.id;
+                return `<button type="button" onclick="navigate('chat/${u.id}')" class="w-full flex items-center gap-3 px-3 py-2.5 text-start transition-colors ${active ? 'bg-brand-50' : 'hover:bg-slate-50'}">
+                    <span class="relative shrink-0">${avatarHtml(u.name)}<span class="absolute bottom-0 start-0 w-3 h-3 rounded-full border-2 border-white ${chatIsOnline(u.id) ? 'bg-emerald-500' : 'bg-slate-300'}"></span></span>
+                    <span class="flex-1 min-w-0">
+                        <span class="flex items-baseline gap-2"><b class="text-sm text-slate-800 truncate">${esc(u.name)}</b><span class="text-[10px] text-slate-400 shrink-0">${esc(roleName(u.roleId) || '')}</span></span>
+                        <span class="block text-xs ${unread ? 'text-slate-800 font-bold' : 'text-slate-500'} truncate">${esc(m ? chatPreviewText(m, me) : 'ابدأ محادثة جديدة')}</span>
+                    </span>
+                    <span class="flex flex-col items-end gap-1 shrink-0">
+                        ${m && m.lastAt ? `<span class="text-[10px] text-slate-400">${esc(timeAgo(m.lastAt))}</span>` : ''}
+                        ${unread ? `<span class="min-w-[1.25rem] h-5 px-1 rounded-full bg-rose-600 text-white text-[11px] font-black leading-5 text-center">${unread}</span>` : ''}
+                    </span>
+                </button>`;
+            }).join('') : '<p class="p-6 text-center text-sm text-slate-400 font-bold">لا يوجد أشخاص</p>';
+        }
+        function chatRenderHead() {
+            const st = el('chatHeadStatus'); if (!st || !chatActiveWith) return;
+            const meta = chatMetaFor(chatActiveWith);
+            const typing = !!(meta && meta.typingBy === chatActiveWith && (Date.now() - new Date(meta.typingAt || 0).getTime() < 4500));
+            st.textContent = typing ? 'بيكتب الآن…' : chatPresenceText(chatActiveWith);
+            st.classList.toggle('text-brand-600', typing);
+            st.classList.toggle('font-bold', typing);
+            const tb = el('chatTyping');
+            if (tb) tb.innerHTML = typing ? '<div class="py-1.5"><span class="inline-flex gap-1 bg-white border border-slate-200 rounded-2xl px-3 py-2"><span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span><span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style="animation-delay:.15s"></span><span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style="animation-delay:.3s"></span></span></div>' : '';
+        }
+        function chatDayLabel(day) {
+            const today = new Date().toISOString().slice(0, 10);
+            const yday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+            if (day === today) return 'اليوم';
+            if (day === yday) return 'أمس';
+            return new Date(day + 'T00:00:00').toLocaleDateString('ar-EG', { day: 'numeric', month: 'long', year: 'numeric' });
+        }
+        function chatRenderThread() {
+            const box = el('chatMsgs'); if (!box) return;
+            const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 180;
+            box.innerHTML = chatThreadInnerHtml();
+            chatHydrateMedia(box);
+            if (nearBottom || !box.dataset.init) { box.scrollTop = box.scrollHeight; box.dataset.init = '1'; }
+            chatRenderReplyBar();
+        }
+        function chatThreadInnerHtml() {
+            if (!chatMsgsList.length) return '<div class="h-full flex flex-col items-center justify-center text-slate-400 gap-2 py-10"><i class="fa-regular fa-comments text-4xl"></i><p class="text-sm font-bold">لسه مفيش رسايل — ابدأ الكلام 👋</p></div>';
+            let html = '', lastDay = '';
+            for (const m of chatMsgsList) {
+                const day = (m.t || '').slice(0, 10);
+                if (day !== lastDay) { lastDay = day; html += `<div class="flex justify-center my-3"><span class="text-[11px] font-bold bg-white border border-slate-200 text-slate-500 rounded-full px-3 py-1">${esc(chatDayLabel(day))}</span></div>`; }
+                html += chatBubbleHtml(m);
+            }
+            return html;
+        }
+        function chatBubbleHtml(m) {
+            const me = chatMe();
+            const mine = m.by === me;
+            if (m.deleted) return `<div class="flex ${mine ? 'justify-end' : 'justify-start'}"><div class="max-w-[78%] px-3 py-2 rounded-2xl bg-slate-100 border border-slate-200 text-slate-400 text-sm italic">🚫 رسالة محذوفة</div></div>`;
+            const time = new Date(m.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
+            const ticks = mine ? (m.seen ? '<span class="text-sky-500 font-black" title="اتقرأت">✓✓</span>' : '<span class="opacity-60" title="اتسلمت">✓✓</span>') : '';
+            const groups = {};
+            Object.entries(m.reacts || {}).forEach(([u, e]) => { (groups[e] = groups[e] || []).push(u); });
+            const reactChips = Object.entries(groups).map(([e, us]) => `<button type="button" onclick="chatReact('${m.id}', '${e}')" class="text-xs bg-white border ${us.includes(me) ? 'border-brand-400 bg-brand-50' : 'border-slate-200'} rounded-full px-1.5 py-0.5 shadow-sm">${e} ${us.length}</button>`).join(' ');
+            const media = m.type === 'img' && m.mediaId ? `<div class="mb-1"><img data-media="${esc(m.mediaId)}" alt="صورة مرسلة" class="rounded-xl max-w-[240px] w-full bg-slate-100 cursor-pointer" onclick="chatOpenMedia('${esc(m.mediaId)}')"></div>`
+                : m.type === 'audio' && m.mediaId ? `<audio data-media="${esc(m.mediaId)}" controls class="w-60 max-w-full h-9"></audio>` : '';
+            const quote = m.replyTo ? `<div class="mb-1 px-2 py-1 rounded-lg text-[11px] ${mine ? 'bg-white/15 border-s-2 border-white/60' : 'bg-slate-100 border-s-2 border-brand-400'}"><b>${esc(m.replyBy || '')}</b><br>${esc((m.replyText || '').slice(0, 90))}</div>` : '';
+            return `<div class="group flex ${mine ? 'justify-end' : 'justify-start'}">
+                <div class="max-w-[78%]">
+                    <div class="relative px-3 py-2 shadow-sm ${mine ? 'bg-brand-600 text-white rounded-2xl rounded-bl-md' : 'bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-br-md'}">
+                        ${quote}${media}
+                        ${m.text ? `<p class="text-sm whitespace-pre-wrap break-words">${esc(m.text)}</p>` : ''}
+                        <span class="flex items-center gap-1 justify-end text-[10px] mt-0.5 ${mine ? 'text-white/70' : 'text-slate-400'}">${m.editedAt ? 'اتعدلت · ' : ''}${esc(time)} ${ticks}</span>
+                        <span class="absolute -top-3 ${mine ? '-start-2' : '-end-2'} hidden group-hover:flex gap-0.5 bg-white border border-slate-200 rounded-full shadow px-1 py-0.5 z-10">
+                            <button type="button" onclick="chatStartReply('${m.id}')" title="رد" class="w-6 h-6 text-slate-500 hover:text-brand-600"><i class="fa-solid fa-reply text-[11px]"></i></button>
+                            <button type="button" onclick="chatReactMenu(event, '${m.id}')" title="تفاعل" class="w-6 h-6 text-slate-500 hover:text-amber-500"><i class="fa-regular fa-face-smile text-[11px]"></i></button>
+                            ${mine && m.type === 'text' ? `<button type="button" onclick="chatStartEdit('${m.id}')" title="تعديل" class="w-6 h-6 text-slate-500 hover:text-brand-600"><i class="fa-solid fa-pen text-[11px]"></i></button>` : ''}
+                            ${mine ? `<button type="button" onclick="chatDeleteMsg('${m.id}')" title="حذف" class="w-6 h-6 text-slate-500 hover:text-rose-600"><i class="fa-solid fa-trash-can text-[11px]"></i></button>` : ''}
+                        </span>
+                    </div>
+                    ${reactChips ? `<div class="flex gap-1 mt-0.5 ${mine ? 'justify-end' : 'justify-start'}">${reactChips}</div>` : ''}
+                </div>
+            </div>`;
+        }
+
+        // ---------- media ----------
+        async function chatLoadMedia(mediaId) {
+            if (chatMediaCache.has(mediaId)) return chatMediaCache.get(mediaId);
+            try {
+                const snap = await rtdb.ref('chatMedia/' + mediaId).once('value');
+                const v = snap.val();
+                if (!v || !v.chunks) return null;
+                const url = 'data:' + (v.mime || 'application/octet-stream') + ';base64,' + v.chunks.join('');
+                chatMediaCache.set(mediaId, url);
+                return url;
+            } catch (e) { return null; }
+        }
+        function chatHydrateMedia(root) {
+            (root || document).querySelectorAll('[data-media]').forEach(async elm => {
+                if (elm.getAttribute('src')) return;
+                const url = await chatLoadMedia(elm.getAttribute('data-media'));
+                if (url) elm.setAttribute('src', url);
+            });
+        }
+        function chatOpenMedia(mediaId) { chatLoadMedia(mediaId).then(url => { if (url) window.open(url, '_blank'); }); }
+        function chatUploadMedia(dataUrl) {
+            const id = uid('MED-');
+            const mime = (dataUrl.match(/^data:([^;]+)/) || [])[1] || 'application/octet-stream';
+            const b64 = dataUrl.split(',')[1] || '';
+            const chunks = [];
+            for (let i = 0; i < b64.length; i += 60000) chunks.push(b64.slice(i, i + 60000));
+            return rtdb.ref('chatMedia/' + id).set({ mime, chunks, by: chatMe(), at: new Date().toISOString() }).then(() => id);
+        }
+
+        // ---------- composer ----------
+        function chatPostMessage({ type, text = '', mediaId = '' }) {
+            const otherId = chatActiveWith; if (!otherId) return;
+            const me = chatMe(), meUser = currentUser();
+            const cid = chatIdFor(me, otherId);
+            const now = new Date().toISOString();
+            const msg = { id: uid('MSG-'), chatId: cid, by: me, byName: meUser ? meUser.name : '', text, type, mediaId, t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: chatReplyTo ? chatReplyTo.id : '', replyText: chatReplyTo ? chatReplyTo.text : '', replyBy: chatReplyTo ? chatReplyTo.byName : '', reacts: {} };
+            fbDb.collection('chatMsgs').doc(msg.id).set(msg).catch(err => chatWriteFailed(err));
+            const prev = chatMetaFor(otherId);
+            const unread = { ...((prev && prev.unread) || {}) };
+            unread[otherId] = (unread[otherId] || 0) + 1; unread[me] = 0;
+            const parts = cid.split('__');
+            fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: type === 'text' ? text.slice(0, 120) : (type === 'img' ? '📷 صورة' : '🎤 رسالة صوتية'), lastType: type, lastAt: now, lastBy: me, unread, typingBy: '', typingAt: '' }).catch(err => chatWriteFailed(err));
+            chatReplyTo = null;
+            chatRenderReplyBar();
+        }
+        function chatSend() {
+            const ta = el('chatInput'); if (!ta || !chatActiveWith) return;
+            const text = ta.value.trim();
+            if (chatEditId) {
+                const m = chatMsgsList.find(x => x.id === chatEditId);
+                if (m && text) { m.text = text; m.editedAt = new Date().toISOString(); fbDb.collection('chatMsgs').doc(m.id).update({ text, editedAt: m.editedAt }).catch(err => chatWriteFailed(err)); }
+                chatEditId = null; ta.value = ''; chatInputGrow(ta); chatRenderThread();
+                return;
+            }
+            if (!text) return;
+            chatPostMessage({ type: 'text', text });
+            ta.value = ''; chatInputGrow(ta);
+        }
+        function chatStartReply(id) { const m = chatMsgsList.find(x => x.id === id); if (!m) return; chatReplyTo = { id: m.id, text: m.type === 'text' ? m.text : (m.type === 'img' ? '📷 صورة' : '🎤 رسالة صوتية'), byName: m.byName }; chatRenderReplyBar(); const ta = el('chatInput'); if (ta) ta.focus(); }
+        function chatCancelReply() { chatReplyTo = null; chatRenderReplyBar(); }
+        function chatRenderReplyBar() {
+            const bar = el('chatReplyBar'); if (!bar) return;
+            bar.innerHTML = chatReplyTo ? `<div class="mx-2.5 mt-2 flex items-center gap-2 bg-brand-50 border border-brand-100 rounded-xl px-3 py-2 text-xs"><i class="fa-solid fa-reply text-brand-600"></i><span class="flex-1 truncate"><b>${esc(chatReplyTo.byName)}</b>: ${esc(chatReplyTo.text.slice(0, 80))}</span><button type="button" onclick="chatCancelReply()" class="text-slate-400 hover:text-rose-600"><i class="fa-solid fa-xmark"></i></button></div>` : '';
+        }
+        function chatStartEdit(id) { const m = chatMsgsList.find(x => x.id === id); if (!m) return; chatEditId = id; const ta = el('chatInput'); if (ta) { ta.value = m.text || ''; chatInputGrow(ta); ta.focus(); } }
+        function chatDeleteMsg(id) {
+            const m = chatMsgsList.find(x => x.id === id); if (!m) return;
+            m.deleted = true; m.text = ''; m.mediaId = '';
+            fbDb.collection('chatMsgs').doc(id).update({ deleted: true, text: '', mediaId: '' }).catch(err => chatWriteFailed(err));
+            chatRenderThread();
+        }
+        function chatReactMenu(e, id) {
+            e.stopPropagation();
+            chatCloseReactPop();
+            const pop = document.createElement('div');
+            pop.id = 'chatReactPop';
+            pop.className = 'fixed z-[80] bg-white border border-slate-200 shadow-xl rounded-full px-2 py-1 flex gap-1';
+            pop.innerHTML = CHAT_REACTS.map(em => `<button type="button" class="text-xl hover:scale-125 transition-transform" onclick="chatReact('${id}', '${em}')">${em}</button>`).join('');
+            document.body.appendChild(pop);
+            pop.style.left = Math.min(innerWidth - 250, Math.max(8, e.clientX - 100)) + 'px';
+            pop.style.top = Math.max(8, e.clientY - 54) + 'px';
+            setTimeout(() => document.addEventListener('click', chatCloseReactPop, { once: true }), 0);
+        }
+        function chatCloseReactPop() { const p = el('chatReactPop'); if (p) p.remove(); }
+        function chatReact(id, emoji) {
+            chatCloseReactPop();
+            const m = chatMsgsList.find(x => x.id === id); if (!m) return;
+            const me = chatMe();
+            const reacts = { ...(m.reacts || {}) };
+            if (reacts[me] === emoji) delete reacts[me]; else reacts[me] = emoji;
+            m.reacts = reacts;
+            fbDb.collection('chatMsgs').doc(id).update({ reacts }).catch(err => chatWriteFailed(err));
+            chatRenderThread();
+        }
+        function chatInsertEmoji(e) { const ta = el('chatInput'); if (!ta) return; const st = ta.selectionStart || ta.value.length; ta.value = ta.value.slice(0, st) + e + ta.value.slice(ta.selectionEnd || st); ta.focus(); chatInputGrow(ta); }
+        function chatInputGrow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(128, ta.scrollHeight) + 'px'; chatTypePing(); }
+        function chatInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend(); } }
+        function chatTypePing() {
+            const now = Date.now();
+            if (!chatActiveWith || now - chatLastTypePing < 2500) return;
+            chatLastTypePing = now;
+            const meta = chatMetaFor(chatActiveWith); if (!meta) return;
+            fbDb.collection('chatMeta').doc(meta.id).update({ typingBy: chatMe(), typingAt: new Date().toISOString() }).catch(() => {});
+        }
+        function chatSendImage(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file || !chatActiveWith) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                const img = new Image();
+                img.onload = () => {
+                    const max = 1280, sc = Math.min(1, max / Math.max(img.width, img.height));
+                    const cv = document.createElement('canvas');
+                    cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
+                    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+                    const caption = (el('chatInput') && el('chatInput').value || '').trim();
+                    chatUploadMedia(cv.toDataURL('image/jpeg', 0.82))
+                        .then(mediaId => { chatPostMessage({ type: 'img', text: caption, mediaId }); const ta = el('chatInput'); if (ta) ta.value = ''; })
+                        .catch(err => chatWriteFailed(err));
+                };
+                img.onerror = () => toast('الصورة دي مش صالحة', 'error');
+                img.src = String(reader.result);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ---------- voice notes ----------
+        let chatRecorder = null, chatRecChunks = [], chatRecTimer = null, chatRecStart = 0, chatRecStream = null;
+        async function chatToggleRecord() {
+            if (chatRecorder && chatRecorder.state === 'recording') { chatRecorder.stop(); return; }
+            if (!navigator.mediaDevices || !window.MediaRecorder) return toast('المتصفح مش بيدعم تسجيل الصوت', 'error');
+            if (!chatActiveWith) return;
+            try { chatRecStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+            catch (e) { return toast('اسمح بالوصول للمايك عشان تسجل رسالة صوتية', 'error'); }
+            chatRecChunks = [];
+            chatRecorder = new MediaRecorder(chatRecStream);
+            chatRecorder.ondataavailable = e => { if (e.data && e.data.size) chatRecChunks.push(e.data); };
+            chatRecorder.onstop = chatFinishRecord;
+            chatRecorder.start();
+            chatRecStart = Date.now();
+            const bar = el('chatRecBar');
+            if (bar) {
+                bar.classList.remove('hidden'); bar.classList.add('flex');
+                bar.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse"></span><span class="text-sm font-bold text-rose-600">بيسجل… <span id="chatRecTime">0:00</span></span><span class="flex-1"></span><button type="button" onclick="chatCancelRecord()" class="${BTN_SECONDARY} !py-1.5">إلغاء</button><button type="button" onclick="chatToggleRecord()" class="${BTN_PRIMARY} !py-1.5"><i class="fa-solid fa-paper-plane"></i> إرسال</button>`;
+            }
+            chatRecTimer = setInterval(() => { const t = el('chatRecTime'); if (t) { const sec = Math.floor((Date.now() - chatRecStart) / 1000); t.textContent = Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); } }, 250);
+        }
+        function chatCancelRecord() {
+            if (chatRecorder) chatRecorder.onstop = () => chatRecCleanup();
+            if (chatRecorder && chatRecorder.state === 'recording') chatRecorder.stop(); else chatRecCleanup();
+            chatRecChunks = [];
+        }
+        function chatRecCleanup() {
+            if (chatRecTimer) { clearInterval(chatRecTimer); chatRecTimer = null; }
+            if (chatRecStream) { chatRecStream.getTracks().forEach(t => t.stop()); chatRecStream = null; }
+            chatRecorder = null;
+            const bar = el('chatRecBar');
+            if (bar) { bar.classList.add('hidden'); bar.classList.remove('flex'); bar.innerHTML = ''; }
+        }
+        function chatFinishRecord() {
+            const type = chatRecorder && chatRecorder.mimeType ? chatRecorder.mimeType : 'audio/webm';
+            const blob = new Blob(chatRecChunks, { type });
+            chatRecCleanup();
+            if (!blob.size || !chatActiveWith) return;
+            const reader = new FileReader();
+            reader.onload = () => chatUploadMedia(String(reader.result)).then(mediaId => chatPostMessage({ type: 'audio', mediaId })).catch(err => chatWriteFailed(err));
+            reader.readAsDataURL(blob);
+        }
+
+        // ---------- مكالمات صوت وفيديو (WebRTC) ----------
+        let callState = null, callRingTimer = null;
+        const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+        function callOverlayEl() {
+            let ov = el('callOverlay');
+            if (!ov) {
+                ov = document.createElement('div');
+                ov.id = 'callOverlay';
+                ov.className = 'hidden fixed inset-0 z-[90] bg-slate-950/95 flex-col items-center justify-center text-white p-4 overflow-y-auto';
+                document.body.appendChild(ov);
+            }
+            return ov;
+        }
+        function callShow(html) { const ov = callOverlayEl(); ov.innerHTML = html; ov.classList.remove('hidden'); ov.classList.add('flex'); }
+        function callHide() { const ov = el('callOverlay'); if (ov) { ov.classList.add('hidden'); ov.classList.remove('flex'); ov.innerHTML = ''; } }
+        function callRing(start) {
+            if (start) {
+                const ring = () => { if (window.App && App.Sounds && App.Sounds.prefs().enabled) App.Sounds.play('bell'); };
+                ring();
+                callRingTimer = setInterval(ring, 2200);
+            } else if (callRingTimer) { clearInterval(callRingTimer); callRingTimer = null; }
+        }
+        function callUiHtml(other, status) {
+            const video = !!(callState && callState.kind === 'video');
+            return `<div class="w-full max-w-3xl flex flex-col items-center gap-3 py-6">
+                ${video ? `<div class="relative w-full">
+                    <video id="callRemoteVideo" autoplay playsinline class="w-full max-h-[60vh] rounded-2xl bg-black object-cover"></video>
+                    <video id="callLocalVideo" autoplay muted playsinline class="absolute bottom-3 end-3 w-28 sm:w-36 rounded-xl border-2 border-white/40 bg-black object-cover"></video>
+                </div>` : `<div class="py-4">${avatarHtml(other ? other.name : '', 'w-28 h-28 text-4xl')}</div>`}
+                <audio id="callRemoteAudio" autoplay></audio>
+                <p class="font-black text-lg">${esc(other ? other.name : '')}</p>
+                <p id="callStatus" class="text-slate-300 text-sm">${esc(status)}</p>
+                <div class="flex items-center gap-4 pt-1">
+                    <button type="button" id="callMuteBtn" onclick="callToggleMute()" class="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center" title="كتم المايك"><i class="fa-solid fa-microphone"></i></button>
+                    ${video ? '<button type="button" id="callCamBtn" onclick="callToggleCam()" class="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center" title="الكاميرا"><i class="fa-solid fa-video"></i></button>' : ''}
+                    <button type="button" onclick="callEnd(true)" class="w-14 h-14 rounded-full bg-rose-600 hover:bg-rose-500 flex items-center justify-center text-xl shadow-lg shadow-rose-900/50" title="إنهاء المكالمة"><i class="fa-solid fa-phone-slash"></i></button>
+                </div>
+            </div>`;
+        }
+        function callAttachLocal() { const lv = el('callLocalVideo'); if (lv && callState && callState.stream) lv.srcObject = callState.stream; }
+        function callAttachRemote() {
+            if (!callState || !callState.remoteStream) return;
+            if (callState.kind === 'video') { const rv = el('callRemoteVideo'); if (rv) rv.srcObject = callState.remoteStream; }
+            else { const ra = el('callRemoteAudio'); if (ra) ra.srcObject = callState.remoteStream; }
+        }
+        function callRenderLive(other) {
+            callShow(callUiHtml(other, 'المكالمة جارية'));
+            callAttachLocal();
+            callAttachRemote();
+            if (callState.liveTimer) clearInterval(callState.liveTimer);
+            callState.liveTimer = setInterval(() => { const st = el('callStatus'); if (st && callState && callState.startedAt) { const sec = Math.floor((Date.now() - callState.startedAt) / 1000); st.textContent = Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); } }, 1000);
+        }
+        function callSetupPc() {
+            const pc = new RTCPeerConnection(RTC_CFG);
+            callState.pc = pc;
+            if (callState.stream) callState.stream.getTracks().forEach(tr => pc.addTrack(tr, callState.stream));
+            pc.ontrack = e => {
+                const stream = e.streams[0];
+                if (!stream || !callState) return;
+                callState.remoteStream = stream;
+                callAttachRemote();
+            };
+            pc.onicecandidate = e => { if (e.candidate && callState) fbDb.collection('callIce').doc(uid('ICE-')).set({ callId: callState.id, by: chatMe(), cand: JSON.stringify(e.candidate.toJSON()) }).catch(() => {}); };
+            pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' && callState) { toast('فشل الاتصال — الشبكة ضعيفة', 'error'); callEnd(true); } };
+            return pc;
+        }
+        function callSubIce() {
+            callState.iceUnsub = fbDb.collection('callIce').where('callId', '==', callState.id).limit(100).onSnapshot(snap => {
+                snap.docs.forEach(d => {
+                    if (!callState || callState.iceSeen.has(d.id)) return;
+                    callState.iceSeen.add(d.id);
+                    const v = d.data();
+                    if (!v || v.by === chatMe()) return;
+                    let cand = null;
+                    try { cand = JSON.parse(v.cand || 'null'); } catch (e) { /* noop */ }
+                    if (!cand) return;
+                    if (callState.pc && callState.pc.remoteDescription) callState.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+                    else callState.pendingIce.push(cand);
+                });
+            }, () => {});
+        }
+        function callFlushIce() { if (!callState || !callState.pc) return; const pc = callState.pc; callState.pendingIce.splice(0).forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})); }
+        function callNewState(id, otherId, kind, role) {
+            return { id, otherId, kind, role, state: 'ringing', pc: null, stream: null, remoteStream: null, docUnsub: null, iceUnsub: null, pendingIce: [], iceSeen: new Set(), startedAt: 0, timer: null, liveTimer: null, offer: '' };
+        }
+        async function startCall(otherId, kind) {
+            if (!chatCan()) return toast('صلاحية المحادثات مش مفعّلة لدورك', 'error');
+            if (callState) return toast('انت في مكالمة بالفعل', 'error');
+            const other = chatUserById(otherId); if (!other) return;
+            if (!navigator.mediaDevices || !window.RTCPeerConnection) return toast('المتصفح ده مش بيدعم المكالمات', 'error');
+            callState = callNewState(uid('CALL-'), otherId, kind, 'caller');
+            callShow(callUiHtml(other, 'بيتصل…'));
+            try { callState.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: kind === 'video' }); }
+            catch (e) { callCleanup(); return toast('اسمح بالكاميرا والمايك عشان تعمل مكالمة', 'error'); }
+            callAttachLocal();
+            const pc = callSetupPc();
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            const meUser = currentUser();
+            fbDb.collection('calls').doc(callState.id).set({ from: chatMe(), fromName: meUser ? meUser.name : '', to: otherId, kind, state: 'ringing', offer: JSON.stringify(offer), answer: '', t: new Date().toISOString() })
+                .catch(err => { chatWriteFailed(err); callEnd(false); });
+            callState.docUnsub = fbDb.collection('calls').doc(callState.id).onSnapshot(async snap => {
+                if (!snap.exists || !callState) return;
+                const c = snap.data();
+                if (c.answer && !pc.remoteDescription) { try { await pc.setRemoteDescription(JSON.parse(c.answer)); callFlushIce(); } catch (e) { /* noop */ } }
+                if (c.state === 'accepted' && callState.state === 'ringing') { callState.state = 'live'; callState.startedAt = Date.now(); callRenderLive(other); }
+                if ((c.state === 'ended' || c.state === 'rejected') && callState.state !== 'done') { toast(c.state === 'rejected' ? 'تم رفض المكالمة' : 'انتهت المكالمة', 'info'); callEnd(false); }
+            }, () => {});
+            callSubIce();
+            callState.timer = setTimeout(() => { if (callState && callState.state === 'ringing') { toast('محدش رد على المكالمة', 'info'); callEnd(true); } }, 45000);
+        }
+        function callIncoming(c) {
+            if (callState) return;
+            const other = chatUserById(c.from);
+            callState = callNewState(c.id, c.from, c.kind, 'callee');
+            callState.state = 'incoming';
+            callState.offer = c.offer || '';
+            callRing(true);
+            callShow(`<div class="text-center space-y-4 py-8">
+                    <div class="flex justify-center">${avatarHtml(c.fromName || (other ? other.name : ''), 'w-24 h-24 text-3xl')}</div>
+                    <div><p class="text-xl font-black">${esc(c.fromName || (other ? other.name : ''))}</p>
+                    <p class="text-slate-300 text-sm mt-1">${c.kind === 'video' ? '📹 مكالمة فيديو واردة' : '📞 مكالمة صوتية واردة'}</p></div>
+                    <div class="flex items-center justify-center gap-6 pt-2">
+                        <button type="button" onclick="callReject()" class="w-16 h-16 rounded-full bg-rose-600 hover:bg-rose-500 flex items-center justify-center text-2xl shadow-lg shadow-rose-900/50" title="رفض"><i class="fa-solid fa-phone-slash"></i></button>
+                        <button type="button" onclick="callAccept()" class="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-400 flex items-center justify-center text-2xl shadow-lg shadow-emerald-900/50 animate-bounce" title="قبول"><i class="fa-solid fa-phone"></i></button>
+                    </div>
+                </div>`);
+            callState.timer = setTimeout(() => { if (callState && callState.state === 'incoming') callEnd(false); }, 60000);
+        }
+        async function callAccept() {
+            if (!callState) return;
+            callRing(false);
+            const other = chatUserById(callState.otherId);
+            callShow(callUiHtml(other, 'بيوصّل…'));
+            try { callState.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callState.kind === 'video' }); }
+            catch (e) { callEnd(true); return toast('اسمح بالكاميرا والمايك عشان ترد على المكالمة', 'error'); }
+            callAttachLocal();
+            const pc = callSetupPc();
+            try { await pc.setRemoteDescription(JSON.parse(callState.offer)); } catch (e) { callEnd(true); return; }
+            callFlushIce();
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            callState.state = 'live';
+            callState.startedAt = Date.now();
+            fbDb.collection('calls').doc(callState.id).update({ answer: JSON.stringify(answer), state: 'accepted' }).catch(err => chatWriteFailed(err));
+            callState.docUnsub = fbDb.collection('calls').doc(callState.id).onSnapshot(snap => {
+                if (snap.exists && callState && snap.data().state === 'ended') callEnd(false);
+            }, () => {});
+            callSubIce();
+            callRenderLive(other);
+        }
+        function callReject() { if (!callState) return; fbDb.collection('calls').doc(callState.id).update({ state: 'rejected' }).catch(() => {}); callEnd(false); }
+        function callEnd(updateDoc = true) {
+            if (!callState) { callHide(); return; }
+            const cs = callState;
+            if (updateDoc && cs.id) fbDb.collection('calls').doc(cs.id).update({ state: 'ended' }).catch(() => {});
+            callCleanup();
+        }
+        function callCleanup() {
+            callRing(false);
+            if (!callState) { callHide(); return; }
+            const cs = callState;
+            callState = null;
+            if (cs.timer) clearTimeout(cs.timer);
+            if (cs.liveTimer) clearInterval(cs.liveTimer);
+            [cs.docUnsub, cs.iceUnsub].forEach(u => { if (u) { try { u(); } catch (e) { /* noop */ } } });
+            if (cs.stream) cs.stream.getTracks().forEach(t => t.stop());
+            if (cs.pc) { try { cs.pc.close(); } catch (e) { /* noop */ } }
+            callHide();
+        }
+        function callToggleMute() { if (!callState || !callState.stream) return; const tr = callState.stream.getAudioTracks()[0]; if (!tr) return; tr.enabled = !tr.enabled; const b = el('callMuteBtn'); if (b) b.innerHTML = `<i class="fa-solid ${tr.enabled ? 'fa-microphone' : 'fa-microphone-slash'}"></i>`; }
+        function callToggleCam() { if (!callState || !callState.stream) return; const tr = callState.stream.getVideoTracks()[0]; if (!tr) return; tr.enabled = !tr.enabled; const b = el('callCamBtn'); if (b) b.innerHTML = `<i class="fa-solid ${tr.enabled ? 'fa-video' : 'fa-video-slash'}"></i>`; }
+
 
         let custOrderSnapshots = {};       // key -> map of orders from one listener (repId / repName / all)
         let fbCustSubKeys = new Set();     // listeners already open in this session
@@ -7935,6 +8575,7 @@
         const VIEWS = {
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
+            chat: param => viewChat(param),
             shipping: param => param === 'screen' ? viewShippingScreen() : param === 'trips' ? viewShipTrips() : viewShipping(),
             home: () => viewHome(),
             dashboard: () => viewDashboard(),
@@ -10513,6 +11154,7 @@
                 ['lists', 'اللستات', 'cash'],
                 ['orders', 'الطلبيات', 'chime'],
                 ['custorders', 'طلبيات العملاء والتعليقات', 'pop'],
+                ['chat', 'المحادثات', 'pop'],
                 ['checks', 'الشيكات والمستفيدين', 'bell'],
                 ['companies', 'المصانع والشركات', 'clank'],
                 ['users', 'المستخدمون والصلاحيات', 'click'],
@@ -10546,7 +11188,7 @@
                 return next;
             },
             sectionOf(n) {
-                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
+                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', chat: 'chat', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
                 if (n && n.target && byCol[n.target.col]) return byCol[n.target.col];
                 const k = (n && n.kind) || '';
                 if (k.includes('شحن')) return 'shipping';
@@ -10953,5 +11595,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec817a3922e15d',t:'MTc5NTM5ODQ0NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec817a3922e15d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ef9e1b9f2ebae0',t:'MTc5NTQzMTA3NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ef9e1b9f2ebae0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
