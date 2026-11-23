@@ -761,6 +761,7 @@
                 ['chat.use', 'المحادثات الداخلية (شات ومكالمات صوت وفيديو)'],
                 ['expenses.request', 'المصروفات: إنشاء طلبات صرف وعرض طلباتي'],
                 ['expenses.approve', 'المصروفات: اعتماد أو رفض طلبات الصرف وتسجيل الصرف'],
+                ['expenses.delete', 'المصروفات: حذف أذونات الصرف (حذف آمن بسجل تدقيق — الإذن المصروف للمدير العام فقط)'],
                 ['complaints.file', 'الشكاوي والتقييم: تقديم شكوى وعرض شكاويّ وتقييماتي'],
                 ['complaints.manage', 'إدارة الشكاوي (مراجعة ورد وحسم) وتقييم الموظفين'],
                 ['logs.view', 'عرض سجل النشاط'],
@@ -4022,7 +4023,7 @@
 
         // The new "home.personal" permission is given to every existing role once (settings.permsVersion 2).
         // After that the admin's choices are kept, even when a role is unticked.
-        const PERMS_VERSION_NOW = 6;
+        const PERMS_VERSION_NOW = 7;
         function ensureHomePersonalPerm() {
             if (!appData || !fbSynced || !sessionUserId) return;
             if ((appData.settings.permsVersion || 1) >= PERMS_VERSION_NOW) return;
@@ -4036,6 +4037,7 @@
                 if (r.permissions.includes('users.manage') && !r.permissions.includes('complaints.manage')) r.permissions = [...r.permissions, 'complaints.manage'];
                 if (r.permissions.includes('home.personal') && !r.permissions.includes('expenses.request')) r.permissions = [...r.permissions, 'expenses.request'];
                 if (r.permissions.includes('users.manage') && !r.permissions.includes('expenses.approve')) r.permissions = [...r.permissions, 'expenses.approve'];
+                if (r.permissions.includes('expenses.approve') && !r.permissions.includes('expenses.delete')) r.permissions = [...r.permissions, 'expenses.delete'];
             });
             appData.settings.permsVersion = PERMS_VERSION_NOW;
             saveState();
@@ -6691,6 +6693,8 @@
         const expMediaCache = new Map();
         const canExpRequest = () => can('expenses.request') || isSystemAdmin();
         const canExpApprove = () => can('expenses.approve') || isSystemAdmin();
+        const canExpDelete = () => can('expenses.delete') || isSystemAdmin();
+        const expVisible = () => expList.filter(e => !e.deleted);
         const expMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
         const expById = id => expList.find(x => x.id === id) || null;
         const expIsPending = e => e && e.status === EXP_PENDING;
@@ -6705,7 +6709,7 @@
             }, err => console.error('expenses listener', err));
         }
         function expStop() { if (expUnsub) { try { expUnsub(); } catch (e) { /* noop */ } } expUnsub = null; expStarted = false; expList = []; updateExpNavBadge(); }
-        function expPendingForMe() { return canExpApprove() ? expList.filter(e => expIsPending(e) && e.by !== expMe()) : []; }
+        function expPendingForMe() { return canExpApprove() ? expVisible().filter(e => expIsPending(e) && e.by !== expMe()) : []; }
         function updateExpNavBadge() {
             const b = el('expNavBadge'); if (!b) return;
             const n = expPendingForMe().length;
@@ -6764,6 +6768,51 @@
             if (!confirm('إلغاء إذن الصرف رقم ' + e.no + '؟')) return;
             fbDb.collection('expenses').doc(id).update({ status: EXP_CANCELLED, history: expHist(e, EXP_CANCELLED) }).then(() => toast('اتلغى الطلب', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
         }
+        function expDoDelete(id, reason) {
+            const e = expById(id);
+            if (!e || e.deleted) return false;
+            if (!canExpDelete()) { toast('معندكش صلاحية حذف أذونات الصرف', 'error'); return false; }
+            if (e.status === EXP_PAID && !isSystemAdmin()) { toast('الإذن اللي اتصرف خلاص مينفعش يتحذف إلا بواسطة مدير النظام', 'error'); return false; }
+            if (!String(reason || '').trim()) { toast('لازم تكتب سبب الحذف', 'error'); return false; }
+            const patch = { deleted: true, deletedAt: new Date().toISOString(), deletedBy: expMe(), deletedByName: (currentUser() || {}).name || '', deleteReason: String(reason).trim(), prevStatus: e.status, history: expHist(e, 'حذف الإذن', reason) };
+            fbDb.collection('expenses').doc(id).update(patch).then(() => {
+                if (e.by !== expMe()) expNotify(e.by, 'حذف', 'حذف إذن صرف', e);
+                toast('اتحذف الإذن (موجود في سجل المحذوفات لو احتجت ترجعه)', 'success');
+                if (parseRoute().name === 'expenses') expRenderBody();
+            }).catch(() => toast('حصلت مشكلة في الحذف', 'error'));
+            return true;
+        }
+        function expRestore(id) {
+            const e = expById(id);
+            if (!e || !e.deleted || !canExpDelete()) return;
+            fbDb.collection('expenses').doc(id).update({ deleted: false, restoredAt: new Date().toISOString(), history: expHist(e, 'استعادة من الحذف') }).then(() => { toast('رجع الإذن زي ما كان ✅', 'success'); if (parseRoute().name === 'expenses') expRenderBody(); }).catch(() => toast('حصلت مشكلة', 'error'));
+        }
+        function expDeleteModal(id) {
+            const e = expById(id); if (!e) return;
+            const paid = e.status === EXP_PAID;
+            if (paid && !isSystemAdmin()) return toast('الإذن اللي اتصرف خلاص مينفعش يتحذف إلا بواسطة مدير النظام', 'error');
+            openModal({ title: 'حذف إذن صرف رقم ' + e.no, body: `
+                <div class="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-rose-800 mb-3">
+                    <b>خد بالك:</b> الحذف هنا بيخفي الإذن من كل القوائم والتقارير، لكنه بيضل محفوظ في «سجل المحذوفات» باسم اللي حذفه وسببه — مفيش حاجة بتتمسح نهائيًا من السجلات المالية.
+                    ${paid ? '<br><b>الإذن ده اتصرف فعليًا</b> — عشان كده الحذف مقيد بمدير النظام وبيحتاج تأكيد برقم الإذن.' : ''}
+                </div>
+                <p class="text-sm text-slate-600 mb-3">${esc(e.title)} — <b>${fmtMoney(numOr0(e.amount))}</b> · طالب الصرف: ${esc(e.byName || '')} · الحالة: ${esc(e.status)}</p>
+                <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">سبب الحذف (إلزامي وهيتسجل)</span>
+                    <textarea id="expDelReason" rows="2" maxlength="300" class="${INPUT_CLS}" placeholder="مثال: إذن مكرر / اتعمل بالخطأ..."></textarea></label>
+                ${paid ? `<label class="block mt-3"><span class="block text-xs font-bold text-slate-600 mb-1">للتأكيد اكتب رقم الإذن (${e.no})</span>
+                    <input id="expDelConfirmNo" class="${INPUT_CLS}" placeholder="${e.no}"></label>` : ''}
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">تراجع</button>
+                    <button type="button" onclick="expDeleteSubmit('${id}', ${paid})" class="${BTN_SECONDARY} !bg-rose-600 !text-white !border-rose-600 hover:!bg-rose-700 font-bold">حذف الإذن</button>
+                </div>` });
+        }
+        function expDeleteSubmit(id, paid) {
+            const e = expById(id); if (!e) return;
+            const reason = el('expDelReason').value.trim();
+            if (!reason) return toast('لازم تكتب سبب الحذف', 'error');
+            if (paid && el('expDelConfirmNo').value.trim() !== String(e.no)) return toast('اكتب رقم الإذن صح عشان تأكد الحذف', 'error');
+            if (expDoDelete(id, reason)) closeModal();
+        }
         function expUpdate(id, obj) {
             const e = expById(id);
             if (!e || !expIsPending(e) || e.by !== expMe()) return Promise.resolve(false);
@@ -6820,12 +6869,13 @@
             return `<span class="text-[11px] font-black border rounded-full px-2 py-0.5 ${map[st] || map[EXP_PENDING]}">${esc(st)}</span>`;
         }
         function expMonthKey(d) { return String(d || '').slice(0, 7); }
-        function expPaidRows() { return expList.filter(e => e.status === EXP_PAID); }
+        function expPaidRows() { return expVisible().filter(e => e.status === EXP_PAID); }
         function expStats() {
             const mk = expMonthKey(todayISO());
+            const vis = expVisible();
             const paidMonth = expPaidRows().filter(e => expMonthKey(e.paidAt) === mk).reduce((a, e) => a + numOr0(e.paidAmount || e.amount), 0);
-            const pending = expList.filter(e => expIsPending(e));
-            const approvedUnpaid = expList.filter(e => e.status === EXP_APPROVED);
+            const pending = vis.filter(e => expIsPending(e));
+            const approvedUnpaid = vis.filter(e => e.status === EXP_APPROVED);
             const paidToday = expPaidRows().filter(e => String(e.paidAt || '').slice(0, 10) === todayISO()).reduce((a, e) => a + numOr0(e.paidAmount || e.amount), 0);
             return { paidMonth, pendingCount: pending.length, pendingSum: pending.reduce((a, e) => a + numOr0(e.amount), 0), approvedCount: approvedUnpaid.length, approvedSum: approvedUnpaid.reduce((a, e) => a + numOr0(e.amount), 0), paidToday };
         }
@@ -6837,6 +6887,7 @@
             tabs.push(['mine', '📝 طلباتي']);
             if (canExpApprove()) tabs.push(['all', '📋 كل المصروفات']);
             tabs.push(['reports', '📊 التقارير']);
+            if (canExpDelete()) tabs.push(['trash', '🗑️ سجل المحذوفات']);
             const st = expStats();
             const card = (label, val, icon, cls) => `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3"><span class="w-11 h-11 rounded-xl ${cls} flex items-center justify-center text-lg"><i class="fa-solid ${icon}"></i></span><div><p class="text-[11px] font-bold text-slate-400">${label}</p><p class="font-black text-slate-800">${val}</p></div></div>`;
             return {
@@ -6860,7 +6911,7 @@
         }
         function expFiltered(tab) {
             const me = expMe();
-            let rows = expList.slice();
+            let rows = expVisible();
             if (tab === 'approvals') rows = rows.filter(e => expIsPending(e) && e.by !== me);
             else if (tab === 'mine') rows = rows.filter(e => e.by === me);
             if (expFilter.status) rows = rows.filter(e => e.status === expFilter.status);
@@ -6872,6 +6923,7 @@
         function expRenderBody() {
             const body = el('expBody'); if (!body) return;
             if (expTab === 'reports') { body.innerHTML = expReportsHtml(); return; }
+            if (expTab === 'trash') { body.innerHTML = expTrashHtml(); return; }
             const rows = expFiltered(expTab);
             const showFilters = expTab === 'all' || expTab === 'mine';
             body.innerHTML = `
@@ -6911,6 +6963,7 @@
                     ${canExpApprove() && e.status === EXP_APPROVED ? `<button type="button" onclick="expPayModal('${e.id}')" class="${BTN_PRIMARY} !py-1.5 text-xs"><i class="fa-solid fa-hand-holding-dollar"></i> تسجيل الصرف</button>` : ''}
                     ${mine && expIsPending(e) ? `<button type="button" onclick="expModal('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs"><i class="fa-solid fa-pen"></i> تعديل</button>
                     <button type="button" onclick="expCancel('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs !text-rose-600 !border-rose-200">إلغاء الطلب</button>` : ''}
+                    ${canExpDelete() ? `<button type="button" onclick="expDeleteModal('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs !text-rose-600 !border-rose-200"><i class="fa-solid fa-trash-can"></i> حذف</button>` : ''}
                 </div>
             </article>`;
         }
@@ -7011,6 +7064,22 @@
             if (expMarkPaid(id, { amount: Number(el('expPaidAmount').value) || 0, date: el('expPaidDate').value, ref: el('expPayRef').value })) closeModal();
         }
 
+        function expTrashHtml() {
+            const rows = expList.filter(e => e.deleted).sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
+            if (!rows.length) return '<p class="text-center text-slate-400 font-bold py-10">سجل المحذوفات فاضي — مفيش أذونات اتحذفت</p>';
+            return `<p class="text-xs text-slate-500 mb-3">الأذونات دي مخفية من كل حتة لكن محفوظة هنا للمراجعة. الاستعادة بترجع الإذن بحالته قبل الحذف.</p>
+            <div class="space-y-3">${rows.map(e => `<article class="border border-rose-200 bg-rose-50/40 rounded-2xl p-4 opacity-90">
+                <div class="flex flex-wrap items-center gap-2">
+                    <b class="text-slate-700 line-through">إذن صرف رقم ${e.no}</b>
+                    <span class="text-[11px] font-bold bg-white border border-slate-200 rounded-full px-2 py-0.5">كان: ${esc(e.prevStatus || e.status)}</span>
+                    <span class="flex-1"></span><b class="text-slate-700">${fmtMoney(numOr0(e.amount))}</b>
+                </div>
+                <p class="text-sm text-slate-600 mt-1">${esc(e.title || '')} — طالب الصرف: ${esc(e.byName || '')}</p>
+                <p class="text-xs text-rose-700 mt-1">🗑️ حذفه ${esc(e.deletedByName || '')} · ${esc(timeAgo(e.deletedAt || ''))} · السبب: ${esc(e.deleteReason || '—')}</p>
+                <div class="mt-2"><button type="button" onclick="expRestore('${e.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs"><i class="fa-solid fa-rotate-left"></i> استعادة الإذن</button></div>
+            </article>`).join('')}</div>`;
+        }
+
         // ---------- reports ----------
         function expReportsHtml() {
             const paid = expPaidRows();
@@ -7024,7 +7093,7 @@
             const maxMonth = Math.max(1, ...byMonth.map(x => x.sum));
             const bar = (label, val, max) => `<div class="flex items-center gap-3 text-sm"><span class="w-40 shrink-0 font-bold text-slate-600 truncate">${esc(label)}</span><div class="flex-1 h-4 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-brand-500 rounded-full" style="width:${Math.round(val / max * 100)}%"></div></div><b class="w-32 text-end text-slate-700">${fmtMoney(val)}</b></div>`;
             const byUser = {};
-            expList.forEach(e => { byUser[e.byName || '—'] = byUser[e.byName || '—'] || { req: 0, paid: 0, n: 0 }; byUser[e.byName || '—'].req += numOr0(e.amount); byUser[e.byName || '—'].n++; if (e.status === EXP_PAID) byUser[e.byName || '—'].paid += numOr0(e.paidAmount || e.amount); });
+            expVisible().forEach(e => { byUser[e.byName || '—'] = byUser[e.byName || '—'] || { req: 0, paid: 0, n: 0 }; byUser[e.byName || '—'].req += numOr0(e.amount); byUser[e.byName || '—'].n++; if (e.status === EXP_PAID) byUser[e.byName || '—'].paid += numOr0(e.paidAmount || e.amount); });
             return `<div class="space-y-6">
                 <div>
                     <h3 class="font-black text-slate-800 mb-3">المصروفات حسب التصنيف (المدفوع فعليًا)</h3>
@@ -7050,13 +7119,13 @@
         function expExportExcel() {
             if (typeof XLSX === 'undefined') return toast('تعذر تحميل مكتبة إكسيل', 'error');
             const rows = [['رقم الإذن', 'التاريخ', 'بيان الصرف', 'التصنيف', 'المبلغ', 'المستفيد', 'طريقة الصرف', 'طالب الصرف', 'الحالة', 'المعتمِد', 'تاريخ الصرف', 'المصروف فعليًا', 'مرجع الصرف'],
-                ...expList.map(e => [e.no, String(e.t || '').slice(0, 10), e.title || '', e.category || '', numOr0(e.amount), e.payee || '', e.method || '', e.byName || '', e.status, e.approverName || '', e.paidAt || '', e.status === EXP_PAID ? numOr0(e.paidAmount || e.amount) : '', e.payRef || ''])];
+                ...expVisible().map(e => [e.no, String(e.t || '').slice(0, 10), e.title || '', e.category || '', numOr0(e.amount), e.payee || '', e.method || '', e.byName || '', e.status, e.approverName || '', e.paidAt || '', e.status === EXP_PAID ? numOr0(e.paidAmount || e.amount) : '', e.payRef || ''])];
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'المصروفات');
             XLSX.writeFile(wb, 'مصروفات-' + todayISO() + '.xlsx');
         }
         function expPrintReport() {
-            const rows = expList.map(e => `<tr><td>${e.no}</td><td>${esc(String(e.t || '').slice(0, 10))}</td><td>${esc(e.title || '')}</td><td>${esc(e.category || '')}</td><td>${fmtMoney(numOr0(e.amount))}</td><td>${esc(e.byName || '')}</td><td>${esc(e.status)}</td><td>${e.status === EXP_PAID ? fmtMoney(numOr0(e.paidAmount || e.amount)) : '—'}</td></tr>`).join('');
+            const rows = expVisible().map(e => `<tr><td>${e.no}</td><td>${esc(String(e.t || '').slice(0, 10))}</td><td>${esc(e.title || '')}</td><td>${esc(e.category || '')}</td><td>${fmtMoney(numOr0(e.amount))}</td><td>${esc(e.byName || '')}</td><td>${esc(e.status)}</td><td>${e.status === EXP_PAID ? fmtMoney(numOr0(e.paidAmount || e.amount)) : '—'}</td></tr>`).join('');
             printHtml(`<div dir="rtl" style="font-family:Tahoma,Arial"><h2>تقرير المصروفات وأذونات الصرف — ${esc(fmtDateAr(todayISO()))}</h2><table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr><th>رقم</th><th>التاريخ</th><th>البيان</th><th>التصنيف</th><th>المبلغ</th><th>الطالب</th><th>الحالة</th><th>المصروف</th></tr></thead><tbody>${rows}</tbody></table></div>`);
         }
 
@@ -12471,5 +12540,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f0a16f4b0c9104',t:'MTc5NTQ0MTY5Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f0a16f4b0c9104',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f0fea6c9b9a9cc',t:'MTc5NTQ0NTUxNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f0fea6c9b9a9cc',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
