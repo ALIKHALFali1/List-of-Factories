@@ -5899,6 +5899,10 @@
         }
         function chatBubbleHtml(m) {
             const me = chatMe();
+            if (m.type === 'call') {
+                const t = new Date(m.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
+                return `<div class="flex justify-center my-2"><span class="text-[11px] font-bold bg-rose-50 border border-rose-200 text-rose-600 rounded-full px-3 py-1">${esc(m.text || '📞 مكالمة فائتة')} · ${esc(t)}</span></div>`;
+            }
             const mine = m.by === me;
             if (m.deleted) return `<div class="flex ${mine ? 'justify-end' : 'justify-start'}"><div class="max-w-[78%] px-3 py-2 rounded-2xl bg-slate-100 border border-slate-200 text-slate-400 text-sm italic">🚫 رسالة محذوفة</div></div>`;
             const time = new Date(m.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
@@ -6215,6 +6219,14 @@
             callState.state = 'incoming';
             callState.offer = c.offer || '';
             callRing(true);
+            callState.docUnsub = fbDb.collection('calls').doc(c.id).onSnapshot(snap => {
+                if (!snap.exists || !callState || callState.state !== 'incoming') return;
+                const st = snap.data().state;
+                if (st === 'ended' || st === 'rejected') {
+                    if (st === 'ended') { callLogMissed(c); toast('📞 مكالمة فائتة من ' + (c.fromName || chatNameOf(c.from) || 'مستخدم'), 'info', null, 5000); }
+                    callEnd(false);
+                }
+            }, () => {});
             callShow(`<div class="text-center space-y-4 py-8">
                     <div class="flex justify-center">${avatarHtml(c.fromName || (other ? other.name : ''), 'w-24 h-24 text-3xl')}</div>
                     <div><p class="text-xl font-black">${esc(c.fromName || (other ? other.name : ''))}</p>
@@ -6242,11 +6254,24 @@
             callState.state = 'live';
             callState.startedAt = Date.now();
             fbDb.collection('calls').doc(callState.id).update({ answer: JSON.stringify(answer), state: 'accepted' }).catch(err => chatWriteFailed(err));
+            if (callState.docUnsub) { try { callState.docUnsub(); } catch (e) { /* noop */ } }
             callState.docUnsub = fbDb.collection('calls').doc(callState.id).onSnapshot(snap => {
                 if (snap.exists && callState && snap.data().state === 'ended') callEnd(false);
             }, () => {});
             callSubIce();
             callRenderLive(other);
+        }
+        function callLogMissed(c) {
+            const me = chatMe(); if (!me || !c || !c.from) return;
+            const cid = chatIdFor(me, c.from);
+            const now = new Date().toISOString();
+            const msg = { id: 'CALLLOG-' + c.id, chatId: cid, by: me, byName: '', text: (c.kind === 'video' ? '📹' : '📞') + ' مكالمة فائتة من ' + (c.fromName || chatNameOf(c.from) || ''), type: 'call', mediaId: '', t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: '', replyText: '', replyBy: '', reacts: {} };
+            fbDb.collection('chatMsgs').doc(msg.id).set(msg).catch(() => {});
+            const parts = cid.split('__');
+            const prev = chatMetas.find(x => x.id === cid);
+            const unread = { ...((prev && prev.unread) || {}) };
+            unread[me] = (unread[me] || 0) + 1;
+            fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: msg.text.slice(0, 120), lastType: 'call', lastAt: now, lastBy: c.from, unread, typingBy: '', typingAt: '' }).catch(() => {});
         }
         function callReject() { if (!callState) return; fbDb.collection('calls').doc(callState.id).update({ state: 'rejected' }).catch(() => {}); callEnd(false); }
         function callEnd(updateDoc = true) {
@@ -11623,5 +11648,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5efb0352f2cad93',t:'MTc5NTQzMTgxNg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5efb0352f2cad93',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5efc72e8f275640',t:'MTc5NTQzMjc1Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5efc72e8f275640',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
