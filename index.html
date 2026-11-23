@@ -644,7 +644,7 @@
                             </div>
                             <div id="notifList" class="max-h-[60vh] overflow-y-auto divide-y divide-slate-100"></div>
                             <div class="p-2.5 border-t border-slate-100 bg-slate-50/70">
-                                <button type="button" onclick="App.Notifications.enable()" class="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-[11px] font-bold text-slate-500 hover:text-brand-600 hover:bg-brand-50">
+                                <button type="button" id="webNotifBtn" onclick="App.Notifications.enable()" class="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-[11px] font-bold text-slate-500 hover:text-brand-600 hover:bg-brand-50">
                                     <i class="fa-regular fa-bell"></i> تفعيل إشعارات المتصفح للمواعيد المهمة
                                 </button>
                             </div>
@@ -1712,6 +1712,7 @@
             notifUnsub = fbDb.collection('notifications').orderBy('t', 'desc').limit(NOTIF_LIMIT).onSnapshot(snap => {
                 notifs = snap.docs.map(d => d.data());
                 renderNotifs();
+                if (window.App && App.Notifications) App.Notifications.observe();
             }, err => console.error('notifications listener', err));
         }
 
@@ -1719,6 +1720,7 @@
             if (notifUnsub) { try { notifUnsub(); } catch (e) { /* already closed */ } }
             notifUnsub = null;
             notifs = [];
+            if (window.App && App.Notifications) App.Notifications.baseline = null;
             closeNotifPanel();
         }
 
@@ -1733,6 +1735,18 @@
                 try { localStorage.setItem(notifKey(), v); } catch (e) { /* storage blocked */ }
             }
             return v;
+        }
+
+        // footer «تفعيل إشعارات المتصفح» state: hidden without the API (e.g. inside the Android app, which notifies natively)
+        function webNotifBtnState() {
+            const b = el('webNotifBtn');
+            if (!b) return;
+            if (!('Notification' in window)) { b.classList.add('hidden'); return; }
+            const on = !!(window.App && App.Notifications && App.Notifications.enabled() && Notification.permission === 'granted');
+            b.innerHTML = on
+                ? '<i class="fa-solid fa-bell text-emerald-500"></i> إشعارات المتصفح مفعّلة'
+                : '<i class="fa-regular fa-bell"></i> تفعيل إشعارات المتصفح';
+            b.classList.toggle('text-emerald-600', on);
         }
 
         function markNotifsSeen() {
@@ -1782,6 +1796,7 @@
             const unread = items.filter(notifUnread).length;
             badge.textContent = unread > 9 ? '9+' : String(unread);
             badge.classList.toggle('hidden', unread === 0);
+            webNotifBtnState();
             list.innerHTML = items.length
                 ? items.map(n => {
                     const un = notifUnread(n);
@@ -10433,13 +10448,40 @@
         // ---------- browser notifications for due items (opt-in from the bell) ----------
         App.Notifications = {
             KEY: 'factoryBrowserNotifs',
+            baseline: null,
             enabled() { try { return localStorage.getItem(this.KEY) === '1'; } catch (e) { return false; } },
+            pushedKey() { return 'webPushed:' + (fbUser?.uid || 'anon'); },
+            pushedIds() { try { return new Set(JSON.parse(localStorage.getItem(this.pushedKey()) || '[]')); } catch (e) { return new Set(); } },
+            // called on every bell snapshot: anything new (comments, invoices, checks...) pops a browser notification
+            observe() {
+                if (!('Notification' in window) || window.AndroidBridge) return;   // the Android app notifies natively
+                if (!this.baseline) { this.baseline = new Date().toISOString(); return; }
+                if (!this.enabled() || Notification.permission !== 'granted' || !sessionUserId) return;
+                const pushed = this.pushedIds();
+                const fresh = visibleNotifs()
+                    .filter(n => n.t > this.baseline && !pushed.has(n.id))
+                    .sort((a, b) => (a.t < b.t ? -1 : 1))
+                    .slice(0, 5);
+                if (!fresh.length) return;
+                fresh.forEach(n => { pushed.add(n.id); this.fire(n); });
+                try { localStorage.setItem(this.pushedKey(), JSON.stringify([...pushed].slice(-300))); } catch (e) { /* blocked */ }
+            },
+            fire(n) {
+                try {
+                    const note = new Notification(`${n.user || ''} ${n.verb || ''} ${n.kind || ''}`.trim(), {
+                        body: n.detail || '', dir: 'rtl', lang: 'ar', tag: n.id,
+                        icon: (appData && appData.settings && appData.settings.logo) || SYS_LOGO_DEFAULT
+                    });
+                    note.onclick = () => { try { window.focus(); } catch (e) { /* noop */ } openNotification(n.id); note.close(); };
+                } catch (e) { /* blocked */ }
+            },
             async enable() {
                 if (!('Notification' in window)) { toast('المتصفح ده مش بيدعم إشعارات سطح المكتب', 'error'); return; }
                 const perm = await Notification.requestPermission().catch(() => 'denied');
                 if (perm !== 'granted') { toast('الإشعارات مرفوضة من إعدادات المتصفح', 'error'); return; }
                 try { localStorage.setItem(this.KEY, '1'); } catch (e) { /* blocked */ }
-                toast('تم تفعيل إشعارات المتصفح للمواعيد المهمة', 'success');
+                toast('تم تفعيل إشعارات المتصفح', 'success');
+                webNotifBtnState();
                 this.checkDue(true);
             },
             checkDue(force) {
@@ -10460,7 +10502,7 @@
                 }
                 if (!msgs.length) return;
                 try {
-                    new Notification(appData.settings.systemName || 'منظومة لستات المصانع', { body: msgs.join(' · '), dir: 'rtl', lang: 'ar' });
+                    new Notification(appData.settings.systemName || 'منظومة لستات المصانع', { body: msgs.join(' · '), dir: 'rtl', lang: 'ar', tag: 'due-summary', icon: (appData.settings && appData.settings.logo) || SYS_LOGO_DEFAULT });
                     localStorage.setItem(dayKey, '1');
                 } catch (e) { /* blocked */ }
             }
@@ -10720,5 +10762,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec0626980dee97',t:'MTc5NTM5MzM5Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec0626980dee97',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec3862ce0f8473',t:'MTc5NTM5NTQ1MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec3862ce0f8473',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
