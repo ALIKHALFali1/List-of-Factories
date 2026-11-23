@@ -759,6 +759,8 @@
             ] },
             { title: 'النظام', items: [
                 ['chat.use', 'المحادثات الداخلية (شات ومكالمات صوت وفيديو)'],
+                ['complaints.file', 'الشكاوي والتقييم: تقديم شكوى وعرض شكاويّ وتقييماتي'],
+                ['complaints.manage', 'إدارة الشكاوي (مراجعة ورد وحسم) وتقييم الموظفين'],
                 ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
                 ['settings.manage', 'تعديل الإعدادات وإعادة الضبط'],
@@ -782,12 +784,13 @@
             orders: { title: 'الطلبيات', icon: 'fa-truck-ramp-box', perm: 'orders.view' },
             customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
             chat: { title: 'المحادثات', icon: 'fa-comments', perm: 'chat.use' },
+            complaints: { title: 'الشكاوي والتقييم', icon: 'fa-clipboard-check', perm: 'complaints.file' },
             users: { title: 'المستخدمون والصلاحيات', icon: 'fa-users-gear', perm: 'users.manage' },
             logs: { title: 'سجل النشاط', icon: 'fa-clock-rotate-left', perm: 'logs.view' },
             shipping: { title: 'الشحن والنقل', icon: 'fa-truck', perm: 'shipping.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'chat', 'shipping', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'chat', 'complaints', 'shipping', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -1777,6 +1780,7 @@
         function notifIcon(kind = '') {
             if (kind.includes('شحن')) return ['fa-truck-fast', 'bg-sky-100 text-sky-700'];
             if (kind.includes('محادثة')) return ['fa-comments', 'bg-brand-100 text-brand-700'];
+            if (kind.includes('شكو')) return ['fa-clipboard-check', 'bg-amber-100 text-amber-700'];
             if (kind.includes('تعليق')) return ['fa-comments', 'bg-amber-100 text-amber-700'];
             if (kind.includes('PDF') || kind.includes('لستة')) return ['fa-file-pdf', 'bg-rose-100 text-rose-700'];
             if (kind.includes('طلبية عميل')) return ['fa-file-invoice', 'bg-brand-100 text-brand-700'];
@@ -1872,6 +1876,7 @@
         function notifResolve(n) {
             const t = n.target || {};
             if (t.col === 'chat' && t.id) return () => { if (notifGuard('chat')) navigate('chat/' + t.id); };
+            if (t.col === 'complaints') return () => { if (can('complaints.file') || can('complaints.manage')) navigate('complaints'); else toast('معندكش صلاحية الشكاوي', 'error'); };
             if (t.col === 'custOrders' && t.id) return () => notifOpenCust(t.id, !!t.comments);
             if (t.col === 'orders' && t.id) return () => { if (notifGuard('orders')) navigate('orders/' + t.id); };
             if (t.col === 'checks' && t.id) return () => {
@@ -2025,6 +2030,7 @@
             fbLogsUnsub = null;
             stopNotifSync();
             chatStop();
+            cmpStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -2175,6 +2181,7 @@
             lastAnimatedRoute = '';
             if (!keepScreen && location.hash !== startHash) { suppressEnterHashRender = true; location.hash = startHash; }
             render();
+            setTimeout(() => { try { maybeAutoBackup(); } catch (e) { /* noop */ } }, 4000);
         }
 
         async function deleteAllLogs() {
@@ -3715,6 +3722,7 @@
         function canAccessRoute(name) {
             if (name === 'home') return true;
             if (name === 'chat') return chatCan();
+            if (name === 'complaints') return can('complaints.file') || can('complaints.manage');
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -3992,7 +4000,7 @@
 
         // The new "home.personal" permission is given to every existing role once (settings.permsVersion 2).
         // After that the admin's choices are kept, even when a role is unticked.
-        const PERMS_VERSION_NOW = 4;
+        const PERMS_VERSION_NOW = 5;
         function ensureHomePersonalPerm() {
             if (!appData || !fbSynced || !sessionUserId) return;
             if ((appData.settings.permsVersion || 1) >= PERMS_VERSION_NOW) return;
@@ -4002,6 +4010,8 @@
                 if (!r.permissions.includes('home.personal')) r.permissions = [...r.permissions, 'home.personal'];
                 if (r.permissions.includes('custorders.view') && !r.permissions.includes('custorders.comments')) r.permissions = [...r.permissions, 'custorders.comments'];
                 if (r.permissions.includes('home.personal') && !r.permissions.includes('chat.use')) r.permissions = [...r.permissions, 'chat.use'];
+                if (r.permissions.includes('home.personal') && !r.permissions.includes('complaints.file')) r.permissions = [...r.permissions, 'complaints.file'];
+                if (r.permissions.includes('users.manage') && !r.permissions.includes('complaints.manage')) r.permissions = [...r.permissions, 'complaints.manage'];
             });
             appData.settings.permsVersion = PERMS_VERSION_NOW;
             saveState();
@@ -5627,6 +5637,7 @@
         let chatThreadUnsub = null, chatMetaUnsub = null, chatPresenceUnsub = null, chatCallUnsub = null;
         let chatStarted = false, chatPresenceTimer = null, chatUiTimer = null;
         let chatListQuery = '', chatReplyTo = null, chatEditId = null, chatLastTypePing = 0;
+        let chatThreadQuery = '', chatSearchOpen = false;
         let chatAlertedAt = {};
         const chatMediaCache = new Map();
         const CHAT_EMOJIS = ['😀','😁','😂','🤣','😊','😍','😘','😎','🤔','😮','😢','😡','👍','👎','🙏','❤️','🔥','⭐','✅','💯','🎉','📦','🚚','💵','🏭','📞','👋','💪','🤝'];
@@ -5809,9 +5820,17 @@
                     <p class="font-black text-sm text-slate-800 truncate">${esc(other.name)}</p>
                     <p id="chatHeadStatus" class="text-[11px] text-slate-400">${esc(chatPresenceText(other.id))}</p>
                 </div>
+                <button type="button" onclick="chatToggleSearch()" class="${BTN_ICON} text-slate-500 hover:bg-slate-100" title="بحث في المحادثة"><i class="fa-solid fa-magnifying-glass"></i></button>
                 <button type="button" onclick="startCall('${other.id}', 'audio')" class="${BTN_ICON} text-emerald-600 hover:bg-emerald-50" title="مكالمة صوتية"><i class="fa-solid fa-phone"></i></button>
                 <button type="button" onclick="startCall('${other.id}', 'video')" class="${BTN_ICON} text-brand-600 hover:bg-brand-50" title="مكالمة فيديو"><i class="fa-solid fa-video"></i></button>
             </div>
+            <div id="chatSearchBar" class="${chatSearchOpen ? '' : 'hidden'} px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2">
+                <i class="fa-solid fa-magnifying-glass text-slate-400 text-xs"></i>
+                <input id="chatSearchInput" value="${esc(chatThreadQuery)}" oninput="chatThreadQuery=this.value; chatRenderThread()" placeholder="ابحث في الرسائل..." class="flex-1 text-sm outline-none bg-transparent">
+                <span id="chatSearchCount" class="text-[11px] text-slate-400"></span>
+                <button type="button" onclick="chatToggleSearch(true)" class="text-slate-400 hover:text-rose-600"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div id="chatPinBar" class="bg-white"></div>
             <div id="chatMsgs" class="flex-1 overflow-y-auto px-3 py-4 space-y-1.5 bg-slate-50" style="min-height:50vh;max-height:62vh"></div>
             <div id="chatTyping" class="px-3 bg-slate-50"></div>
             <div id="chatReplyBar" class="bg-white"></div>
@@ -5885,8 +5904,58 @@
             if (day === yday) return 'أمس';
             return new Date(day + 'T00:00:00').toLocaleDateString('ar-EG', { day: 'numeric', month: 'long', year: 'numeric' });
         }
+        function chatToggleSearch(close) {
+            chatSearchOpen = close ? false : !chatSearchOpen;
+            if (!chatSearchOpen) chatThreadQuery = '';
+            render();
+        }
+        function chatHiText(text) {
+            const q = chatThreadQuery.trim();
+            const safe = esc(text);
+            if (!q) return safe;
+            const idx = text.toLowerCase().indexOf(q.toLowerCase());
+            if (idx < 0) return safe;
+            return esc(text.slice(0, idx)) + '<mark class="bg-amber-300 rounded px-0.5">' + esc(text.slice(idx, idx + q.length)) + '</mark>' + esc(text.slice(idx + q.length));
+        }
+        function chatPinMsg(id) {
+            const m = chatMsgsList.find(x => x.id === id);
+            const meta = chatMetaFor(chatActiveWith);
+            if (!m || !meta) return;
+            const pinned = { id: m.id, text: (m.type === 'text' ? m.text : (m.type === 'img' ? '📷 صورة' : m.type === 'audio' ? '🎤 رسالة صوتية' : m.text || '')).slice(0, 140), byName: m.byName || chatNameOf(m.by), at: new Date().toISOString() };
+            fbDb.collection('chatMeta').doc(meta.id).update({ pinned }).catch(err => chatWriteFailed(err));
+            meta.pinned = pinned;
+            chatRenderPinBar();
+            toast('اتثبتت الرسالة 📌', 'success');
+        }
+        function chatUnpin() {
+            const meta = chatMetaFor(chatActiveWith); if (!meta) return;
+            fbDb.collection('chatMeta').doc(meta.id).update({ pinned: null }).catch(() => {});
+            meta.pinned = null;
+            chatRenderPinBar();
+        }
+        function chatJumpToPinned() {
+            const meta = chatMetaFor(chatActiveWith);
+            if (!meta || !meta.pinned) return;
+            if (chatThreadQuery) { chatThreadQuery = ''; const si = el('chatSearchInput'); if (si) si.value = ''; chatRenderThread(); }
+            const t = el('cmsg-' + meta.pinned.id);
+            if (t) { t.scrollIntoView({ behavior: 'smooth', block: 'center' }); t.classList.add('ring-2', 'ring-amber-400', 'rounded-2xl'); setTimeout(() => t.classList.remove('ring-2', 'ring-amber-400', 'rounded-2xl'), 1600); }
+            else toast('الرسالة المثبتة أقدم من المعروض حاليًا', 'info');
+        }
+        function chatRenderPinBar() {
+            const bar = el('chatPinBar'); if (!bar) return;
+            const meta = chatActiveWith ? chatMetaFor(chatActiveWith) : null;
+            const pin = meta && meta.pinned;
+            bar.innerHTML = pin ? `<div class="mx-2.5 mt-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs cursor-pointer" onclick="chatJumpToPinned()">
+                <i class="fa-solid fa-thumbtack text-amber-500"></i>
+                <span class="flex-1 truncate"><b>مثبتة</b> · ${esc(pin.byName || '')}: ${esc(pin.text || '')}</span>
+                <button type="button" onclick="event.stopPropagation(); chatUnpin()" class="text-slate-400 hover:text-rose-600" title="إلغاء التثبيت"><i class="fa-solid fa-xmark"></i></button>
+            </div>` : '';
+        }
         function chatRenderThread() {
             const box = el('chatMsgs'); if (!box) return;
+            chatRenderPinBar();
+            const cnt = el('chatSearchCount');
+            if (cnt) { const q = chatThreadQuery.trim().toLowerCase(); const n = q ? chatMsgsList.filter(m => (m.text || '').toLowerCase().includes(q)).length : 0; cnt.textContent = q ? (n + ' نتيجة') : ''; }
             const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 180;
             box.innerHTML = chatThreadInnerHtml();
             chatHydrateMedia(box);
@@ -5919,14 +5988,15 @@
             const media = m.type === 'img' && m.mediaId ? `<div class="mb-1"><img data-media="${esc(m.mediaId)}" alt="صورة مرسلة" class="rounded-xl max-w-[240px] w-full bg-slate-100 cursor-pointer" onclick="chatOpenMedia('${esc(m.mediaId)}')"></div>`
                 : m.type === 'audio' && m.mediaId ? `<audio data-media="${esc(m.mediaId)}" controls class="w-60 max-w-full h-9"></audio>` : '';
             const quote = m.replyTo ? `<div class="mb-1 px-2 py-1 rounded-lg text-[11px] ${mine ? 'bg-white/15 border-s-2 border-white/60' : 'bg-slate-100 border-s-2 border-brand-400'}"><b>${esc(m.replyBy || '')}</b><br>${esc((m.replyText || '').slice(0, 90))}</div>` : '';
-            return `<div class="group flex ${mine ? 'justify-end' : 'justify-start'}">
+            return `<div id="cmsg-${m.id}" class="group flex ${mine ? 'justify-end' : 'justify-start'}">
                 <div class="max-w-[78%]">
                     <div class="relative px-3 py-2 shadow-sm ${mine ? 'bg-brand-600 text-white rounded-2xl rounded-bl-md' : 'bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-br-md'}">
                         ${quote}${media}
-                        ${m.text ? `<p class="text-sm whitespace-pre-wrap break-words">${esc(m.text)}</p>` : ''}
+                        ${m.text ? `<p class="text-sm whitespace-pre-wrap break-words">${chatHiText(m.text)}</p>` : ''}
                         <span class="flex items-center gap-1 justify-end text-[10px] mt-0.5 ${mine ? 'text-white/70' : 'text-slate-400'}">${m.editedAt ? 'اتعدلت · ' : ''}${esc(time)} ${ticks}</span>
                         <span class="absolute -top-3 ${mine ? '-start-2' : '-end-2'} hidden group-hover:flex gap-0.5 bg-white border border-slate-200 rounded-full shadow px-1 py-0.5 z-10">
                             <button type="button" onclick="chatStartReply('${m.id}')" title="رد" class="w-6 h-6 text-slate-500 hover:text-brand-600"><i class="fa-solid fa-reply text-[11px]"></i></button>
+                            <button type="button" onclick="chatPinMsg('${m.id}')" title="تثبيت" class="w-6 h-6 text-slate-500 hover:text-amber-500"><i class="fa-solid fa-thumbtack text-[11px]"></i></button>
                             <button type="button" onclick="chatReactMenu(event, '${m.id}')" title="تفاعل" class="w-6 h-6 text-slate-500 hover:text-amber-500"><i class="fa-regular fa-face-smile text-[11px]"></i></button>
                             ${mine && m.type === 'text' ? `<button type="button" onclick="chatStartEdit('${m.id}')" title="تعديل" class="w-6 h-6 text-slate-500 hover:text-brand-600"><i class="fa-solid fa-pen text-[11px]"></i></button>` : ''}
                             ${mine ? `<button type="button" onclick="chatDeleteMsg('${m.id}')" title="حذف" class="w-6 h-6 text-slate-500 hover:text-rose-600"><i class="fa-solid fa-trash-can text-[11px]"></i></button>` : ''}
@@ -6117,7 +6187,17 @@
 
         // ---------- مكالمات صوت وفيديو (WebRTC) ----------
         let callState = null, callRingTimer = null;
-        const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+        // STUN finds a direct path; TURN relays the media when a network blocks direct
+        // peer-to-peer (many mobile carriers / strict Wi-Fi) so voice & video still connect.
+        const RTC_CFG = { iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' },
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+        ] };
         function callOverlayEl() {
             let ov = el('callOverlay');
             if (!ov) {
@@ -6288,8 +6368,25 @@
             fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: msg.text.slice(0, 120), lastType: 'call', lastAt: now, lastBy: c.from, unread, typingBy: '', typingAt: '' }).catch(() => {});
         }
         function callReject() { if (!callState) return; fbDb.collection('calls').doc(callState.id).update({ state: 'rejected' }).catch(() => {}); callEnd(false); }
+        function callLogDone() {
+            if (!callState || !callState.startedAt || !fbDb) return;
+            const secs = Math.max(1, Math.round((Date.now() - callState.startedAt) / 1000));
+            const dur = Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+            const me = chatMe(), otherId = callState.otherId;
+            if (!me || !otherId) return;
+            const callerId = callState.role === 'caller' ? me : otherId;
+            const cid = chatIdFor(me, otherId);
+            const now = new Date().toISOString();
+            const txt = (callState.kind === 'video' ? '📹 مكالمة فيديو' : '📞 مكالمة صوتية') + ' · ' + dur;
+            const msg = { id: 'CALLLOG-' + callState.id, chatId: cid, by: callerId, byName: '', text: txt, type: 'call', mediaId: '', t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: '', replyText: '', replyBy: '', reacts: {} };
+            fbDb.collection('chatMsgs').doc(msg.id).set(msg).catch(() => {});
+            const prev = chatMetas.find(x => x.id === cid);
+            const parts = cid.split('__');
+            fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: txt, lastType: 'call', lastAt: now, lastBy: '', unread: { ...((prev && prev.unread) || {}) }, typingBy: '', typingAt: '' }).catch(() => {});
+        }
         function callEnd(updateDoc = true) {
             if (!callState) { callHide(); return; }
+            if (callState.state === 'live') callLogDone();
             const cs = callState;
             if (updateDoc && cs.id) fbDb.collection('calls').doc(cs.id).update({ state: 'ended' }).catch(() => {});
             callCleanup();
@@ -6309,6 +6406,256 @@
         function callToggleMute() { if (!callState || !callState.stream) return; const tr = callState.stream.getAudioTracks()[0]; if (!tr) return; tr.enabled = !tr.enabled; const b = el('callMuteBtn'); if (b) b.innerHTML = `<i class="fa-solid ${tr.enabled ? 'fa-microphone' : 'fa-microphone-slash'}"></i>`; }
         function callToggleCam() { if (!callState || !callState.stream) return; const tr = callState.stream.getVideoTracks()[0]; if (!tr) return; tr.enabled = !tr.enabled; const b = el('callCamBtn'); if (b) b.innerHTML = `<i class="fa-solid ${tr.enabled ? 'fa-video' : 'fa-video-slash'}"></i>`; }
 
+
+        // ================= الشكاوي وتقييم الموظفين =================
+        const CMP_CATS = ['راتب ومستحقات', 'إجازات ومواعيد', 'معاملة وسلوك', 'أدوات وبيئة عمل', 'أخرى'];
+        const CMP_STATUS = ['جديدة', 'قيد المراجعة', 'اتحلت', 'مثبتة', 'غير مثبتة'];
+        let cmpList = [], cmpEvals = [], cmpUnsubs = [], cmpStarted = false, cmpTab = 'mine';
+        const cmpCanManage = () => can('complaints.manage') || isSystemAdmin();
+        const cmpMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
+
+        function cmpStart() {
+            if (cmpStarted || !fbDb || !fbUser) return;
+            cmpStarted = true;
+            cmpUnsubs.push(fbDb.collection('complaints').onSnapshot(snap => {
+                cmpList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
+                if (parseRoute().name === 'complaints') cmpRenderLists();
+            }, err => console.error('complaints listener', err)));
+            cmpUnsubs.push(fbDb.collection('evaluations').onSnapshot(snap => {
+                cmpEvals = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
+                if (parseRoute().name === 'complaints') cmpRenderLists();
+            }, err => console.error('evaluations listener', err)));
+        }
+        function cmpStop() { cmpUnsubs.forEach(u => { try { u(); } catch (e) { /* noop */ } }); cmpUnsubs = []; cmpStarted = false; cmpList = []; cmpEvals = []; }
+        function empScore(userId) {
+            const evs = cmpEvals.filter(e => e.userId === userId);
+            const avg = evs.length ? evs.reduce((a, e) => a + (Number(e.stars) || 0), 0) / evs.length : 0;
+            const proven = cmpList.filter(c => c.aboutId === userId && c.status === 'مثبتة').length;
+            const against = cmpList.filter(c => c.aboutId === userId).length;
+            return { avg, count: evs.length, proven, against, score: evs.length || proven ? Math.max(0, Math.round((evs.length ? avg / 5 * 100 : 70) - proven * 5)) : null };
+        }
+        function cmpStarsHtml(avg) {
+            let h = '';
+            for (let i = 1; i <= 5; i++) h += `<i class="fa-${i <= Math.round(avg) ? 'solid' : 'regular'} fa-star ${i <= Math.round(avg) ? 'text-amber-400' : 'text-slate-300'}"></i>`;
+            return `<span class="inline-flex gap-0.5 text-xs" dir="ltr">${h}</span>`;
+        }
+        function cmpStatusChip(st) {
+            const map = { 'جديدة': 'bg-rose-100 text-rose-700 border-rose-200', 'قيد المراجعة': 'bg-amber-100 text-amber-800 border-amber-200', 'اتحلت': 'bg-emerald-100 text-emerald-700 border-emerald-200', 'مثبتة': 'bg-rose-600 text-white border-rose-600', 'غير مثبتة': 'bg-slate-100 text-slate-500 border-slate-200' };
+            return `<span class="text-[11px] font-bold border rounded-full px-2 py-0.5 ${map[st] || map['جديدة']}">${esc(st || 'جديدة')}</span>`;
+        }
+        function viewComplaints() {
+            cmpStart();
+            const manage = cmpCanManage();
+            const tabs = [['mine', '📝 شكاويّ'], ['about', '⭐ تقييمي']];
+            if (manage) tabs.push(['admin', '🛠️ إدارة الشكاوي والتقييمات']);
+            if (!manage && cmpTab === 'admin') cmpTab = 'mine';
+            return {
+                title: 'الشكاوي والتقييم',
+                html: `<div class="max-w-5xl mx-auto space-y-4">
+                    <div class="flex flex-wrap gap-2">${tabs.map(([k, l]) => `<button type="button" onclick="cmpTab='${k}'; render()" class="px-4 py-2 rounded-xl text-sm font-bold ${cmpTab === k ? 'bg-brand-600 text-white shadow' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}">${l}</button>`).join('')}</div>
+                    <div id="cmpBody">${cmpTabHtml()}</div>
+                </div>`,
+                after: () => cmpRenderLists()
+            };
+        }
+        function cmpTabHtml() {
+            if (cmpTab === 'admin' && cmpCanManage()) return cmpAdminHtml();
+            if (cmpTab === 'about') return cmpAboutHtml();
+            return cmpMineHtml();
+        }
+        function cmpMineHtml() {
+            const people = (appData.users || []).filter(u => u.active && u.id !== cmpMe());
+            return `<section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-1"><i class="fa-solid fa-pen-to-square text-brand-600"></i> تقديم شكوى جديدة</h3>
+                    <p class="text-xs text-slate-500 mb-4">شكواك بتوصل للإدارة بس. اسمك بيبان للإدارة دايمًا، وتقدر تخفيه عن الموظف المشكو في حقه.</p>
+                    <div class="grid sm:grid-cols-2 gap-3">
+                        <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الشكوى بخصوص (اختياري)</span>
+                            <select id="cmpAbout" class="${INPUT_CLS}"><option value="">— شكوى عامة / مش عن شخص —</option>${people.map(u => `<option value="${u.id}">${esc(u.name)} (${esc(roleName(u.roleId) || '')})</option>`).join('')}</select></label>
+                        <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">نوع الشكوى</span>
+                            <select id="cmpCat" class="${INPUT_CLS}">${CMP_CATS.map(c => `<option>${c}</option>`).join('')}</select></label>
+                    </div>
+                    <label class="block mt-3"><span class="block text-xs font-bold text-slate-600 mb-1">تفاصيل الشكوى</span>
+                        <textarea id="cmpText" rows="4" maxlength="2000" class="${INPUT_CLS}" placeholder="اكتب اللي حصل بالتفصيل..."></textarea></label>
+                    <label class="flex items-center gap-2 mt-3 text-sm text-slate-600"><input type="checkbox" id="cmpAnon" class="w-4 h-4 accent-brand-600"> إخفاء اسمي عن الموظف المشكو في حقه (الإدارة هتشوفه عادي)</label>
+                    <div class="mt-4">${btn('cmpSubmit()', 'إرسال الشكوى', 'fa-paper-plane')}</div>
+                </section>
+                <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-3">شكاويّ السابقة</h3>
+                    <div id="cmpMineList" class="space-y-3"></div>
+                </section>`;
+        }
+        function cmpAboutHtml() {
+            const me = cmpMe();
+            const sc = empScore(me);
+            return `<section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-3"><i class="fa-solid fa-star text-amber-400"></i> تقييمي ومؤشر أدائي</h3>
+                    <div id="cmpMyScore"></div>
+                </section>
+                <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-3">تقييمات الإدارة ليّ</h3>
+                    <div id="cmpMyEvals" class="space-y-3"></div>
+                </section>
+                <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-3">شكاوي واردة بخصوصي</h3>
+                    <div id="cmpAboutList" class="space-y-3"></div>
+                </section>`;
+        }
+        function cmpAdminHtml() {
+            return `<section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-3"><i class="fa-solid fa-inbox text-brand-600"></i> كل الشكاوي</h3>
+                    <div class="flex flex-wrap gap-2 mb-3">
+                        <select id="cmpFStatus" onchange="cmpRenderLists()" class="${INPUT_CLS} !w-auto"><option value="">كل الحالات</option>${CMP_STATUS.map(s => `<option>${s}</option>`).join('')}</select>
+                        <input id="cmpFText" oninput="cmpRenderLists()" placeholder="ابحث في الشكاوي..." class="${INPUT_CLS} !w-auto flex-1 min-w-[10rem]">
+                    </div>
+                    <div id="cmpAdminList" class="space-y-3"></div>
+                </section>
+                <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="font-black text-slate-800"><i class="fa-solid fa-ranking-star text-amber-500"></i> تقييمات الموظفين</h3>
+                        ${btn('cmpAddEval()', 'إضافة تقييم', 'fa-plus')}
+                    </div>
+                    <div id="cmpEmpTable"></div>
+                </section>`;
+        }
+        function cmpCardHtml(c, mode) {
+            const me = cmpMe();
+            const fromLabel = mode === 'admin' || c.by === me ? esc(c.byName || '') : (c.anon ? 'مجهول' : esc(c.byName || ''));
+            return `<article class="border border-slate-200 rounded-2xl p-4 ${c.status === 'جديدة' ? 'bg-rose-50/40' : 'bg-white'}">
+                <div class="flex flex-wrap items-center gap-2 mb-1.5">
+                    ${cmpStatusChip(c.status)}
+                    <span class="text-[11px] font-bold bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">${esc(c.category || '')}</span>
+                    <span class="text-[11px] text-slate-400">${esc(timeAgo(c.t))}</span>
+                    <span class="flex-1"></span>
+                    ${c.aboutName ? `<span class="text-[11px] text-slate-500">بخصوص: <b>${esc(c.aboutName)}</b></span>` : ''}
+                </div>
+                <p class="text-sm text-slate-800 whitespace-pre-wrap">${esc(c.text || '')}</p>
+                <p class="text-[11px] text-slate-400 mt-1.5">من: ${fromLabel}</p>
+                ${c.reply ? `<div class="mt-2 bg-brand-50 border border-brand-100 rounded-xl px-3 py-2 text-sm"><b class="text-brand-700">رد الإدارة:</b> ${esc(c.reply)}<span class="block text-[11px] text-slate-400 mt-0.5">${esc(c.replyBy || '')} · ${esc(timeAgo(c.replyAt || ''))}</span></div>` : ''}
+                ${mode === 'admin' ? `<div class="flex flex-wrap items-center gap-2 mt-3">
+                    <select onchange="cmpSetStatus('${c.id}', this.value)" class="${INPUT_CLS} !w-auto !py-1.5 text-xs">${CMP_STATUS.map(s => `<option ${c.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+                    <button type="button" onclick="cmpReplyModal('${c.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs"><i class="fa-solid fa-reply"></i> رد</button>
+                    <button type="button" onclick="cmpDelete('${c.id}')" class="${BTN_SECONDARY} !py-1.5 text-xs !text-rose-600 !border-rose-200"><i class="fa-solid fa-trash-can"></i> حذف</button>
+                </div>` : ''}
+            </article>`;
+        }
+        function cmpRenderLists() {
+            const me = cmpMe();
+            const mine = el('cmpMineList');
+            if (mine) {
+                const rows = cmpList.filter(c => c.by === me);
+                mine.innerHTML = rows.length ? rows.map(c => cmpCardHtml(c, 'mine')).join('') : '<p class="text-sm text-slate-400 font-bold text-center py-6">مفيش شكاوي قدمتها لسه</p>';
+            }
+            const about = el('cmpAboutList');
+            if (about) {
+                const rows = cmpList.filter(c => c.aboutId === me);
+                about.innerHTML = rows.length ? rows.map(c => cmpCardHtml(c, 'about')).join('') : '<p class="text-sm text-slate-400 font-bold text-center py-6">مفيش شكاوي واردة بخصوصك</p>';
+            }
+            const myScore = el('cmpMyScore');
+            if (myScore) {
+                const sc = empScore(me);
+                myScore.innerHTML = sc.score === null
+                    ? '<p class="text-sm text-slate-400 font-bold">لسه مفيش تقييمات — مؤشر أدائك هيظهر هنا أول ما الإدارة تقيّمك</p>'
+                    : `<div class="flex flex-wrap items-center gap-4">
+                        <div class="text-center"><p class="text-4xl font-black ${sc.score >= 80 ? 'text-emerald-600' : sc.score >= 60 ? 'text-amber-500' : 'text-rose-600'}">${sc.score}<span class="text-base">%</span></p><p class="text-[11px] text-slate-400 font-bold">مؤشر الأداء</p></div>
+                        <div class="flex-1 min-w-[12rem]">
+                            <div class="h-3 bg-slate-100 rounded-full overflow-hidden"><div class="h-full ${sc.score >= 80 ? 'bg-emerald-500' : sc.score >= 60 ? 'bg-amber-400' : 'bg-rose-500'} rounded-full transition-all" style="width:${sc.score}%"></div></div>
+                            <p class="text-xs text-slate-500 mt-2">متوسط التقييم ${cmpStarsHtml(sc.avg)} <b>${sc.avg ? sc.avg.toFixed(1) : '—'}</b> من ${sc.count} تقييم · شكاوى مثبتة ضدك: <b class="${sc.proven ? 'text-rose-600' : ''}">${sc.proven}</b> (كل واحدة بتخصم 5%)</p>
+                        </div></div>`;
+            }
+            const myEvals = el('cmpMyEvals');
+            if (myEvals) {
+                const rows = cmpEvals.filter(e => e.userId === me);
+                myEvals.innerHTML = rows.length ? rows.map(e => `<div class="border border-slate-200 rounded-2xl p-4"><div class="flex items-center gap-2">${cmpStarsHtml(e.stars)}<b class="text-sm">${Number(e.stars) || 0}/5</b><span class="text-[11px] text-slate-400">${esc(e.period || '')} · ${esc(timeAgo(e.t))}</span></div>${e.note ? `<p class="text-sm text-slate-700 mt-1.5 whitespace-pre-wrap">${esc(e.note)}</p>` : ''}<p class="text-[11px] text-slate-400 mt-1">قيّمك: ${esc(e.byName || 'الإدارة')}</p></div>`).join('') : '<p class="text-sm text-slate-400 font-bold text-center py-6">مفيش تقييمات لسه</p>';
+            }
+            const admin = el('cmpAdminList');
+            if (admin) {
+                const fs = (el('cmpFStatus') || {}).value || '';
+                const fq = ((el('cmpFText') || {}).value || '').trim();
+                const rows = cmpList.filter(c => (!fs || c.status === fs) && (!fq || (c.text || '').includes(fq) || (c.aboutName || '').includes(fq) || (c.byName || '').includes(fq)));
+                admin.innerHTML = rows.length ? rows.map(c => cmpCardHtml(c, 'admin')).join('') : '<p class="text-sm text-slate-400 font-bold text-center py-6">مفيش شكاوي مطابقة</p>';
+            }
+            const emp = el('cmpEmpTable');
+            if (emp) {
+                const rows = (appData.users || []).filter(u => u.active).map(u => ({ u, sc: empScore(u.id) })).sort((a, b) => (b.sc.score ?? -1) - (a.sc.score ?? -1));
+                emp.innerHTML = `<div class="overflow-x-auto"><table class="w-full text-sm min-w-[560px]">
+                    <thead><tr class="text-slate-400 text-xs border-b border-slate-100"><th class="text-start py-2">الموظف</th><th>التقييم</th><th>شكاوى عليه</th><th>مثبتة</th><th>مؤشر الأداء</th><th></th></tr></thead>
+                    <tbody>${rows.map(({ u, sc }) => `<tr class="border-b border-slate-50">
+                        <td class="py-2 font-bold text-slate-700">${esc(u.name)}<span class="block text-[10px] text-slate-400 font-normal">${esc(roleName(u.roleId) || '')}</span></td>
+                        <td class="text-center">${sc.count ? cmpStarsHtml(sc.avg) + ` <b>${sc.avg.toFixed(1)}</b>` : '<span class="text-slate-300">—</span>'}</td>
+                        <td class="text-center">${sc.against || '—'}</td>
+                        <td class="text-center ${sc.proven ? 'text-rose-600 font-black' : ''}">${sc.proven || '—'}</td>
+                        <td class="text-center">${sc.score === null ? '<span class="text-slate-300">—</span>' : `<b class="${sc.score >= 80 ? 'text-emerald-600' : sc.score >= 60 ? 'text-amber-500' : 'text-rose-600'}">${sc.score}%</b>`}</td>
+                        <td><button type="button" onclick="cmpAddEval('${u.id}')" class="${BTN_SECONDARY} !py-1 text-xs">قيّم</button></td>
+                    </tr>`).join('')}</tbody></table></div>`;
+            }
+        }
+        function cmpSubmit() {
+            const text = (el('cmpText').value || '').trim();
+            if (!text) return toast('اكتب تفاصيل الشكوى الأول', 'error');
+            const aboutId = el('cmpAbout').value || '';
+            const meUser = currentUser();
+            const c = { id: uid('CMP-'), by: cmpMe(), byName: meUser ? meUser.name : '', aboutId, aboutName: aboutId ? chatNameOf(aboutId) : '', category: el('cmpCat').value, text, anon: !!el('cmpAnon').checked, t: new Date().toISOString(), status: 'جديدة', reply: '', replyBy: '', replyAt: '' };
+            fbDb.collection('complaints').doc(c.id).set(c).then(() => {
+                toast('وصلت شكواك للإدارة ✅', 'success');
+                el('cmpText').value = '';
+                cmpNotifyManagers(c);
+            }).catch(err => { console.error(err); toast('حصلت مشكلة في إرسال الشكوى', 'error'); });
+        }
+        function cmpManagers() {
+            return (appData.users || []).filter(u => u.active && u.id !== cmpMe() && (u.roleId === 'admin' || ((appData.roles[u.roleId] || {}).permissions || []).includes('complaints.manage')));
+        }
+        function cmpNotifyManagers(c) {
+            if (!fbDb) return;
+            cmpManagers().forEach(m => {
+                const n = { id: 'cmpNTF-' + c.id + '-' + m.id, t: c.t, uid: cmpMe(), user: 'شكوى جديدة', verb: 'وصلت', kind: 'شكوى موظف', detail: (c.aboutName ? 'بخصوص ' + c.aboutName + ' — ' : '') + String(c.text || '').slice(0, 90), to: m.id, target: { col: 'complaints', id: c.id } };
+                fbDb.collection('notifications').doc(n.id).set(n).catch(() => {});
+            });
+        }
+        function cmpSetStatus(id, status) {
+            fbDb.collection('complaints').doc(id).update({ status }).then(() => toast('اتحدثت حالة الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
+        }
+        function cmpReplyModal(id) {
+            const c = cmpList.find(x => x.id === id); if (!c) return;
+            openModal({ title: 'الرد على الشكوى', body: `<textarea id="cmpReplyText" rows="4" class="${INPUT_CLS}" placeholder="اكتب رد الإدارة...">${esc(c.reply || '')}</textarea>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">إلغاء</button>
+                    <button type="button" onclick="cmpReplySave('${id}')" class="${BTN_PRIMARY}">حفظ الرد</button>
+                </div>` });
+        }
+        function cmpReplySave(id) {
+            const reply = el('cmpReplyText').value.trim();
+            const meUser = currentUser();
+            fbDb.collection('complaints').doc(id).update({ reply, replyBy: meUser ? meUser.name : '', replyAt: new Date().toISOString() }).then(() => { closeModal(); toast('اتحفظ الرد', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
+        }
+        function cmpDelete(id) {
+            if (!confirm('حذف الشكوى دي نهائيًا؟')) return;
+            fbDb.collection('complaints').doc(id).delete().then(() => toast('اتحذفت الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
+        }
+        function cmpAddEval(preselect) {
+            const people = (appData.users || []).filter(u => u.active && u.id !== cmpMe());
+            if (!people.length) return toast('مفيش موظفين', 'error');
+            openModal({ title: 'تقييم موظف', body: `
+                <div class="space-y-3">
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الموظف</span>
+                        <select id="evUser" class="${INPUT_CLS}">${people.map(u => `<option value="${u.id}" ${preselect === u.id ? 'selected' : ''}>${esc(u.name)} (${esc(roleName(u.roleId) || '')})</option>`).join('')}</select></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">التقييم (من 5)</span>
+                        <select id="evStars" class="${INPUT_CLS}"><option value="5">⭐⭐⭐⭐⭐ ممتاز (5)</option><option value="4">⭐⭐⭐⭐ جيد جدًا (4)</option><option value="3" selected>⭐⭐⭐ جيد (3)</option><option value="2">⭐⭐ مقبول (2)</option><option value="1">⭐ ضعيف (1)</option></select></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الفترة</span>
+                        <input id="evPeriod" type="month" class="${INPUT_CLS}" value="${new Date().toISOString().slice(0, 7)}"></label>
+                    <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">ملاحظات التقييم</span>
+                        <textarea id="evNote" rows="3" class="${INPUT_CLS}" placeholder="نقاط القوة / اللي محتاج يتحسن..."></textarea></label>
+                </div>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">إلغاء</button>
+                    <button type="button" onclick="cmpEvalSave()" class="${BTN_PRIMARY}">حفظ التقييم</button>
+                </div>` });
+        }
+        function cmpEvalSave() {
+            const userId = el('evUser').value;
+            const meUser = currentUser();
+            const ev = { id: uid('EV-'), userId, userName: chatNameOf(userId), by: cmpMe(), byName: meUser ? meUser.name : '', stars: Number(el('evStars').value) || 3, period: el('evPeriod').value || '', note: el('evNote').value.trim(), t: new Date().toISOString() };
+            fbDb.collection('evaluations').doc(ev.id).set(ev).then(() => { closeModal(); toast('اتحفظ التقييم ⭐', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
+        }
 
         let custOrderSnapshots = {};       // key -> map of orders from one listener (repId / repName / all)
         let fbCustSubKeys = new Set();     // listeners already open in this session
@@ -6441,6 +6788,7 @@
                 <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
                 ${canCustComments() ? `<button type="button" onclick="openCustComments('${id}')" title="تعليقات الفاتورة" aria-label="تعليقات الفاتورة" class="${BTN_ICON} relative ${pending ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'}"><i class="fa-solid fa-comments"></i>${unseen ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${unseen}</span>` : ''}</button>` : ''}
                 <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
+                ${c.customerPhone ? `<button type="button" onclick="custWhatsApp('${id}')" title="إرسال الفاتورة واتساب للعميل" aria-label="واتساب للعميل" class="${BTN_ICON} text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
                 ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
             </div>`;
@@ -7171,10 +7519,41 @@
                 <button type="button" onclick="printCustOrder('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-print"></i> طباعة</button>
                 ${canCustComments() ? `<button type="button" onclick="openCustComments('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-comments"></i> تعليقات الفاتورة</button>` : ''}
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
+                <button type="button" onclick="custWhatsApp('${cid}')" class="${BTN_SECONDARY} !text-emerald-700 !border-emerald-300 hover:!bg-emerald-50"><i class="fa-brands fa-whatsapp"></i> واتساب للعميل</button>
             </div>`;
             openModal({ title: `تفاصيل طلبية ${esc(custNoLabel(c))}`, body: custDetailHtml(c) + actions, size: 'lg' });
         }
 
+        function custWaPhone(raw) {
+            let p = String(raw || '').replace(/[^0-9]/g, '');
+            if (p.startsWith('00')) p = p.slice(2);
+            if (p.startsWith('0')) p = '20' + p.slice(1);
+            else if (p.length === 10 && p.startsWith('1')) p = '20' + p;
+            return p;
+        }
+        function custWhatsApp(id) {
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c) return;
+            const phone = custWaPhone(c.customerPhone);
+            if (!phone) return toast('الفاتورة دي مفيهاش رقم تليفون عميل — ضيفه من تعديل الفاتورة', 'error');
+            const lines = [
+                'أهلاً ' + (c.customer || '') + ' 🌟',
+                'فاتورة رقم ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' بتاريخ ' + fmtDateAr(c.date) : ''),
+                'الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' · المدفوع: ' + fmtMoney(numOr0(c.paid)) + ' · المتبقي: ' + fmtMoney(custRemaining(c)),
+                custRemaining(c) > 0 ? 'برجاء سداد المبلغ المتبقي في أقرب وقت، وشكرًا لتعاونكم 🙏' : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏',
+                '— ' + (appData.settings.systemName || 'الرحمة')
+            ];
+            window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
+        }
+        function custWhatsAppStatement(customer, phoneRaw, repId) {
+            const phone = custWaPhone(phoneRaw);
+            if (!phone) return toast('مفيش رقم تليفون للعميل ده', 'error');
+            const rows = (appData.custOrders || []).filter(c => c.customer === customer && (!repId || c.repId === repId));
+            if (!rows.length) return toast('مفيش فواتير للعميل ده', 'error');
+            const tot = rows.reduce((a, c) => a + numOr0(c.amount), 0), paid = rows.reduce((a, c) => a + numOr0(c.paid), 0);
+            const lines = ['كشف حساب — ' + customer, ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))), 'الإجمالي: ' + fmtMoney(tot) + ' · المدفوع: ' + fmtMoney(paid) + ' · المتبقي: ' + fmtMoney(tot - paid), '— ' + (appData.settings.systemName || 'الرحمة')];
+            window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
+        }
         function printCustOrder(id) {
             if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const c = appData.custOrders.find(x => x.id === id);
@@ -8643,6 +9022,7 @@
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
             chat: param => viewChat(param),
+            complaints: () => viewComplaints(),
             shipping: param => param === 'screen' ? viewShippingScreen() : param === 'trips' ? viewShipTrips() : viewShipping(),
             home: () => viewHome(),
             dashboard: () => viewDashboard(),
@@ -10074,6 +10454,13 @@
                         ${btn('exportBackup()', 'تنزيل نسخة احتياطية', 'fa-download', BTN_PRIMARY)}
                         ${btn("el('backupFileInput').click()", 'استعادة من ملف', 'fa-upload', BTN_SECONDARY)}
                     </div>
+                    <div class="mt-5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 space-y-2">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="checkbox" ${autoBackupOn() ? 'checked' : ''} onchange="autoBackupSet(this.checked)" class="w-5 h-5 accent-brand-600">
+                            <span class="text-sm"><b class="block">نسخة احتياطية تلقائية كل أسبوع</b><span class="text-xs text-slate-500">أول ما مدير يفتح السيستم وعدّى أسبوع على آخر نسخة، بتتنزل نسخة JSON لوحدها على جهازه (دلوقتي بتشمل طلبيات العملاء والمندوبين كمان).</span></span>
+                        </label>
+                        <p class="text-xs text-slate-500">آخر نسخة احتياطية: <b id="lastBackupAt">${esc(autoBackupLastText())}</b></p>
+                    </div>
                 </section>`;
         }
         function settingsAccountHtml() {
@@ -10279,13 +10666,27 @@
             const payload = {
                 app: 'factory-lists', version: 5, exportedAt: new Date().toISOString(),
                 note: 'الشركات واللستات والشيكات والمستفيدين والطلبيات والإعدادات فقط. ملفات PDF والمستخدمين والصلاحيات لا تدخل النسخة.',
-                data: { settings: appData.settings, companies: appData.companies, partners: appData.partners, checks: appData.checks, orders: appData.orders }
+                data: { settings: appData.settings, companies: appData.companies, partners: appData.partners, checks: appData.checks, orders: appData.orders, custReps: appData.custReps, custOrders: appData.custOrders }
             };
+            try { localStorage.setItem('factoryLastBackup', new Date().toISOString()); } catch (e) { /* blocked */ }
             downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `نسخة-احتياطية-${todayISO()}.json`);
             log('نسخ احتياطي');
             toast('تم تنزيل النسخة الاحتياطية. ملفات PDF لا تدخل فيها', 'success', null, 6000);
         }
 
+        function autoBackupOn() { try { return localStorage.getItem('factoryAutoBackup') !== '0'; } catch (e) { return true; } }
+        function autoBackupSet(on) { try { localStorage.setItem('factoryAutoBackup', on ? '1' : '0'); } catch (e) { /* blocked */ } toast(on ? 'النسخ التلقائي الأسبوعي شغال' : 'النسخ التلقائي اتقفل', 'success'); }
+        function autoBackupLastText() {
+            try { const v = localStorage.getItem('factoryLastBackup'); return v ? timeAgo(v) + ' (' + fmtDateAr(v.slice(0, 10)) + ')' : 'لسه متعملتش نسخة من الجهاز ده'; } catch (e) { return '—'; }
+        }
+        function maybeAutoBackup() {
+            if (!can('backup.manage') || !autoBackupOn() || !appData) return;
+            let last = 0;
+            try { last = new Date(localStorage.getItem('factoryLastBackup') || 0).getTime() || 0; } catch (e) { /* blocked */ }
+            if (Date.now() - last < 7 * 24 * 3600 * 1000) return;
+            exportBackup();
+            toast('نزلت النسخة الاحتياطية الأسبوعية التلقائية 💾', 'info', null, 6000);
+        }
         function restoreBackup(event) {
             const file = event.target.files[0];
             event.target.value = '';
@@ -11255,7 +11656,7 @@
                 return next;
             },
             sectionOf(n) {
-                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', chat: 'chat', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
+                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', chat: 'chat', complaints: 'users', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
                 if (n && n.target && byCol[n.target.col]) return byCol[n.target.col];
                 const k = (n && n.kind) || '';
                 if (k.includes('شحن')) return 'shipping';
@@ -11664,5 +12065,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f00f8ade5289c7',t:'MTc5NTQzNTcyMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f00f8ade5289c7',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f04528f96ff519',t:'MTc5NTQzNzkxNw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f04528f96ff519',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
