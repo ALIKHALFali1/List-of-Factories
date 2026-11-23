@@ -1649,7 +1649,7 @@
         // One entry is written for every saved change (and every PDF change), by the user who made it.
         // Everyone else who is signed in sees it in the bell. The activity log (logs) stays limited to logs.view.
         const NOTIF_LIMIT = 50;
-        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب' };
+        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب', shipping: 'شحنة' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
         let notifs = [];                 // newest first, as the database sends them (all users)
         let notifUnsub = null;
@@ -1769,6 +1769,7 @@
         const notifUnread = n => n.t > notifSeenAt() && !notifSeenIds().has(n.id);
 
         function notifIcon(kind = '') {
+            if (kind.includes('شحن')) return ['fa-truck-fast', 'bg-sky-100 text-sky-700'];
             if (kind.includes('تعليق')) return ['fa-comments', 'bg-amber-100 text-amber-700'];
             if (kind.includes('PDF') || kind.includes('لستة')) return ['fa-file-pdf', 'bg-rose-100 text-rose-700'];
             if (kind.includes('طلبية عميل')) return ['fa-file-invoice', 'bg-brand-100 text-brand-700'];
@@ -1880,6 +1881,7 @@
             if (t.col === 'roles') return () => { if (!notifGuard('users')) return; navigate('users'); setTimeout(() => setUsersTab('roles'), 150); };
             if (t.col === 'settings') return () => navigate('settings');
             if (t.col === 'custReps') return () => { if (!notifGuard('customers')) return; navigate('customers'); setTimeout(() => { if (canCust('manage')) openCustRepsModal(); }, 350); };
+            if (t.col === 'shipping') return () => { if (notifGuard('shipping')) navigate('shipping'); };
             // إشعارات قديمة من غير هدف محفوظ: نستنتج الوجهة من النوع والتفاصيل
             const kind = n.kind || '', detail = n.detail || '';
             const num = (detail.match(/\d+/) || [])[0];
@@ -7671,6 +7673,8 @@
             b.commit().then(() => {
                 const stageTxt = sameInv && prevCell.stage !== stage ? `من «${shipStage(prevCell.stage)[1]}» إلى «${shipStage(stage)[1]}»` : shipStage(stage)[1];
                 log('تعديل الشحن والنقل', `عربية ${shipCarOf(key)} — ${cell.no} — ${stageTxt}${sameInv ? '' : ' — شحنة جديدة'}`);
+                if (!sameInv) notifyDirect('أضاف', 'شحنة', `عربية ${shipCarOf(key)} — ${cell.no} — ${cell.customer || ''} — ${shipStage(stage)[1]}`, { col: 'shipping' });
+                else if (prevCell.stage !== stage) notifyDirect('حدّث', 'شحنة', `عربية ${shipCarOf(key)} — ${cell.no} — ${cell.customer || ''}: ${stageTxt}`, { col: 'shipping' });
                 if (stage === 'delivered') shipMarkDelivered(inv);
                 toast('تم حفظ الشحنة', 'success');
                 if (seq === modalSeq) closeModal();
@@ -9412,6 +9416,7 @@
             if (can('home.personal')) out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
             if (can('home.personal')) out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
             if (can('backup.manage')) out.push({ key: 'backup', title: 'النسخ الاحتياطي', icon: 'fa-database', desc: 'تنزيل نسخة احتياطية أو استعادة من ملف.', html: settingsBackupHtml });
+            out.push({ key: 'sound', title: 'الصوت والإشعارات', icon: 'fa-volume-high', desc: 'صوت مميز لكل قسم عند وصول تنبيه جديد، والإشعارات المنبثقة.', html: soundSettingsHtml });
             out.push({ key: 'account', title: 'حسابي', icon: 'fa-user', desc: 'تغيير كلمة المرور الخاصة بك.', html: settingsAccountHtml });
             out.push({ key: 'install', title: 'تثبيت التطبيق', icon: 'fa-mobile-screen', desc: 'ثبّت النظام على الموبايل كتطبيق، واعرف إزاي الشغل الأوفلاين بيشتغل.', html: installSettingsHtml });
             if (canSys) out.push({ key: 'logs', title: 'سجل النشاط', icon: 'fa-clock-rotate-left', desc: 'عرض عدد السجلات ومسحها.', html: settingsLogsHtml });
@@ -9440,6 +9445,46 @@
                     ${cur.html()}
                 </div>`
             };
+        }
+
+        function soundMasterSet(on) { App.Sounds.save({ enabled: !!on }); if (on) App.Sounds.play('ding'); }
+        function soundVolumeSet(v) { App.Sounds.save({ volume: Number(v) / 100 }); }
+        function soundVolumePreview() { App.Sounds.play('ding'); }
+        function soundSectionSet(sec, key) { App.Sounds.save({ sections: { [sec]: key } }); if (key !== 'none') App.Sounds.play(key); }
+        function soundPreview(sec) { const k = App.Sounds.prefs().sections[sec]; if (k && k !== 'none') App.Sounds.play(k); else toast('القسم ده مضبوط بدون صوت', 'info'); }
+        function soundPopupSet(on) { App.Sounds.setPopup(!!on); setTimeout(render, 350); }
+
+        function soundSettingsHtml() {
+            const p = App.Sounds.prefs();
+            const inApp = !!window.AndroidBridge;
+            const popupSupported = inApp || ('Notification' in window);
+            const rows = App.Sounds.SECTIONS.map(([sec, label]) => `
+                <div class="flex flex-wrap items-center gap-2 py-3">
+                    <span class="flex-1 min-w-[10rem] text-sm font-bold text-slate-700">${label}</span>
+                    <select onchange="soundSectionSet('${sec}', this.value)" class="${INPUT_CLS} !w-auto min-w-[11rem]">${App.Sounds.CHOICES.map(([v, l]) => `<option value="${v}" ${p.sections[sec] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+                    <button type="button" onclick="soundPreview('${sec}')" class="${BTN_SECONDARY} !px-3" title="تجربة الصوت"><i class="fa-solid fa-play"></i></button>
+                </div>`).join('');
+            return `<section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
+                <h3 class="font-bold text-lg mb-1"><i class="fa-solid fa-volume-high text-brand-600"></i> الصوت والإشعارات</h3>
+                <p class="text-xs text-slate-500 mb-4">الإعدادات دي على الجهاز ده بس — كل مستخدم يظبط أصواته على موبايله أو جهازه.</p>
+                <div class="space-y-4">
+                    <label class="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 cursor-pointer">
+                        <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="soundMasterSet(this.checked)" class="w-5 h-5 accent-brand-600">
+                        <span class="text-sm"><b class="block">أصوات التنبيهات</b><span class="text-xs text-slate-500">تشغيل صوت مميز لكل قسم لما يوصل إشعار جديد</span></span>
+                    </label>
+                    <div>
+                        <span class="block text-xs font-bold text-slate-700 mb-1">مستوى الصوت</span>
+                        <input type="range" min="0" max="100" value="${Math.round(p.volume * 100)}" oninput="soundVolumeSet(this.value)" onchange="soundVolumePreview()" class="w-full accent-brand-600">
+                    </div>
+                    <label class="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 ${popupSupported ? 'cursor-pointer' : 'opacity-60'}">
+                        <input type="checkbox" ${App.Sounds.popupOn() ? 'checked' : ''} ${popupSupported ? '' : 'disabled'} onchange="soundPopupSet(this.checked)" class="w-5 h-5 accent-brand-600">
+                        <span class="text-sm"><b class="block">الإشعارات المنبثقة</b><span class="text-xs text-slate-500">${inApp ? 'إشعارات شريط حالة الموبايل بأيقونة التطبيق (بأصوات الأقسام اللي اخترتها)' : popupSupported ? 'إشعارات سطح المكتب من المتصفح لما يوصل جديد أو مواعيد مهمة' : 'المتصفح ده مش بيدعم الإشعارات المنبثقة'}</span></span>
+                    </label>
+                </div>
+                <h4 class="font-bold text-sm mt-6 mb-1 text-slate-700">صوت كل قسم</h4>
+                <div class="divide-y divide-slate-100">${rows}</div>
+                <p class="text-[11px] text-slate-400 mt-4">نفس الأصوات شغالة على الموقع وفي تطبيق الموبايل. في المتصفح، الصوت بيبدأ يشتغل بعد أول ضغطة على أي حاجة في الصفحة (سياسة المتصفحات).</p>
+            </section>`;
         }
 
         function saveSettings(e) {
@@ -10460,6 +10505,132 @@
             }
         };
 
+        // ---------- per-section alert sounds (synthesized, device-local) ----------
+        App.Sounds = {
+            KEY: 'factorySoundPrefs',
+            SECTIONS: [
+                ['shipping', 'الشحن والنقل', 'horn'],
+                ['lists', 'اللستات', 'cash'],
+                ['orders', 'الطلبيات', 'chime'],
+                ['custorders', 'طلبيات العملاء والتعليقات', 'pop'],
+                ['checks', 'الشيكات والمستفيدين', 'bell'],
+                ['companies', 'المصانع والشركات', 'clank'],
+                ['users', 'المستخدمون والصلاحيات', 'click'],
+                ['settings', 'إعدادات النظام', 'click'],
+                ['default', 'باقي التنبيهات', 'ding']
+            ],
+            CHOICES: [
+                ['horn', '🚗 عربية (بيب بيب)'],
+                ['cash', '💵 فلوس (كاشير)'],
+                ['chime', '📦 رنين طلبية'],
+                ['pop', '💬 نغمة رسالة'],
+                ['bell', '🔔 جرس'],
+                ['clank', '🏭 صوت مصنع'],
+                ['click', '🤫 نقرة هادية'],
+                ['ding', '🔔 تنبيه عام'],
+                ['none', '🔇 بدون صوت']
+            ],
+            prefs() {
+                let p = {};
+                try { p = JSON.parse(localStorage.getItem(this.KEY) || '{}'); } catch (e) { p = {}; }
+                const sections = {};
+                this.SECTIONS.forEach(([k, , def]) => { sections[k] = (p.sections && this.CHOICES.some(c => c[0] === p.sections[k])) ? p.sections[k] : def; });
+                return { enabled: p.enabled !== false, volume: typeof p.volume === 'number' ? Math.min(1, Math.max(0, p.volume)) : 0.8, sections };
+            },
+            save(patch) {
+                const cur = this.prefs();
+                const next = { enabled: patch.enabled !== undefined ? !!patch.enabled : cur.enabled,
+                               volume: patch.volume !== undefined ? Math.min(1, Math.max(0, Number(patch.volume) || 0)) : cur.volume,
+                               sections: { ...cur.sections, ...(patch.sections || {}) } };
+                try { localStorage.setItem(this.KEY, JSON.stringify(next)); } catch (e) { /* blocked */ }
+                return next;
+            },
+            sectionOf(n) {
+                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
+                if (n && n.target && byCol[n.target.col]) return byCol[n.target.col];
+                const k = (n && n.kind) || '';
+                if (k.includes('شحن')) return 'shipping';
+                if (k.includes('تعليق') || k.includes('طلبية عميل') || k.includes('مندوب')) return 'custorders';
+                if (k.includes('لستة') || k.includes('PDF')) return 'lists';
+                if (k.includes('شيك') || k.includes('مستفيد')) return 'checks';
+                if (k.includes('شركة')) return 'companies';
+                if (k.includes('طلبية')) return 'orders';
+                if (k.includes('مستخدم') || k.includes('دور')) return 'users';
+                if (k.includes('إعدادات')) return 'settings';
+                return 'default';
+            },
+            keyFor(n) { return this.prefs().sections[this.sectionOf(n)] || 'ding'; },
+            popupOn() {
+                if (window.AndroidBridge) { try { return localStorage.getItem('factoryNativeNotifs') !== '0'; } catch (e) { return true; } }
+                return !!('Notification' in window) && App.Notifications.enabled() && Notification.permission === 'granted';
+            },
+            setPopup(on) {
+                if (window.AndroidBridge) {
+                    try { localStorage.setItem('factoryNativeNotifs', on ? '1' : '0'); } catch (e) { /* blocked */ }
+                    if (on && AndroidBridge.requestNotifPermission) { try { AndroidBridge.requestNotifPermission(); } catch (e) { /* noop */ } }
+                    return;
+                }
+                if (on) { App.Notifications.enable(); return; }
+                try { localStorage.removeItem(App.Notifications.KEY); } catch (e) { /* blocked */ }
+                webNotifBtnState();
+            },
+            _ctx: null,
+            _ensure() {
+                if (!this._ctx) { try { this._ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+                if (this._ctx.state === 'suspended') this._ctx.resume().catch(() => {});
+                return this._ctx;
+            },
+            _tone(out, { f = 880, f2 = null, at = 0, d = 0.15, type = 'sine', g = 0.4 }) {
+                const c = this._ctx, t0 = c.currentTime + at;
+                const o = c.createOscillator(), gn = c.createGain();
+                o.type = type;
+                o.frequency.setValueAtTime(f, t0);
+                if (f2) o.frequency.exponentialRampToValueAtTime(Math.max(30, f2), t0 + d);
+                gn.gain.setValueAtTime(0.0001, t0);
+                gn.gain.exponentialRampToValueAtTime(g, t0 + 0.012);
+                gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+                o.connect(gn); gn.connect(out);
+                o.start(t0); o.stop(t0 + d + 0.05);
+            },
+            _noise(out, { at = 0, d = 0.08, g = 0.2, f = 4000 }) {
+                const c = this._ctx, t0 = c.currentTime + at;
+                const len = Math.max(1, Math.floor(c.sampleRate * d));
+                const buf = c.createBuffer(1, len, c.sampleRate);
+                const data = buf.getChannelData(0);
+                for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+                const src = c.createBufferSource(); src.buffer = buf;
+                const fl = c.createBiquadFilter(); fl.type = 'bandpass'; fl.frequency.value = f; fl.Q.value = 0.8;
+                const gn = c.createGain(); gn.gain.value = g;
+                src.connect(fl); fl.connect(gn); gn.connect(out);
+                src.start(t0);
+            },
+            play(key) {
+                const c = this._ensure();
+                if (!c) return;
+                try {
+                    const out = c.createGain();
+                    out.gain.value = this.prefs().volume;
+                    out.connect(c.destination);
+                    const T = (o) => this._tone(out, o), N = (o) => this._noise(out, o);
+                    if (key === 'horn') { [0, 0.3].forEach(at => { T({ f: 370, at, d: 0.2, type: 'square', g: 0.16 }); T({ f: 466, at, d: 0.2, type: 'square', g: 0.16 }); }); }
+                    else if (key === 'cash') { N({ at: 0, d: 0.05, g: 0.25, f: 5000 }); T({ f: 1568, at: 0.02, d: 0.07, g: 0.3 }); T({ f: 2093, at: 0.09, d: 0.28, g: 0.3 }); T({ f: 2637, at: 0.2, d: 0.35, g: 0.18 }); }
+                    else if (key === 'chime') { [659, 784, 988, 1319].forEach((f, i) => T({ f, at: i * 0.09, d: 0.28, type: 'triangle', g: 0.35 })); }
+                    else if (key === 'pop') { T({ f: 520, f2: 940, at: 0, d: 0.09, g: 0.45 }); T({ f: 1180, at: 0.1, d: 0.07, g: 0.2 }); }
+                    else if (key === 'bell') { T({ f: 1046, at: 0, d: 0.9, g: 0.35 }); T({ f: 1568, at: 0, d: 0.5, g: 0.14 }); T({ f: 2093, at: 0, d: 0.3, g: 0.07 }); }
+                    else if (key === 'clank') { T({ f: 196, at: 0, d: 0.2, type: 'square', g: 0.2 }); T({ f: 147, at: 0, d: 0.26, type: 'square', g: 0.18 }); T({ f: 294, at: 0.02, d: 0.12, type: 'square', g: 0.12 }); N({ at: 0, d: 0.09, g: 0.22, f: 900 }); }
+                    else if (key === 'click') { T({ f: 1100, at: 0, d: 0.05, type: 'triangle', g: 0.25 }); }
+                    else { T({ f: 1318, at: 0, d: 0.12, g: 0.35 }); T({ f: 1760, at: 0.09, d: 0.24, g: 0.35 }); }
+                } catch (e) { /* audio unavailable */ }
+            },
+            playFor(n) {
+                const p = this.prefs();
+                if (!p.enabled) return;
+                const key = p.sections[this.sectionOf(n)] || 'ding';
+                if (key !== 'none') this.play(key);
+            }
+        };
+        ['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, () => { if (window.App && App.Sounds) App.Sounds._ensure(); }, { passive: true }));
+
         // ---------- browser notifications for due items (opt-in from the bell) ----------
         App.Notifications = {
             KEY: 'factoryBrowserNotifs',
@@ -10467,18 +10638,23 @@
             enabled() { try { return localStorage.getItem(this.KEY) === '1'; } catch (e) { return false; } },
             pushedKey() { return 'webPushed:' + (fbUser?.uid || 'anon'); },
             pushedIds() { try { return new Set(JSON.parse(localStorage.getItem(this.pushedKey()) || '[]')); } catch (e) { return new Set(); } },
-            // called on every bell snapshot: anything new (comments, invoices, checks...) pops a browser notification
+            // called on every bell snapshot: anything new (comments, invoices, checks...) pops a browser notification and/or plays its section sound
             observe() {
-                if (!('Notification' in window) || window.AndroidBridge) return;   // the Android app notifies natively
+                if (window.AndroidBridge) return;   // the Android app notifies natively (with the same per-section sounds)
                 if (!this.baseline) { this.baseline = new Date().toISOString(); return; }
-                if (!this.enabled() || Notification.permission !== 'granted' || !sessionUserId) return;
+                if (!sessionUserId) return;
                 const pushed = this.pushedIds();
                 const fresh = visibleNotifs()
                     .filter(n => n.t > this.baseline && !pushed.has(n.id))
                     .sort((a, b) => (a.t < b.t ? -1 : 1))
                     .slice(0, 5);
                 if (!fresh.length) return;
-                fresh.forEach(n => { pushed.add(n.id); this.fire(n); });
+                const popupOn = this.enabled() && ('Notification' in window) && Notification.permission === 'granted';
+                fresh.forEach(n => {
+                    pushed.add(n.id);
+                    if (popupOn) this.fire(n);
+                    if (window.App && App.Sounds) App.Sounds.playFor(n);
+                });
                 try { localStorage.setItem(this.pushedKey(), JSON.stringify([...pushed].slice(-300))); } catch (e) { /* blocked */ }
             },
             fire(n) {
@@ -10777,5 +10953,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec58a78a540d4b',t:'MTc5NTM5Njc3Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec58a78a540d4b',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5ec817a3922e15d',t:'MTc5NTM5ODQ0NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5ec817a3922e15d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
