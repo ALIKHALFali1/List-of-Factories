@@ -2173,7 +2173,7 @@
                 fbCache.users[meDoc.id] = meDoc;
                 fbLoaded.me = true;
 
-                if (meDoc.roleId && (!fbMyRoleUnsub || fbMyRoleUnsub._roleId !== meDoc.roleId)) {
+                if (meDoc.active && meDoc.roleId && (!fbMyRoleUnsub || fbMyRoleUnsub._roleId !== meDoc.roleId)) {
                     if (fbMyRoleUnsub) { try { fbMyRoleUnsub(); } catch (e) { /* noop */ } }
                     const uRole = fbDb.collection('roles').doc(meDoc.roleId).onSnapshot(rs => {
                         if (!fbCache) return;
@@ -2240,6 +2240,8 @@
 
             if (can('companies.view') || can('lists.view') || can('orders.view') || can('dashboard.view')) {
                 listenScoped('companies', fbDb.collection('companies'), s => { fbCache.companies = mapDocs(s); });
+            }
+            if (can('companies.view') || can('lists.view') || can('dashboard.view')) {
                 listenScoped('lists', fbDb.collection('lists'), s => { fbCache.lists = mapDocs(s); });
             }
 
@@ -2331,7 +2333,14 @@
             if (!fbUser || !fbCache) return;
             console.error('listener ' + name, err);
             if (err && err.code === 'permission-denied') {
-                handleAccessLost('حسابك غير مفعّل أو ليس لديك صلاحية الوصول. تواصل مع مدير النظام');
+                // Only core identity listeners ('me', 'myRole') mean the account lost access.
+                // Secondary collection listeners degrade gracefully instead of locking the user out.
+                if (name === 'me' || name === 'myRole') {
+                    handleAccessLost('حسابك غير مفعّل أو ليس لديك صلاحية الوصول. تواصل مع مدير النظام');
+                } else {
+                    fbLoaded[name] = true;
+                    onCacheChanged();
+                }
             } else {
                 toast('تعذر تحميل البيانات من السيرفر', 'error', null, 5000);
             }
@@ -2372,8 +2381,10 @@
 
             const needUsers = can('users.manage');
             const needCompanies = can('companies.view') || can('lists.view') || can('orders.view') || can('dashboard.view');
+            const needLists = can('companies.view') || can('lists.view') || can('dashboard.view');
             if (needUsers && (!fbLoaded.allUsers || !fbLoaded.allRoles)) return;
-            if (needCompanies && (!fbLoaded.companies || !fbLoaded.lists)) return;
+            if (needCompanies && !fbLoaded.companies) return;
+            if (needLists && !fbLoaded.lists) return;
 
             const contentOf = d => canon([...desiredDocs(d).entries()]);
             if (previous && contentOf(previous) === contentOf(appData)) {
@@ -13315,5 +13326,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f9498f48a55ee7',t:'MTc5NTUzMjQ2OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f9498f48a55ee7',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f983651b68e28e',t:'MTc5NTUzNDgzOA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f983651b68e28e',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
