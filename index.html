@@ -2211,7 +2211,11 @@
             };
 
             if (can('users.manage')) {
-                listenScoped('allUsers', fbDb.collection('users'), s => { fbCache.users = mapDocs(s); });
+                listenScoped('allUsers', fbDb.collection('users'), s => {
+                    const docs = mapDocs(s);
+                    if (fbUser && fbCache.users[fbUser.uid] && !docs[fbUser.uid]) docs[fbUser.uid] = fbCache.users[fbUser.uid];
+                    fbCache.users = docs;
+                });
                 listenScoped('allRoles', fbDb.collection('roles'), s => { fbCache.roles = mapDocs(s); });
             } else {
                 fbLoaded.allUsers = false;
@@ -2373,7 +2377,7 @@
             if (!fbLoaded.myRole) return;
 
             sessionUserId = rawMe.id;
-            const sigOf = () => canon([...desiredDocs(appData).entries(), appData.logs.map(l => l.id), [...userDirectoryMap.entries()]]);
+            const sigOf = () => canon([...desiredDocs(appData).entries(), appData.users || [], appData.roles || {}, appData.settings || {}, appData.logs.map(l => l.id), [...userDirectoryMap.entries()]]);
             const before = appData ? sigOf() : '';
             const previous = appData;
             buildFromCache();
@@ -2386,8 +2390,8 @@
             if (needCompanies && !fbLoaded.companies) return;
             if (needLists && !fbLoaded.lists) return;
 
-            const contentOf = d => canon([...desiredDocs(d).entries()]);
-            if (previous && contentOf(previous) === contentOf(appData)) {
+            const contentOf = d => canon([[...desiredDocs(d).entries()], d.users || [], d.roles || {}, d.settings || {}]);
+            if (fbSynced && previous && contentOf(previous) === contentOf(appData)) {
                 previous.logs = appData.logs;
                 appData = previous;
             }
@@ -2435,6 +2439,7 @@
                 fbUser = null;
                 sessionUserId = null;
                 appEntered = false;
+                appData = normalizeData({ settings: appData ? appData.settings : {} });
                 closeModal();
                 closeRowMenu();
                 // the server check is still running: its result decides the screen (spinner until then)
@@ -13383,5 +13388,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f9c7d089dac8e1',t:'MTc5NTUzNzY0MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f9c7d089dac8e1',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f9e1c09c603108',t:'MTc5NTUzODcwMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f9e1c09c603108',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
