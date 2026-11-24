@@ -2262,6 +2262,7 @@
             chatStop(); chatStart();
             expStop(); expStart();
             debtStop(); debtStart();
+            debtBlacklistStop(); debtBlacklistStart();
         }
 
         function stopSync() {
@@ -2292,6 +2293,7 @@
             cmpStop();
             expStop();
             debtStop();
+            debtBlacklistStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -8386,6 +8388,7 @@
             box.classList.toggle('text-rose-700', rem > 0);
             box.classList.toggle('text-emerald-700', rem < 0);
             custBalancePreview();
+            custDebtAlertRefresh();
         }
 
         // رصيد حساب العميل أثناء ملء الفاتورة: رصيده الحالي من فواتيره، وأثر الفاتورة دي عليه
@@ -8418,10 +8421,11 @@
                 size: 'lg',
                 submitText: c ? 'حفظ التعديلات' : 'إضافة الطلبية',
                 body: `
+                    <div id="custDebtAlertBox" class="hidden"></div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('التاريخ *', `<input name="date" type="date" required value="${esc(c ? c.date : todayISO())}" class="${INPUT_CLS}">`)}
                         ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" oninput="custRemainingPreview()" class="${INPUT_CLS}">`)}
-                        ${field('تليفون العميل', `<input name="customerPhone" type="tel" value="${esc(c?.customerPhone)}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'رقم الموبايل اللي في الفاتورة')}
+                        ${field('تليفون العميل', `<input name="customerPhone" type="tel" value="${esc(c?.customerPhone)}" oninput="custDebtAlertRefresh()" dir="ltr" class="${INPUT_CLS} font-mono">`, 'رقم الموبايل اللي في الفاتورة')}
                         ${field('رقم الطلب *', `<input name="no" type="number" min="1" step="1" required value="${c ? esc(c.no) : nextCustNo()}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'بياخد رقم تلقائي، وتقدر تكتب غيره')}
                         ${sel('repId', 'اسم المندوب', repOpts, c ? c.repId : '')}
                         ${sel('category', 'الصنف', [['', '— اختر الصنف —'], ...CUST_CATEGORIES], c ? c.category : '')}
@@ -8480,6 +8484,17 @@
                 customerPhone: String(fd.get('customerPhone') || '').trim(),
                 notes: String(fd.get('notes') || '').trim()
             };
+            if (!c) {
+                const blHit = debtFindBlacklistMatch(customer, data.customerPhone);
+                if (blHit && blHit.blocked) {
+                    const stageTxt = debtStageInfo(blHit.stage)[1];
+                    if (!isSystemAdmin()) {
+                        toast(`🚫 ممنوع إنشاء طلبية للعميل "${blHit.customer}" — موجود في القائمة السوداء (${stageTxt}) وعليه مديونية ${fmtMoney(blHit.remaining)}. يلزم موافقة مدير النظام.`, 'error', null, 9000);
+                        return false;
+                    }
+                    if (!confirm(`⚠️ تحذير مدير النظام:\nالعميل "${blHit.customer}" موجود في القائمة السوداء (${stageTxt}) وعليه مديونية متبقية ${fmtMoney(blHit.remaining)}.\n\nهل تريد تجاوز الحظر وإنشاء الطلبية على مسؤوليتك؟`)) return false;
+                }
+            }
             const excess = r2(paid - amount);
             if (c) {
                 Object.assign(c, data, { updatedAt: new Date().toISOString(), updatedBy: orderUserName() });
@@ -9881,8 +9896,13 @@
                 title: `عربية ${shipCarOf(key)}${slot ? ' · ' + shipFmtTime(slot.time) : ''}`,
                 size: 'lg',
                 submitText: 'حفظ الشحنة',
+                onOpen: () => {
+                    const sel = el('modalForm')?.elements.inv;
+                    if (sel) sel.addEventListener('change', shipDebtAlertRefresh);
+                    shipDebtAlertRefresh();
+                },
                 onSubmit: fd => saveShipCell(key, fd),
-                body: `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                body: `<div id="shipDebtAlertBox" class="hidden mb-3"></div><div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div class="sm:col-span-2">${field('الفاتورة *', shipSelect('inv', invOpts, selId))}${noInv}${invTools}</div>
                     ${field('تاريخ تحميل العربية *', `<input name="date" type="date" required value="${esc(shipDay())}" class="${INPUT_CLS}">`, 'غيّر التاريخ والشحنة هتتنقل لليوم الجديد بنفس العربية ونفس المعاد')}
                     ${field('المرحلة *', shipSelect('stage', SHIP_STAGES.map(([k, l]) => [k, l]), cur ? cur.stage : 'waiting'))}
@@ -9919,6 +9939,15 @@
             const stage = String(fd.get('stage') || '');
             if (!inv) { toast('اختر الفاتورة من القايمة', 'error'); return false; }
             if (!SHIP_STAGES.some(s => s[0] === stage)) { toast('اختر المرحلة', 'error'); return false; }
+            const blShip = debtFindBlacklistMatch(inv.customer, inv.customerPhone);
+            if (blShip && blShip.blocked) {
+                const stageTxt = debtStageInfo(blShip.stage)[1];
+                if (!isSystemAdmin()) {
+                    toast(`🚫 ممنوع تحميل أو شحن بضاعة للعميل "${blShip.customer}" — موجود في القائمة السوداء (${stageTxt}) وعليه مديونية ${fmtMoney(blShip.remaining)}. يلزم موافقة مدير النظام.`, 'error', null, 9000);
+                    return false;
+                }
+                if (!confirm(`⚠️ تحذير مدير النظام (الشحن والنقل):\nالعميل "${blShip.customer}" موجود في القائمة السوداء (${stageTxt}) وعليه مديونية متبقية ${fmtMoney(blShip.remaining)}.\n\nهل تريد تجاوز حظر الشحن والسماح بتحميل العربية؟`)) return false;
+            }
             const day = shipDay();
             const dateRaw = String(fd.get('date') || day);
             const targetDay = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : day;
@@ -10287,9 +10316,10 @@
 
         let debtList = [];
         let debtCommentsMap = {}; // { [debtId]: [comment, ...] }
-        let debtUnsub = null, debtCmtUnsub = null;
-        let debtStarted = false;
-        let debtFilterQ = '', debtFilterStage = 'active', debtFilterSource = '', debtFilterEvading = false, debtSort = 'remaining';
+        let debtBlacklistMap = {}; // { [debtId]: { customer, phone, altPhone, stage, evading, remaining, daysOverdue, blocked } }
+        let debtUnsub = null, debtCmtUnsub = null, debtBlUnsub = null;
+        let debtStarted = false, debtBlStarted = false, debtBlAutoSynced = false;
+        let debtFilterQ = '', debtFilterStage = 'active', debtFilterSource = '', debtFilterEvading = false, debtFilterRadar = '', debtSort = 'remaining';
         let debtLogCustomer = '', debtLogStage = '', debtLogType = '', debtLogEvading = false, debtLogQ = '';
 
         const debtCanView   = () => can('debts.view') || can('debts.manage') || can('debts.delete');
@@ -10306,6 +10336,150 @@
             const ms = Date.now() - new Date(refDate + 'T00:00:00').getTime();
             return Math.max(0, Math.floor(ms / 86400000));
         };
+        const debtNormName = s => String(s || '').trim().toLowerCase()
+            .replace(/[\u064B-\u065F\u0670]/g, '')
+            .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+            .replace(/\s+/g, ' ');
+        const debtNormPhone = p => {
+            const d = String(p || '').replace(/[^0-9]/g, '');
+            return d.length >= 9 ? d.slice(-10) : '';
+        };
+        const debtIsBlacklisted = d => !!(d && (d.stage === 'suspended' || d.stage === 'legal') && debtRemaining(d) > 0);
+        const debtBrokenPromisesCount = d => {
+            if (!d) return 0;
+            const explicit = (d.events || []).filter(e => e && e.type === 'broken_promise').length;
+            const rem = debtRemaining(d);
+            const missedNext = (rem > 0 && d.stage !== 'settled' && d.nextActionDate && /^\d{4}-\d{2}-\d{2}$/.test(d.nextActionDate) && d.nextActionDate < todayISO()) ? 1 : 0;
+            return explicit + missedNext;
+        };
+        const debtDaysSinceLastAction = d => {
+            if (!d || d.stage === 'settled' || debtRemaining(d) <= 0) return 0;
+            const evs = d.events || [];
+            const lastIso = evs.length ? evs[evs.length - 1].t : (d.updatedAt || d.createdAt || '');
+            const ts = Date.parse(lastIso);
+            if (!ts || isNaN(ts)) return 0;
+            return Math.max(0, Math.floor((Date.now() - ts) / 86400000));
+        };
+        function debtRadarBuckets() {
+            const today = todayISO();
+            const active = debtList.filter(d => d.stage !== 'settled' && debtRemaining(d) > 0);
+            const dueToday = active.filter(d => d.nextActionDate === today);
+            const broken = active.filter(d => debtBrokenPromisesCount(d) > 0);
+            const stale = active.filter(d => debtDaysSinceLastAction(d) >= 7);
+            const blacklisted = active.filter(debtIsBlacklisted);
+            return { dueToday, broken, stale, blacklisted };
+        }
+        function debtBuildBlacklistDoc(d) {
+            const rem = debtRemaining(d);
+            if (!d || d.stage === 'settled' || rem <= 0) return null;
+            return {
+                customer: String(d.customer || '').trim(),
+                phone: String(d.phone || '').trim(),
+                altPhone: String(d.altPhone || '').trim(),
+                stage: d.stage || 'followup',
+                evading: d.evading === true,
+                remaining: rem,
+                daysOverdue: debtDaysOverdue(d),
+                blocked: d.stage === 'suspended' || d.stage === 'legal',
+                updatedAt: new Date().toISOString()
+            };
+        }
+        function debtSyncBlacklistEntry(d) {
+            if (!rtdb || !fbUser || !debtCanManage() || !d || !d.id) return;
+            const doc = debtBuildBlacklistDoc(d);
+            if (doc) rtdb.ref('debtBlacklist/' + d.id).set(dbClean(doc)).catch(() => {});
+            else rtdb.ref('debtBlacklist/' + d.id).remove().catch(() => {});
+        }
+        function debtBlacklistCanRead() {
+            return debtCanView() || canCust('view') || canCust('manage') || can('shipping.view') || can('shipping.manage');
+        }
+        function debtBlacklistStart() {
+            if (debtBlStarted || !rtdb || !fbUser || !debtBlacklistCanRead()) return;
+            debtBlStarted = true;
+            const ref = rtdb.ref('debtBlacklist');
+            const cb = snap => {
+                const val = snap.val() || {};
+                debtBlacklistMap = {};
+                Object.entries(val).forEach(([id, v]) => {
+                    if (v && typeof v === 'object') debtBlacklistMap[id] = { id, ...v };
+                });
+                custDebtAlertRefresh();
+                shipDebtAlertRefresh();
+            };
+            ref.on('value', cb, err => console.warn('debtBlacklist listener', err && err.code));
+            debtBlUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+        }
+        function debtBlacklistStop() {
+            if (debtBlUnsub) { try { debtBlUnsub(); } catch (e) { /* noop */ } debtBlUnsub = null; }
+            debtBlStarted = false;
+            debtBlAutoSynced = false;
+            debtBlacklistMap = {};
+        }
+        function debtFindBlacklistMatch(nameRaw, phoneRaw) {
+            const nKey = debtNormName(nameRaw);
+            const pKey = debtNormPhone(phoneRaw);
+            if (!nKey && !pKey) return null;
+            // Combine live debtBlacklistMap + full debtList (if user has debts.view)
+            const pool = new Map();
+            Object.values(debtBlacklistMap).forEach(x => { if (x && x.id) pool.set(x.id, x); });
+            debtList.forEach(d => {
+                const doc = debtBuildBlacklistDoc(d);
+                if (doc) pool.set(d.id, { id: d.id, ...doc });
+            });
+            let best = null;
+            const score = x => (x.blocked ? 1000000000 : 0) + (x.evading ? 10000000 : 0) + numOr0(x.remaining);
+            for (const item of pool.values()) {
+                if (!(numOr0(item.remaining) > 0)) continue;
+                const nameMatch = nKey && nKey.length >= 3 && debtNormName(item.customer) === nKey;
+                const phoneMatch = pKey && (debtNormPhone(item.phone) === pKey || debtNormPhone(item.altPhone) === pKey);
+                if (nameMatch || phoneMatch) {
+                    if (!best || score(item) > score(best)) best = item;
+                }
+            }
+            return best;
+        }
+        function debtBlacklistBannerHtml(hit, mode) {
+            if (!hit) return '';
+            const [, stageLabel] = debtStageInfo(hit.stage);
+            if (hit.blocked) {
+                return `<div class="rounded-xl border-2 border-rose-500 bg-rose-50 p-3 text-rose-900 shadow-sm space-y-1">
+                    <div class="flex items-center gap-2 font-black text-sm">
+                        <i class="fa-solid fa-ban text-rose-600 text-base"></i>
+                        <span>🚫 عميل في القائمة السوداء — ${esc(stageLabel)}</span>
+                    </div>
+                    <p class="text-xs font-bold">العميل «${esc(hit.customer)}» عليه مديونية متبقية <span class="font-mono text-rose-700">${fmtMoney(hit.remaining)}</span>${hit.daysOverdue ? ` (متأخر ${hit.daysOverdue} يوم)` : ''}${hit.evading ? ' · 🚨 مصنّف متهرب' : ''}.</p>
+                    <p class="text-[11px] font-bold text-rose-700">${mode === 'ship' ? '⛔ ممنوع تحميل أو خروج أي بضاعة لهذا العميل إلا بموافقة مدير النظام.' : '⛔ ممنوع إنشاء طلبية جديدة لهذا العميل إلا بموافقة مدير النظام.'}</p>
+                </div>`;
+            }
+            return `<div class="rounded-xl border-2 border-amber-400 bg-amber-50 p-3 text-amber-900 space-y-1">
+                <div class="flex items-center gap-2 font-black text-xs">
+                    <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
+                    <span>⚠️ تنبيه مديونية قائمة على هذا العميل (${esc(stageLabel)})${hit.evading ? ' — 🚨 متهرب' : ''}</span>
+                </div>
+                <p class="text-xs">العميل «${esc(hit.customer)}» عليه مديونية متبقية <b class="font-mono text-rose-700">${fmtMoney(hit.remaining)}</b>${hit.daysOverdue ? ` (متأخر ${hit.daysOverdue} يوم)` : ''} — يُرجى مراجعة الإدارة قبل ${mode === 'ship' ? 'خروج البضاعة' : 'اعتماد الطلبية'}.</p>
+            </div>`;
+        }
+        function custDebtAlertRefresh() {
+            const box = document.getElementById('custDebtAlertBox');
+            const f = el('modalForm');
+            if (!box || !f || !f.elements.customer) return;
+            const hit = debtFindBlacklistMatch(f.elements.customer.value, f.elements.customerPhone ? f.elements.customerPhone.value : '');
+            if (!hit) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+            box.innerHTML = debtBlacklistBannerHtml(hit, 'cust');
+            box.classList.remove('hidden');
+        }
+        function shipDebtAlertRefresh() {
+            const box = document.getElementById('shipDebtAlertBox');
+            const f = el('modalForm');
+            if (!box || !f || !f.elements.inv) return;
+            const invId = String(f.elements.inv.value || '');
+            const inv = (appData && appData.custOrders || []).find(c => c.id === invId);
+            const hit = inv ? debtFindBlacklistMatch(inv.customer, inv.customerPhone) : null;
+            if (!hit) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+            box.innerHTML = debtBlacklistBannerHtml(hit, 'ship');
+            box.classList.remove('hidden');
+        }
+
         const debtFmtDateTime = iso => {
             if (!iso) return '';
             const d = new Date(iso);
@@ -10332,6 +10506,12 @@
                         events: debtArrayify(obj.events).sort((a, b) => String(a.t || '').localeCompare(String(b.t || '')))
                     };
                 });
+                if (!debtBlAutoSynced && debtCanManage() && debtList.length) {
+                    debtBlAutoSynced = true;
+                    const updates = {};
+                    debtList.forEach(d => { updates['debtBlacklist/' + d.id] = debtBuildBlacklistDoc(d); });
+                    rtdb.ref().update(dbClean(updates)).catch(() => {});
+                }
                 const r = parseRoute();
                 if (r.name === 'debts') {
                     if (r.param === 'log') renderDebtLog();
@@ -10406,12 +10586,17 @@
                 else if (debtFilterStage && debtFilterStage !== 'active' && d.stage !== debtFilterStage) return false;
                 if (debtFilterSource && d.sourceType !== debtFilterSource) return false;
                 if (debtFilterEvading && !d.evading) return false;
+                if (debtFilterRadar === 'dueToday' && !(d.stage !== 'settled' && debtRemaining(d) > 0 && d.nextActionDate === todayISO())) return false;
+                if (debtFilterRadar === 'broken' && !(d.stage !== 'settled' && debtRemaining(d) > 0 && debtBrokenPromisesCount(d) > 0)) return false;
+                if (debtFilterRadar === 'stale' && !(d.stage !== 'settled' && debtRemaining(d) > 0 && debtDaysSinceLastAction(d) >= 7)) return false;
+                if (debtFilterRadar === 'blacklisted' && !debtIsBlacklisted(d)) return false;
                 if (q) {
                     const hay = `${d.customer || ''} ${d.phone || ''} ${d.altPhone || ''} ${d.address || ''} ${d.repName || ''} ${d.reason || ''} ${d.refNo || ''} ${d.notes || ''}`.toLowerCase();
                     if (!hay.includes(q)) return false;
                 }
                 return true;
             }).sort((a, b) => {
+                if (debtSort === 'broken') return debtBrokenPromisesCount(b) - debtBrokenPromisesCount(a) || debtDaysOverdue(b) - debtDaysOverdue(a) || debtRemaining(b) - debtRemaining(a);
                 if (debtSort === 'overdue') return debtDaysOverdue(b) - debtDaysOverdue(a) || debtRemaining(b) - debtRemaining(a);
                 if (debtSort === 'recent') return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
                 return debtRemaining(b) - debtRemaining(a) || debtDaysOverdue(b) - debtDaysOverdue(a);
@@ -10453,9 +10638,31 @@
 
             const sortOpts = [
                 ['remaining', 'الأعلى متبقي'],
+                ['broken',    'الأكثر وعوداً مكسورة ❌'],
                 ['overdue',   'الأقدم تأخيراً'],
                 ['recent',    'الأحدث تحديثاً']
             ].map(([v, l]) => `<option value="${v}" ${debtSort === v ? 'selected' : ''}>ترتيب: ${esc(l)}</option>`).join('');
+
+            const radar = debtRadarBuckets();
+            const radarPill = (key, label, count, cls, activeCls) => `<button type="button" onclick="debtFilterRadar=(debtFilterRadar==='${key}'?'':'${key}'); if(debtFilterRadar) debtFilterStage='active'; render()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-black transition-all ${debtFilterRadar === key ? activeCls + ' ring-2 ring-offset-1 ring-slate-400 scale-[1.02]' : cls}">
+                <span>${label}</span>
+                <span class="px-1.5 py-0.5 rounded-full bg-white/80 text-slate-900 font-mono text-[11px]">${count}</span>
+            </button>`;
+            const radarBar = (radar.dueToday.length || radar.broken.length || radar.stale.length || radar.blacklisted.length) ? `<div class="bg-gradient-to-l from-rose-50 via-amber-50/70 to-white rounded-2xl border-2 border-amber-300 shadow-sm p-3.5 mb-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                    <div class="flex items-center gap-2 font-black text-slate-800 text-sm">
+                        <i class="fa-solid fa-radar text-rose-600"></i>
+                        <span>⏰ رادار المتابعة اليومية والقائمة السوداء</span>
+                    </div>
+                    ${debtFilterRadar ? `<button type="button" onclick="debtFilterRadar=''; render()" class="text-xs font-bold text-slate-600 hover:text-rose-700 underline">عرض الكل (إلغاء فلتر الرادار)</button>` : '<span class="text-[11px] font-bold text-slate-500">اضغط على أي بند لتصفية العملاء فوراً</span>'}
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    ${radarPill('dueToday', '📅 مواعيد ووعود النهارده', radar.dueToday.length, 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100', 'bg-amber-500 border-amber-600 text-white')}
+                    ${radarPill('broken', '❌ وعود مكسورة / مواعيد فائتة', radar.broken.length, 'bg-rose-50 border-rose-300 text-rose-900 hover:bg-rose-100', 'bg-rose-600 border-rose-700 text-white')}
+                    ${radarPill('stale', '💤 ملفات نائمة (+7 أيام بدون إجراء)', radar.stale.length, 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200', 'bg-slate-800 border-slate-900 text-white')}
+                    ${radarPill('blacklisted', '🚫 القائمة السوداء (محظور طلبات وشحن)', radar.blacklisted.length, 'bg-purple-50 border-purple-300 text-purple-900 hover:bg-purple-100', 'bg-purple-700 border-purple-800 text-white')}
+                </div>
+            </div>` : '';
 
             const toolbar = `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-3.5 mb-4 space-y-3">
                 <div class="flex flex-wrap items-center gap-2">
@@ -10519,12 +10726,17 @@
                             ${rows.map(d => {
                                 const rem = debtRemaining(d);
                                 const days = debtDaysOverdue(d);
+                                const brokenCnt = debtBrokenPromisesCount(d);
+                                const staleDays = debtDaysSinceLastAction(d);
+                                const isBl = debtIsBlacklisted(d);
                                 const lastEv = d.events.length ? d.events[d.events.length - 1] : null;
                                 return `<tr class="hover:bg-slate-50 ${d.evading && rem > 0 ? 'bg-rose-50/30' : ''}">
                                     <td class="py-3 px-3">
                                         <div class="font-black text-slate-800 flex items-center gap-1.5 flex-wrap">
                                             <span>${esc(d.customer)}</span>
+                                            ${isBl ? '<span class="px-1.5 py-0.5 rounded bg-slate-900 text-white text-[10px] font-black">🚫 قائمة سوداء</span>' : ''}
                                             ${d.evading && rem > 0 ? '<span class="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black">🚨 متهرب</span>' : ''}
+                                            ${brokenCnt > 0 ? `<span class="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 text-[10px] font-black">❌ ${brokenCnt} وعد مكسور</span>` : ''}
                                         </div>
                                         ${d.phone ? `<div class="text-xs text-slate-500 font-mono" dir="ltr">${esc(d.phone)}${d.altPhone ? ' · ' + esc(d.altPhone) : ''}</div>` : ''}
                                         ${d.repName ? `<div class="text-[11px] text-slate-400">المندوب: ${esc(d.repName)}</div>` : ''}
@@ -10537,7 +10749,9 @@
                                     <td class="py-3 px-3 whitespace-nowrap text-xs">
                                         ${d.originDate ? `<div class="text-slate-600">بداية: ${esc(fmtWaDate(d.originDate))}</div>` : ''}
                                         ${d.dueDate ? `<div class="text-slate-600">استحقاق: ${esc(fmtWaDate(d.dueDate))}</div>` : ''}
+                                        ${d.nextActionDate && rem > 0 ? `<div class="mt-0.5 font-bold ${d.nextActionDate < todayISO() ? 'text-rose-700' : (d.nextActionDate === todayISO() ? 'text-amber-700' : 'text-sky-700')}">📅 متابعة: ${esc(fmtWaDate(d.nextActionDate))}</div>` : ''}
                                         ${days > 0 ? `<span class="inline-block mt-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-black text-[11px]">متأخر ${days} يوم</span>` : (rem === 0 ? '<span class="inline-block mt-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-[11px]">مسدد</span>' : '')}
+                                        ${staleDays >= 7 && rem > 0 ? `<span class="inline-block mt-1 ms-1 px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-bold text-[10px]">💤 بدون إجراء ${staleDays} يوم</span>` : ''}
                                     </td>
                                     <td class="py-3 px-3 font-mono font-bold text-slate-700 whitespace-nowrap">${fmtMoney(d.totalAmount)}</td>
                                     <td class="py-3 px-3 font-mono font-bold text-emerald-700 whitespace-nowrap">${fmtMoney(d.paidAmount)}</td>
@@ -10560,13 +10774,17 @@
                     ${rows.map(d => {
                         const rem = debtRemaining(d);
                         const days = debtDaysOverdue(d);
+                        const brokenCnt = debtBrokenPromisesCount(d);
+                        const isBl = debtIsBlacklisted(d);
                         const lastEv = d.events.length ? d.events[d.events.length - 1] : null;
                         return `<article class="bg-white rounded-2xl border-2 ${d.evading && rem > 0 ? 'border-rose-300' : 'border-slate-200'} shadow-sm p-3.5 space-y-2.5">
                             <div class="flex items-start justify-between gap-2">
                                 <div>
                                     <div class="font-black text-slate-800 flex items-center gap-1.5 flex-wrap">
                                         <span>${esc(d.customer)}</span>
+                                        ${isBl ? '<span class="px-1.5 py-0.5 rounded bg-slate-900 text-white text-[10px] font-black">🚫 قائمة سوداء</span>' : ''}
                                         ${d.evading && rem > 0 ? '<span class="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black">🚨 متهرب</span>' : ''}
+                                        ${brokenCnt > 0 ? `<span class="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 text-[10px] font-black">❌ ${brokenCnt} وعد مكسور</span>` : ''}
                                     </div>
                                     ${d.phone ? `<div class="text-xs font-mono text-slate-500" dir="ltr">${esc(d.phone)}</div>` : ''}
                                 </div>
@@ -10593,7 +10811,7 @@
             return {
                 title: 'المديونيات والتحصيل',
                 actions: '',
-                html: `<div>${kpis}${toolbar}${bodyHtml}</div>`
+                html: `<div>${kpis}${radarBar}${toolbar}${bodyHtml}</div>`
             };
         }
 
@@ -10688,6 +10906,7 @@
                     };
                     try {
                         await rtdb.ref('debts/' + id).set(dbClean(payload));
+                        debtSyncBlacklistEntry(payload);
                         log(d ? 'تعديل مديونية' : 'إضافة مديونية', `${customer} — متبقي ${fmtMoney(Math.max(0, r2(totalAmount - paidAmount)))}`);
                         notifyDirect(d ? 'عدّل' : 'أضاف', 'مديونية', `${customer} (متبقي ${fmtMoney(Math.max(0, r2(totalAmount - paidAmount)))})`, { col: 'debts', id });
                         toast(d ? 'تم تحديث ملف المديونية' : 'تمت إضافة ملف المديونية بنجاح', 'success');
@@ -10745,6 +10964,7 @@
                             stage: newStage, evading, nextActionDate, events: nextEvents,
                             updatedBy: me ? me.name : '', updatedAt: now
                         }));
+                        debtSyncBlacklistEntry({ ...d, stage: newStage, evading });
                         log('إجراء مديونية', `${d.customer}: ${actionLabel} — ${detail}`);
                         notifyDirect('سجّل', 'إجراء مديونية', `${d.customer}: ${actionLabel}`, { col: 'debts', id: d.id });
                         toast('تم تسجيل الإجراء في سجل العميل', 'success');
@@ -10806,6 +11026,7 @@
                             updatedBy: me ? me.name : '',
                             updatedAt: now
                         }));
+                        debtSyncBlacklistEntry({ ...d, paidAmount: newPaid, stage: newStage, evading: newEvading });
                         log('سداد مديونية', `${d.customer}: ${fmtMoney(amount)} (${method}) — متبقي ${fmtMoney(newRem)}`);
                         notifyDirect('سجّل', 'دفعة مديونية', `${d.customer}: ${fmtMoney(amount)}`, { col: 'debts', id: d.id });
                         toast(newRem <= 0 ? 'تم السداد بالكامل وإغلاق المديونية ✅' : 'تم تسجيل الدفعة بنجاح', 'success');
@@ -10919,6 +11140,7 @@
                                 updatedBy: me ? me.name : '',
                                 updatedAt: now
                             }));
+                            debtSyncBlacklistEntry({ ...d, stage: nextStage });
                             log('إنذار واتساب مديونية', `${d.customer}: ${levelLabel}`);
                         } catch (err) { console.warn('wa log failed', err); }
                     }
@@ -10969,6 +11191,8 @@
                     <div class="flex flex-wrap items-center gap-2">
                         ${debtStageBadge(d.stage)}
                         ${d.evading && rem > 0 ? '<span class="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-black">🚨 متهرب من السداد</span>' : ''}
+                        ${debtIsBlacklisted(d) ? '<span class="px-2.5 py-0.5 rounded-full bg-slate-900 text-white text-xs font-black">🚫 قائمة سوداء (محظور طلبات وشحن)</span>' : ''}
+                        ${debtBrokenPromisesCount(d) > 0 ? `<span class="px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-400 text-amber-900 text-xs font-black">❌ ${debtBrokenPromisesCount(d)} وعود مكسورة</span>` : ''}
                         ${days > 0 ? `<span class="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 text-xs font-black">متأخر ${days} يوم</span>` : ''}
                     </div>
                     ${debtStageSteps(d.stage)}
@@ -11103,6 +11327,7 @@
             if (!confirm(`هل أنت متأكد من حذف ملف مديونية "${d.customer}" بالكامل؟`)) return;
             try {
                 await rtdb.ref('debts/' + id).remove();
+                try { await rtdb.ref('debtBlacklist/' + id).remove(); } catch (e) { /* noop */ }
                 try { await rtdb.ref('debtComments/' + id).remove(); } catch (e) { /* noop */ }
                 log('حذف مديونية', d.customer);
                 notifyDirect('حذف', 'مديونية', d.customer, { col: 'debts', id });
@@ -11210,7 +11435,9 @@
                         <div>
                             <div class="font-black text-slate-800 flex items-center gap-2 flex-wrap">
                                 <span>${esc(d.customer)}</span>
+                                ${debtIsBlacklisted(d) ? '<span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[10px] font-black">🚫 قائمة سوداء</span>' : ''}
                                 ${d.evading && rem > 0 ? '<span class="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black">🚨 متهرب</span>' : ''}
+                                ${debtBrokenPromisesCount(d) > 0 ? `<span class="px-2 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 text-[10px] font-black">❌ ${debtBrokenPromisesCount(d)} وعد مكسور</span>` : ''}
                                 ${debtStageBadge(d.stage)}
                             </div>
                             <div class="text-xs text-slate-500 mt-0.5">
@@ -11466,6 +11693,12 @@
                 const linked = new Set(appData.users.map(u => u.repId).filter(Boolean));
                 for (const r of appData.custReps) if (!linked.has(r.id)) out.push({ id: 'rep:' + r.id + ':nologin', type: 'مستخدمين', prio: 2, route: 'users', text: `المندوب ${r.name} مالوش حساب دخول` });
             }
+            if (debtCanView() && debtList.length) {
+                const rd = debtRadarBuckets();
+                if (rd.broken.length) out.push({ id: 'debts:broken:' + rd.broken.length, type: 'مديونيات', prio: 1, route: 'debts', text: `❌ ${rd.broken.length} عميل مديونية أخلّوا بموعد/وعد السداد — مطلوب تصعيد فوري` });
+                if (rd.dueToday.length) out.push({ id: 'debts:today:' + rd.dueToday.length, type: 'مديونيات', prio: 1, route: 'debts', text: `📅 ${rd.dueToday.length} عميل مديونية موعد متابعتهم / سدادهم النهارده` });
+                if (rd.stale.length) out.push({ id: 'debts:stale:' + rd.stale.length, type: 'مديونيات', prio: 2, route: 'debts', text: `💤 ${rd.stale.length} ملف مديونية نشط بدون أي إجراء منذ أكثر من 7 أيام` });
+            }
             return out.sort((x, y) => x.prio - y.prio);
         }
         const homeAlertItems = homeAlerts;   // older name, same list
@@ -11473,7 +11706,7 @@
         const HOME_PRIO_CLS = { 1: 'home-ticker-p1', 2: 'home-ticker-p2', 3: 'home-ticker-p3' };
         const homeTickerItemHtml = (it, i, n) => `<button type="button" class="home-ticker-item ${HOME_PRIO_CLS[it.prio] || ''}" onclick="${it.open ? `openCustDetail('${esc(it.open)}')` : `navigate('${esc(it.route)}')`}">
                 <span class="home-ticker-count">${i + 1} / ${n}</span><span class="home-ticker-chip">${esc(it.type)}</span><span class="home-ticker-text">${esc(it.text)}</span></button>`;
-        function homeCanSeeAlerts() { return canCust('view') || canAccessRoute('lists') || canAccessRoute('logs') || canAccessRoute('users'); }
+        function homeCanSeeAlerts() { return canCust('view') || canAccessRoute('lists') || canAccessRoute('logs') || canAccessRoute('users') || debtCanView(); }
         function homeTickerHtml() {
             if (!homeCfg.ticker || !homeCanSeeAlerts()) return '';
             const items = homeAlerts();
@@ -14524,5 +14757,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fb23a5db19ed45',t:'MTc5NTU1MTg4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fb23a5db19ed45',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fb65257e313489',t:'MTc5NTU1NDU3MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fb65257e313489',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
