@@ -8654,8 +8654,15 @@
             else if (p.length === 10 && p.startsWith('1')) p = '20' + p;
             return p;
         }
+        const CUST_WA_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+        function fmtWaDate(iso) {
+            const [y, m, d] = String(iso || '').split('-');
+            const mi = parseInt(m, 10) - 1, di = parseInt(d, 10);
+            if (!y || !(mi >= 0 && mi < 12) || !(di >= 1 && di <= 31)) return fmtDateAr(iso);
+            return `${di} ${CUST_WA_MONTHS[mi]} ${y}`;
+        }
         const CUST_BANK_INFO_TEXT = [
-            'بيانات التحويل البنكي للسداد:',
+            '🏦 *بيانات التحويل البنكي للسداد:*',
             'الاسم: فتحي طه عبد النبي',
             'رقم الحساب:',
             '1820001000007008',
@@ -8670,19 +8677,25 @@
             const remaining = custRemaining(c);
             const holdDate = custHoldDate(c), dueDate = custBalanceDueDate(c);
             const paymentText = remaining > 0 ? [
-                'برجاء سداد المبلغ المتبقي في موعد أقصاه ' + (dueDate ? fmtDateAr(dueDate) : 'خلال 7 أيام من تاريخ حجز الفاتورة') + ' (7 أيام من تاريخ حجز الفاتورة' + (holdDate ? ' بتاريخ ' + fmtDateAr(holdDate) : '') + ').',
-                'وفي حال عدم السداد خلال المهلة، سيتم فك حجز البضاعة، وسيُرحَّل المبلغ المدفوع كرصيد لصالحكم في حسابكم لدينا.',
+                '',
+                '📌 *تفاصيل السداد:*',
+                ...(holdDate ? ['• تاريخ حجز الفاتورة: ' + fmtWaDate(holdDate)] : []),
+                '• آخر موعد للسداد (خلال 7 أيام): ' + (dueDate ? fmtWaDate(dueDate) : 'خلال 7 أيام من تاريخ حجز الفاتورة'),
+                '• في حال عدم السداد خلال المهلة، سيتم فك حجز البضاعة وترحيل المبلغ المدفوع كرصيد لصالحكم في حسابكم لدينا.',
                 '',
                 CUST_BANK_INFO_TEXT,
                 '',
                 'شكرًا لتعاونكم 🙏'
-            ].join('\n') : (remaining < 0 ? 'الحساب مسدد بالكامل، والمبلغ الزيادة ' + fmtMoney(-remaining) + ' اتسجل رصيد لصالحكم في حسابكم لدينا — شكرًا لتعاملكم معنا 🙏' : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏');
+            ].join('\n') : (remaining < 0 ? '\nالحساب مسدد بالكامل، والمبلغ الزيادة ' + fmtMoney(-remaining) + ' اتسجل رصيد لصالحكم في حسابكم لدينا — شكرًا لتعاملكم معنا 🙏' : '\nالحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏');
             const lines = [
                 'أهلاً ' + (c.customer || '') + ' 🌟',
-                'فاتورة رقم ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' بتاريخ ' + fmtDateAr(c.date) : ''),
-                'الإجمالي: ' + fmtMoney(numOr0(c.amount)),
-                'المدفوع: ' + fmtMoney(numOr0(c.paid)),
-                'المتبقي: ' + fmtMoney(remaining),
+                '',
+                '🧾 *فاتورة رقم:* ' + custNoLabel(c).replace('رقم ', ''),
+                ...(c.date ? ['📅 *تاريخ الفاتورة:* ' + fmtWaDate(c.date)] : []),
+                '',
+                '💰 *الإجمالي:* ' + fmtMoney(numOr0(c.amount)),
+                '✅ *المدفوع:* ' + fmtMoney(numOr0(c.paid)),
+                '⏳ *المتبقي:* ' + fmtMoney(remaining),
                 paymentText,
                 '— ' + (appData.settings.systemName || 'الرحمة')
             ];
@@ -8696,12 +8709,15 @@
             const tot = rows.reduce((a, c) => a + numOr0(c.amount), 0), paid = rows.reduce((a, c) => a + numOr0(c.paid), 0);
             const rem = r2(tot - paid);
             const lines = [
-                'كشف حساب — ' + customer,
-                ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))),
-                'الإجمالي: ' + fmtMoney(tot),
-                'المدفوع: ' + fmtMoney(paid),
-                (rem >= 0 ? 'المتبقي: ' + fmtMoney(rem) : 'رصيد لصالحكم عندنا: ' + fmtMoney(-rem)),
+                '📋 *كشف حساب — ' + customer + '*',
+                '',
+                ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' — ' + fmtWaDate(c.date) : '') + '\n  الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' | المتبقي: ' + fmtMoney(custRemaining(c))),
+                '',
+                '💰 *الإجمالي:* ' + fmtMoney(tot),
+                '✅ *المدفوع:* ' + fmtMoney(paid),
+                (rem >= 0 ? '⏳ *المتبقي:* ' + fmtMoney(rem) : '💳 *رصيد لصالحكم عندنا:* ' + fmtMoney(-rem)),
                 ...(rem > 0 ? ['', CUST_BANK_INFO_TEXT] : []),
+                '',
                 '— ' + (appData.settings.systemName || 'الرحمة')
             ];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
@@ -13410,5 +13426,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fa16cbcc8be201',t:'MTc5NTU0MDg3Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fa16cbcc8be201',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
