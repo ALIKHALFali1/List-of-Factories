@@ -6510,6 +6510,7 @@
         const CMP_STATUS = ['جديدة', 'قيد المراجعة', 'اتحلت', 'مثبتة', 'غير مثبتة'];
         let cmpList = [], cmpEvals = [], cmpUnsubs = [], cmpStarted = false, cmpTab = 'mine';
         const cmpCanManage = () => can('complaints.manage') || isSystemAdmin();
+        const cmpCanEditEval = e => !!e && (e.by === cmpMe() || isSystemAdmin());
         const cmpMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
 
         function cmpStart() {
@@ -6613,6 +6614,11 @@
                         ${btn('cmpAddEval()', 'إضافة تقييم', 'fa-plus')}
                     </div>
                     <div id="cmpEmpTable"></div>
+                </section>
+                <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 class="font-black text-slate-800 mb-1"><i class="fa-solid fa-rectangle-list text-brand-600"></i> أحدث التقييمات</h3>
+                    <p class="text-xs text-slate-400 mb-3">تقدر تعدّل التقييم اللي انت عملته تعديل كامل (الموظف والنجوم والفترة والملاحظات) أو تمسحه. مدير النظام يقدر يعدّل أي تقييم.</p>
+                    <div id="cmpEvalList" class="space-y-3"></div>
                 </section>`;
         }
         function cmpCardHtml(c, mode) {
@@ -6686,6 +6692,25 @@
                         <td><button type="button" onclick="cmpAddEval('${u.id}')" class="${BTN_SECONDARY} !py-1 text-xs">قيّم</button></td>
                     </tr>`).join('')}</tbody></table></div>`;
             }
+            const evl = el('cmpEvalList');
+            if (evl) {
+                const rows = cmpEvals.slice(0, 30);
+                evl.innerHTML = rows.length ? rows.map(e => {
+                    const editable = cmpCanEditEval(e);
+                    return `<div class="border border-slate-200 rounded-2xl p-4">
+                        <div class="flex flex-wrap items-center gap-2">
+                            ${cmpStarsHtml(e.stars)}<b class="text-sm">${Number(e.stars) || 0}/5</b>
+                            <span class="font-bold text-slate-700">${esc(e.userName || chatNameOf(e.userId))}</span>
+                            <span class="text-[11px] text-slate-400">${esc(e.period || '')} · ${esc(timeAgo(e.t))}</span>
+                            <span class="flex-1"></span>
+                            ${editable ? `<button type="button" onclick="cmpAddEval('', '${e.id}')" class="${BTN_SECONDARY} !py-1 text-xs"><i class="fa-solid fa-pen"></i> تعديل</button>
+                            <button type="button" onclick="cmpEvalDelete('${e.id}')" class="${BTN_SECONDARY} !py-1 text-xs !text-rose-600 !border-rose-200"><i class="fa-solid fa-trash-can"></i> حذف</button>` : ''}
+                        </div>
+                        ${e.note ? `<p class="text-sm text-slate-700 mt-1.5 whitespace-pre-wrap">${esc(e.note)}</p>` : ''}
+                        <p class="text-[11px] text-slate-400 mt-1">قيّمه: ${esc(e.byName || 'الإدارة')}${e.editedAt ? ` · اتعدّل ${esc(timeAgo(e.editedAt))}${e.editedBy ? ' بواسطة ' + esc(e.editedBy) : ''}` : ''}</p>
+                    </div>`;
+                }).join('') + (cmpEvals.length > 30 ? '<p class="text-[11px] text-slate-400 text-center">بيتعرض آخر 30 تقييم بس</p>' : '') : '<p class="text-sm text-slate-400 font-bold text-center py-6">مفيش تقييمات لسه</p>';
+            }
         }
         function cmpSubmit() {
             const text = (el('cmpText').value || '').trim();
@@ -6729,30 +6754,46 @@
             if (!confirm('حذف الشكوى دي نهائيًا؟')) return;
             fbDb.collection('complaints').doc(id).delete().then(() => toast('اتحذفت الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
         }
-        function cmpAddEval(preselect) {
+        function cmpAddEval(preselect, evalId) {
             const people = (appData.users || []).filter(u => u.active && u.id !== cmpMe());
             if (!people.length) return toast('مفيش موظفين', 'error');
-            openModal({ title: 'تقييم موظف', body: `
+            const old = evalId ? cmpEvals.find(e => e.id === evalId) : null;
+            if (evalId && !old) return toast('التقييم ده مش موجود', 'error');
+            if (old && !cmpCanEditEval(old)) return toast('تقدر تعدّل التقييمات اللي انت عملتها بس', 'error');
+            openModal({ title: old ? 'تعديل التقييم (تعديل كامل)' : 'تقييم موظف', body: `
                 <div class="space-y-3">
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الموظف</span>
-                        <select id="evUser" class="${INPUT_CLS}">${people.map(u => `<option value="${u.id}" ${preselect === u.id ? 'selected' : ''}>${esc(u.name)} (${esc(roleName(u.roleId) || '')})</option>`).join('')}</select></label>
+                        <select id="evUser" class="${INPUT_CLS}">${people.map(u => `<option value="${u.id}" ${preselect === u.id || (old && old.userId === u.id) ? 'selected' : ''}>${esc(u.name)} (${esc(roleName(u.roleId) || '')})</option>`).join('')}</select></label>
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">التقييم (من 5)</span>
-                        <select id="evStars" class="${INPUT_CLS}"><option value="5">⭐⭐⭐⭐⭐ ممتاز (5)</option><option value="4">⭐⭐⭐⭐ جيد جدًا (4)</option><option value="3" selected>⭐⭐⭐ جيد (3)</option><option value="2">⭐⭐ مقبول (2)</option><option value="1">⭐ ضعيف (1)</option></select></label>
+                        <select id="evStars" class="${INPUT_CLS}">${[[5, '⭐⭐⭐⭐⭐ ممتاز (5)'], [4, '⭐⭐⭐⭐ جيد جدًا (4)'], [3, '⭐⭐⭐ جيد (3)'], [2, '⭐⭐ مقبول (2)'], [1, '⭐ ضعيف (1)']].map(([v, l]) => `<option value="${v}" ${(old ? Number(old.stars) : 3) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الفترة</span>
-                        <input id="evPeriod" type="month" class="${INPUT_CLS}" value="${new Date().toISOString().slice(0, 7)}"></label>
+                        <input id="evPeriod" type="month" class="${INPUT_CLS}" value="${old && old.period ? esc(old.period) : new Date().toISOString().slice(0, 7)}"></label>
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">ملاحظات التقييم</span>
-                        <textarea id="evNote" rows="3" class="${INPUT_CLS}" placeholder="نقاط القوة / اللي محتاج يتحسن..."></textarea></label>
+                        <textarea id="evNote" rows="3" class="${INPUT_CLS}" placeholder="نقاط القوة / اللي محتاج يتحسن...">${esc(old ? old.note || '' : '')}</textarea></label>
                 </div>
                 <div class="flex justify-end gap-2 mt-4">
+                    ${old ? `<button type="button" onclick="cmpEvalDelete('${old.id}')" class="${BTN_SECONDARY} !text-rose-600 !border-rose-200"><i class="fa-solid fa-trash-can"></i> حذف التقييم</button><span class="flex-1"></span>` : ''}
                     <button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">إلغاء</button>
-                    <button type="button" onclick="cmpEvalSave()" class="${BTN_PRIMARY}">حفظ التقييم</button>
+                    <button type="button" onclick="cmpEvalSave('${old ? old.id : ''}')" class="${BTN_PRIMARY}">${old ? 'حفظ التعديلات' : 'حفظ التقييم'}</button>
                 </div>` });
         }
-        function cmpEvalSave() {
+        function cmpEvalSave(editId) {
             const userId = el('evUser').value;
             const meUser = currentUser();
-            const ev = { id: uid('EV-'), userId, userName: chatNameOf(userId), by: cmpMe(), byName: meUser ? meUser.name : '', stars: Number(el('evStars').value) || 3, period: el('evPeriod').value || '', note: el('evNote').value.trim(), t: new Date().toISOString() };
-            fbDb.collection('evaluations').doc(ev.id).set(ev).then(() => { closeModal(); toast('اتحفظ التقييم ⭐', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
+            const old = editId ? cmpEvals.find(e => e.id === editId) : null;
+            if (editId && !old) return toast('التقييم ده مش موجود', 'error');
+            if (old && !cmpCanEditEval(old)) return toast('تقدر تعدّل التقييمات اللي انت عملتها بس', 'error');
+            const ev = old
+                ? { ...old, userId, userName: chatNameOf(userId), stars: Number(el('evStars').value) || 3, period: el('evPeriod').value || '', note: el('evNote').value.trim(), editedAt: new Date().toISOString(), editedBy: meUser ? meUser.name : '' }
+                : { id: uid('EV-'), userId, userName: chatNameOf(userId), by: cmpMe(), byName: meUser ? meUser.name : '', stars: Number(el('evStars').value) || 3, period: el('evPeriod').value || '', note: el('evNote').value.trim(), t: new Date().toISOString() };
+            fbDb.collection('evaluations').doc(ev.id).set(ev).then(() => { closeModal(); toast(old ? 'اتعدّل التقييم ⭐' : 'اتحفظ التقييم ⭐', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
+        }
+        function cmpEvalDelete(id) {
+            const old = cmpEvals.find(e => e.id === id);
+            if (!old) return;
+            if (!cmpCanEditEval(old)) return toast('تقدر تمسح التقييمات اللي انت عملتها بس', 'error');
+            if (!confirm(`حذف تقييم ${old.userName || chatNameOf(old.userId)} (${Number(old.stars) || 0}/5) نهائيًا؟ مؤشر أداء الموظف هيتحدث على طول.`)) return;
+            fbDb.collection('evaluations').doc(id).delete().then(() => { closeModal(); toast('اتحذف التقييم', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
         }
 
         // ================= المصروفات وأذونات الصرف =================
@@ -8019,6 +8060,19 @@
             log('حذف مندوب', r.name);
             render();
             openCustRepsModal();
+        }
+
+        // حذف مندوب ملوش حساب دخول (من صفحة المستخدمين): طلبياته القديمة بتفضل باسمه ومبيظهرش في القوائم تاني
+        function deleteRepNoAccount(id) {
+            if (!can('users.manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const r = appData.custReps.find(x => x.id === id);
+            if (!r) return;
+            if (appData.users.some(u => u.repId === id)) return toast('المندوب ده عنده حساب دخول — عطّل أو احذف الحساب من إدارة المستخدمين الأول', 'error');
+            if (!confirm(`حذف المندوب "${r.name}" نهائيًا؟ طلبياته القديمة هتفضل باسمه، ومش هيظهر في قوائم المندوبين تاني.`)) return;
+            appData.custReps = appData.custReps.filter(x => x.id !== id);
+            log('حذف مندوب بدون حساب دخول', r.name);
+            render();
+            toast('اتحذف المندوب', 'success');
         }
 
         // ---- print: one order, or the filtered list (landscape) ----
@@ -10619,6 +10673,7 @@
                     <td class="py-3 px-3 font-semibold">${esc(r.name)}</td>
                     <td class="py-3 px-3 font-mono" dir="ltr">${esc(acc ? acc.email.split('@')[0] : '—')}</td>
                     <td class="py-3 px-3">${acc ? (acc.active ? '<span class="text-emerald-700 font-bold">فعّال</span>' : '<span class="text-rose-700 font-bold">موقوف</span>') : '<span class="text-amber-700 font-bold">بدون رقم سري</span>'}</td>
+                    <td class="py-3 px-3">${acc ? '<span class="text-[11px] text-slate-400">مرتبط بحساب دخول</span>' : `<button type="button" onclick="deleteRepNoAccount('${esc(r.id)}')" class="${BTN_SECONDARY} !py-1 text-xs !text-rose-600 !border-rose-200"><i class="fa-solid fa-trash-can"></i> حذف</button>`}</td>
                 </tr>`;
             }).join('');
             return `<div class="space-y-4">
@@ -10634,8 +10689,8 @@
                 <div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
                     <table class="w-full text-sm">
                         <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
-                            <th class="py-3 px-3 text-start">المندوب</th><th class="py-3 px-3 text-start">اسم الدخول</th><th class="py-3 px-3 text-start">الحالة</th></tr></thead>
-                        <tbody class="divide-y divide-slate-200">${rows || '<tr><td colspan="3" class="py-4 px-3 text-center text-slate-500">مفيش مندوبين لسه</td></tr>'}</tbody>
+                            <th class="py-3 px-3 text-start">المندوب</th><th class="py-3 px-3 text-start">اسم الدخول</th><th class="py-3 px-3 text-start">الحالة</th><th class="py-3 px-3 text-start">إجراءات</th></tr></thead>
+                        <tbody class="divide-y divide-slate-200">${rows || '<tr><td colspan="4" class="py-4 px-3 text-center text-slate-500">مفيش مندوبين لسه</td></tr>'}</tbody>
                     </table>
                 </div>
                 ${repRoleCardsHtml()}
@@ -12730,5 +12785,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f3be1ece18baaf',t:'MTc5NTQ3NDMyOQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f3be1ece18baaf',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
