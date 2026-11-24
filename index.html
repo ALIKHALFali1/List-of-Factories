@@ -4568,7 +4568,7 @@
             }
             ensureHomePersonalPerm();
             if (!(parseRoute().name === 'shipping' && parseRoute().param === 'screen')) shipLeaveScreen();
-            if (parseRoute().name !== 'home') debtPopupUnmount();
+            if (parseRoute().name !== 'home') { debtPopupUnmount(); annPopupUnmount(); }
             let { name, param } = parseRoute();
 
             if (!ROUTES[name]) name = 'dashboard';
@@ -11562,7 +11562,7 @@
             const ref = rtdb.ref('settings/debtPopup');
             const cb = snap => {
                 debtPopupCfg = debtPopupNormCfg(snap.val());
-                if (parseRoute().name === 'home') debtPopupMaybeShow(true);
+                if (parseRoute().name === 'home') { debtPopupMaybeShow(true); if (typeof annPopupMaybeShow === 'function') annPopupMaybeShow(true); }
             };
             ref.on('value', cb, () => {});
             debtPopupCfgUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
@@ -11915,7 +11915,7 @@
                         debtPopupDismissedSession = false;
                         debtPopupDismissedVisit = false;
                         if (next.enabled) debtPopupSetLocalMuted(false);
-                        if (parseRoute().name === 'home') debtPopupMaybeShow(true);
+                        if (parseRoute().name === 'home') { debtPopupMaybeShow(true); if (typeof annPopupMaybeShow === 'function') annPopupMaybeShow(true); }
                         log('تعديل إعدادات قائمة المديونيات المنبثقة', next.enabled ? `مفعّلة (${next.stages.length} فئات)` : 'موقوفة');
                         toast('تم حفظ إعدادات القائمة المنبثقة بنجاح', 'success');
                     } catch (err) {
@@ -12266,6 +12266,300 @@
             openModal({ title: 'البيانات والإعلانات العامة', body, size: 'lg' });
         }
 
+        // ---------- Floating Side Popup for Announcements (sibling of debtSidePopup) ----------
+        const ANN_POPUP_LOCAL_KEY = 'alrahma_ann_popup_muted_v1';
+        let annPopupStyleInjected = false;
+        let annPopupDismissedVisit = false;
+        let annPopupAutoOpenedPendingKey = '';
+
+        function annPopupLocalMuted() {
+            try { return localStorage.getItem(ANN_POPUP_LOCAL_KEY) === '1'; } catch (e) { return false; }
+        }
+        function annPopupSetLocalMuted(on) {
+            try { if (on) localStorage.setItem(ANN_POPUP_LOCAL_KEY, '1'); else localStorage.removeItem(ANN_POPUP_LOCAL_KEY); } catch (e) { /* noop */ }
+        }
+        function annPopupSide() {
+            // Sit cleanly on the opposite side of the Debts popup so they never overlap
+            return (typeof debtPopupCfg !== 'undefined' && debtPopupCfg && debtPopupCfg.side === 'right') ? 'left' : 'right';
+        }
+        function annPopupInjectStyle() {
+            if (annPopupStyleInjected) return;
+            annPopupStyleInjected = true;
+            const st = document.createElement('style');
+            st.id = 'annPopupStyle';
+            st.textContent = `
+                .ap-panel{position:fixed;top:4.8rem;z-index:46;width:min(23.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);display:flex;flex-direction:column;border-radius:1rem;background:#fff;border:1px solid #bae6fd;box-shadow:0 18px 42px -12px rgba(15,23,42,.30);will-change:transform,opacity;transition:transform .34s cubic-bezier(.22,1,.36,1),opacity .28s ease;touch-action:pan-y}
+                .ap-panel.ap-urgent{border-color:#fda4af;box-shadow:0 18px 44px -10px rgba(190,18,60,.32)}
+                .ap-panel.ap-left{left:.9rem;transform:translate3d(-115%,0,0);opacity:0}
+                .ap-panel.ap-right{right:.9rem;transform:translate3d(115%,0,0);opacity:0}
+                .ap-panel.ap-open{transform:translate3d(0,0,0)!important;opacity:1!important}
+                .ap-panel.ap-dragging{transition:none!important}
+                .ap-tab{position:fixed;top:5.2rem;z-index:45;display:inline-flex;align-items:center;gap:.45rem;padding:.52rem .8rem;background:#0369a1;color:#fff;font-size:.75rem;font-weight:800;box-shadow:0 8px 20px -6px rgba(3,105,161,.55);cursor:pointer;transition:transform .2s ease,opacity .2s ease,background .2s ease}
+                .ap-tab:hover{background:#075985}
+                .ap-tab.ap-tab-urgent{background:#d97706;box-shadow:0 8px 22px -6px rgba(217,119,6,.62);animation:apPulse 1.8s infinite}
+                .ap-tab.ap-tab-urgent:hover{background:#b45309}
+                .ap-tab.ap-left{left:0;border-radius:0 .85rem .85rem 0}
+                .ap-tab.ap-right{right:0;border-radius:.85rem 0 0 .85rem}
+                @keyframes apPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
+            `;
+            document.head.appendChild(st);
+        }
+
+        function annPopupUnmount() {
+            const p = document.getElementById('annSidePopup');
+            if (p) p.remove();
+            const t = document.getElementById('annSideTab');
+            if (t) t.remove();
+            annPopupDismissedVisit = false;
+        }
+
+        function annPopupVisibleItems() {
+            const visible = annList.filter(a => annTargetsMe(a));
+            const pending = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
+            const other = visible.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)));
+            return { visible: [...pending, ...other], pendingCount: pending.length };
+        }
+
+        function annPopupRenderTab(totalCount, pendingCount) {
+            const oldTab = document.getElementById('annSideTab');
+            if (oldTab) oldTab.remove();
+            if (parseRoute().name !== 'home' || !totalCount) return;
+            const sideCls = annPopupSide() === 'right' ? 'ap-right' : 'ap-left';
+            const btnEl = document.createElement('button');
+            btnEl.id = 'annSideTab';
+            btnEl.type = 'button';
+            btnEl.className = 'ap-tab ' + sideCls + (pendingCount > 0 ? ' ap-tab-urgent' : '');
+            btnEl.title = pendingCount > 0 ? `لديك ${pendingCount} بيان بانتظار ردك` : 'إظهار قائمة البيانات والإعلانات';
+            btnEl.innerHTML = pendingCount > 0
+                ? `<i class="fa-solid fa-bullhorn"></i><span>بيان بانتظار ردك (${pendingCount})</span>`
+                : `<i class="fa-solid fa-bullhorn"></i><span>إعلانات (${totalCount})</span>`;
+            btnEl.onclick = () => {
+                annPopupSetLocalMuted(false);
+                annPopupDismissedVisit = false;
+                annPopupMaybeShow(true, true);
+            };
+            document.body.appendChild(btnEl);
+        }
+
+        function annPopupDismiss(muteDevice) {
+            const panel = document.getElementById('annSidePopup');
+            const { visible, pendingCount } = annPopupVisibleItems();
+            annPopupDismissedVisit = true;
+            if (muteDevice) annPopupSetLocalMuted(true);
+            if (panel) {
+                panel.classList.remove('ap-dragging', 'ap-open');
+                panel.style.transform = '';
+                panel.style.opacity = '';
+                setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); }, 300);
+            } else {
+                annPopupRenderTab(visible.length, pendingCount);
+            }
+        }
+
+        function annPopupBindSwipe(panel) {
+            let startX = 0, startY = 0, dx = 0, active = false, locked = false;
+            const onStart = (x, y) => { startX = x; startY = y; dx = 0; active = true; locked = false; };
+            const onMove = (x, y, ev) => {
+                if (!active) return;
+                const isLeft = annPopupSide() === 'left';
+                const mx = x - startX, my = y - startY;
+                if (!locked) {
+                    if (Math.abs(my) > Math.abs(mx) && Math.abs(my) > 8) { active = false; return; }
+                    if (Math.abs(mx) > 8) { locked = true; panel.classList.add('ap-dragging'); }
+                    else return;
+                }
+                dx = isLeft ? Math.min(24, mx) : Math.max(-24, mx);
+                if (ev && ev.cancelable) ev.preventDefault();
+                panel.style.transform = `translate3d(${dx}px, 0, 0)`;
+                panel.style.opacity = String(Math.max(0.15, 1 - Math.abs(dx) / 240));
+            };
+            const onEnd = () => {
+                if (!active) return;
+                active = false;
+                panel.classList.remove('ap-dragging');
+                const isLeft = annPopupSide() === 'left';
+                const shouldClose = isLeft ? (dx < -72) : (dx > 72);
+                if (shouldClose) {
+                    panel.style.transform = `translate3d(${isLeft ? '-115%' : '115%'}, 0, 0)`;
+                    panel.style.opacity = '0';
+                    annPopupDismissedVisit = true;
+                    const { visible, pendingCount } = annPopupVisibleItems();
+                    setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); }, 280);
+                } else {
+                    panel.style.transform = '';
+                    panel.style.opacity = '';
+                }
+            };
+            panel.addEventListener('touchstart', e => {
+                if (e.touches.length === 1 && !e.target.closest('button, a, input, select, textarea')) {
+                    onStart(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: true });
+            panel.addEventListener('touchmove', e => { if (e.touches.length === 1) onMove(e.touches[0].clientX, e.touches[0].clientY, e); }, { passive: false });
+            panel.addEventListener('touchend', onEnd, { passive: true });
+            panel.addEventListener('pointerdown', e => {
+                if (e.pointerType === 'touch' || e.button !== 0 || e.target.closest('button, a, input, select, textarea')) return;
+                onStart(e.clientX, e.clientY);
+                try { panel.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
+            });
+            panel.addEventListener('pointermove', e => { if (e.pointerType !== 'touch') onMove(e.clientX, e.clientY, e); });
+            panel.addEventListener('pointerup', e => { if (e.pointerType !== 'touch') onEnd(); });
+            panel.addEventListener('pointercancel', e => { if (e.pointerType !== 'touch') onEnd(); });
+        }
+
+        function annPopupCardHtml(a, isPendingMandatory) {
+            const [, typeLabel, icon, cardCls, badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(a.type);
+            const myResp = annMyEffectiveResponse(a);
+            const allowObj = a.allowObjection !== false;
+            const showObjBox = annObjectionOpenId === a.id;
+
+            const statusHtml = myResp
+                ? (myResp.status === 'objected'
+                    ? `<div class="mt-2 rounded-lg bg-rose-50 border border-rose-200 p-2 text-[11px] text-rose-900">
+                        <div class="flex items-center justify-between gap-1">
+                            <span class="font-extrabold"><i class="fa-solid fa-hand"></i> تم تسجيل اعتراضك</span>
+                            <button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[10px] font-bold underline text-rose-700">تعديل</button>
+                        </div>
+                        <p class="mt-0.5 whitespace-pre-line">${esc(myResp.reason || '')}</p>
+                    </div>`
+                    : `<div class="mt-2 rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 text-[11px] text-emerald-900 flex items-center justify-between gap-1">
+                        <span class="font-extrabold"><i class="fa-solid fa-circle-check"></i> ${a.type === 'congrats' ? 'تم تسجيل تفاعلك 🎉' : (a.type === 'invitation' ? 'تم تأكيد حضورك' : 'تمت الموافقة')}</span>
+                        ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[10px] font-bold underline text-emerald-700">اعتراض</button>` : ''}
+                    </div>`)
+                : '';
+
+            const actionsHtml = (!myResp || showObjBox) ? `
+                <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <button type="button" onclick="annSubmitResponse('${esc(a.id)}','approved')" class="flex-1 min-w-[6.5rem] px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-check"></i> ${esc(okLbl)}
+                    </button>
+                    ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="flex-1 min-w-[6.5rem] px-2.5 py-1.5 rounded-lg ${showObjBox ? 'bg-rose-700 text-white' : 'bg-white border border-rose-300 text-rose-700 hover:bg-rose-50'} text-xs font-extrabold flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-hand"></i> ${esc(objLbl)}
+                    </button>` : ''}
+                </div>
+                ${showObjBox ? `<div class="mt-2 rounded-lg bg-white border border-rose-300 p-2 space-y-1.5">
+                    <label class="block text-[11px] font-extrabold text-rose-800">سبب الاعتراض (إجباري):</label>
+                    <textarea id="annObjReason_${esc(a.id)}" rows="2" maxlength="1500" class="${INPUT_CLS} !py-1.5 !text-xs" placeholder="اكتب سبب اعتراضك بوضوح...">${esc(myResp?.reason || '')}</textarea>
+                    <div class="flex items-center justify-end gap-1.5">
+                        <button type="button" onclick="annToggleObjectionBox(null)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold">إلغاء</button>
+                        <button type="button" onclick="annSubmitObjection('${esc(a.id)}')" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-extrabold">إرسال</button>
+                    </div>
+                </div>` : ''}` : '';
+
+            return `<article class="rounded-xl border ${cardCls} p-3 shadow-xs transition-all ${isPendingMandatory ? 'ring-2 ring-rose-400/60' : ''}">
+                <div class="flex items-start justify-between gap-1.5">
+                    <div class="flex flex-wrap items-center gap-1">
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold ${badgeCls}">
+                            <i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}
+                        </span>
+                        ${isPendingMandatory ? '<span class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200 animate-pulse">بانتظار ردك</span>' : ''}
+                    </div>
+                    ${annCanManage() ? `<div class="flex items-center gap-1 shrink-0">
+                        <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" title="تقرير الردود" class="w-6 h-6 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-brand-600 text-[11px] flex items-center justify-center"><i class="fa-solid fa-chart-pie"></i></button>
+                        <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" title="تعديل" class="w-6 h-6 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-slate-600 text-[11px] flex items-center justify-center"><i class="fa-solid fa-pen"></i></button>
+                    </div>` : ''}
+                </div>
+                <h4 class="mt-1.5 text-sm font-black ${titleCls} leading-snug">${esc(a.title || '')}</h4>
+                <p class="mt-1 text-xs text-slate-700 leading-relaxed whitespace-pre-line font-medium">${esc(a.body || '')}</p>
+                ${a.eventDate ? `<div class="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/80 border border-slate-200 text-[11px] font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(a.eventDate)}</div>` : ''}
+                ${a.image ? `<div class="mt-2"><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-36 w-full rounded-lg border border-slate-200 object-cover bg-white cursor-zoom-in"></div>` : ''}
+                <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+                    <span><i class="fa-solid fa-user-tie"></i> ${esc(a.createdBy || 'الإدارة')}</span>
+                    <span>· ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
+                    ${a.expiresAt ? `<span>· حتى ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
+                </div>
+                ${statusHtml}
+                ${actionsHtml}
+            </article>`;
+        }
+
+        function annPopupMaybeShow(isRefresh, forceOpen) {
+            if (parseRoute().name !== 'home') { annPopupUnmount(); return; }
+            const { visible, pendingCount } = annPopupVisibleItems();
+            if (!visible.length) { annPopupUnmount(); return; }
+            annPopupInjectStyle();
+
+            // If a NEW mandatory pending announcement arrives, automatically bring the popup back even if muted/dismissed earlier
+            const pendingKey = visible
+                .filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a))
+                .map(a => a.id + ':' + (a.revision || 1))
+                .join('|');
+            if (pendingKey && pendingKey !== annPopupAutoOpenedPendingKey) {
+                annPopupAutoOpenedPendingKey = pendingKey;
+                annPopupDismissedVisit = false;
+            }
+
+            const hasPending = pendingCount > 0;
+            const muted = !hasPending && annPopupLocalMuted();
+            if (!forceOpen && (muted || annPopupDismissedVisit)) {
+                const oldP = document.getElementById('annSidePopup');
+                if (oldP) oldP.remove();
+                annPopupRenderTab(visible.length, pendingCount);
+                return;
+            }
+            const oldTab = document.getElementById('annSideTab');
+            if (oldTab) oldTab.remove();
+
+            const side = annPopupSide();
+            const sideCls = side === 'right' ? 'ap-right' : 'ap-left';
+            const swipeHint = side === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء';
+
+            let panel = document.getElementById('annSidePopup');
+            const alreadyOpen = !!(panel && panel.classList.contains('ap-open'));
+            let savedScroll = 0;
+            if (panel) {
+                const bodyEl = panel.querySelector('[data-ap-scroll]');
+                if (bodyEl) savedScroll = bodyEl.scrollTop;
+            } else {
+                panel = document.createElement('aside');
+                panel.id = 'annSidePopup';
+                panel.setAttribute('aria-label', 'البيانات والإعلانات العامة');
+                document.body.appendChild(panel);
+                annPopupBindSwipe(panel);
+            }
+
+            panel.className = 'ap-panel ' + sideCls + (hasPending ? ' ap-urgent' : '') + (alreadyOpen ? ' ap-open' : '');
+            const headerGrad = hasPending ? 'from-amber-600 via-rose-700 to-slate-900' : 'from-sky-700 to-slate-900';
+            panel.innerHTML = `
+                <div class="px-3.5 py-2.5 rounded-t-2xl bg-gradient-to-l ${headerGrad} text-white flex items-center justify-between gap-2 shrink-0">
+                    <div class="min-w-0">
+                        <div class="font-black text-sm flex items-center gap-1.5">
+                            <i class="fa-solid fa-bullhorn ${hasPending ? 'text-amber-200' : 'text-sky-200'}"></i>
+                            <span>البيانات والإعلانات</span>
+                            <span class="px-1.5 py-0.5 rounded-full bg-white/20 text-[11px] font-mono">${visible.length}</span>
+                        </div>
+                        <div class="text-[11px] ${hasPending ? 'text-amber-100' : 'text-sky-100'} font-bold mt-0.5">
+                            ${hasPending ? `يوجد ${pendingCount} بيان هام بانتظار ردك` : `${visible.length} إعلان نشط موجه لك`}
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        ${annCanManage() ? `<button type="button" onclick="openAnnouncementForm()" title="إضافة بيان جديد" class="w-7 h-7 rounded-lg bg-white/15 hover:bg-white/30 flex items-center justify-center text-xs"><i class="fa-solid fa-plus"></i></button>
+                        <button type="button" onclick="openAnnouncementsManager()" title="إدارة البيانات والتقارير" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/25 flex items-center justify-center text-xs"><i class="fa-solid fa-gear"></i></button>` : ''}
+                        <button type="button" onclick="annPopupDismiss(false)" title="إخفاء" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/25 flex items-center justify-center text-xs"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                </div>
+                <div data-ap-scroll class="p-2.5 space-y-2.5 overflow-y-auto flex-1 bg-slate-50/70">
+                    ${visible.map(a => annPopupCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}
+                </div>
+                <div class="px-3 py-2 bg-slate-50 border-t border-slate-100 rounded-b-2xl flex items-center justify-between gap-2 shrink-0">
+                    <span class="text-[10px] font-bold text-slate-400">${swipeHint}</span>
+                    <div class="flex items-center gap-2">
+                        ${!hasPending ? `<button type="button" onclick="annPopupDismiss(true)" title="عدم الإظهار تلقائياً على هذا الجهاز" class="text-[10px] font-bold text-slate-400 hover:text-sky-700">إخفاء بجهازي</button>` : ''}
+                        <button type="button" onclick="${annCanManage() ? 'openAnnouncementsManager()' : 'openMyAnnouncementsModal()'}" class="text-xs font-black text-sky-700 hover:text-sky-900">${annCanManage() ? 'الإدارة ←' : 'عرض موسّع ←'}</button>
+                    </div>
+                </div>`;
+
+            if (savedScroll > 0) {
+                const bodyEl = panel.querySelector('[data-ap-scroll]');
+                if (bodyEl) bodyEl.scrollTop = savedScroll;
+            }
+            if (!alreadyOpen) {
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    if (panel && panel.parentNode) panel.classList.add('ap-open');
+                }));
+            }
+        }
+
         function annStart() {
             if (annStarted || !rtdb || !fbUser) return;
             annStarted = true;
@@ -12277,10 +12571,7 @@
                     .sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) || String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
                 annSyncMyResponseListeners();
                 annUpdateTopBadge();
-                if (parseRoute().name === 'home') {
-                    annRepaintHome();
-                    annMaybeShowUrgentPopup();
-                }
+                if (parseRoute().name === 'home') annPopupMaybeShow(true);
             };
             ref.on('value', cb, err => console.warn('announcements listener', err && err.code));
             annListUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
@@ -12294,7 +12585,9 @@
             annMyResponses = {};
             annObjectionOpenId = null;
             annPopupShownIds = new Set();
+            annPopupAutoOpenedPendingKey = '';
             annStarted = false;
+            annPopupUnmount();
             annUpdateTopBadge();
         }
 
@@ -12339,7 +12632,7 @@
                     const v = snap.val();
                     if (v) annMyResponses[id] = v; else delete annMyResponses[id];
                     annUpdateTopBadge();
-                    if (parseRoute().name === 'home') annRepaintHome();
+                    if (parseRoute().name === 'home') annPopupMaybeShow(true);
                 };
                 ref.on('value', cb, () => {});
                 annRespUnsubs[id] = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
@@ -12354,9 +12647,8 @@
         }
 
         function annRepaintHome() {
-            const box = el('homeAnnouncementsBox');
-            if (box) box.innerHTML = homeAnnouncementsInnerHtml();
             annUpdateTopBadge();
+            if (parseRoute().name === 'home') annPopupMaybeShow(true);
         }
 
         function annCardHtml(a, isPendingMandatory) {
@@ -12428,63 +12720,21 @@
             </article>`;
         }
 
-        // Clean Home Screen: shows ONLY active announcements targeted to the user (no management buttons cluttering #/home!)
-        function homeAnnouncementsInnerHtml() {
-            const visible = annList.filter(a => annTargetsMe(a));
-            if (!visible.length) return '';
-            const pendingMandatory = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
-            const otherActive = visible.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)));
-            return `<section class="space-y-3">
-                ${pendingMandatory.length ? `<div class="space-y-3">${pendingMandatory.map(a => annCardHtml(a, true)).join('')}</div>` : ''}
-                ${otherActive.length ? `<div class="space-y-3">${otherActive.map(a => annCardHtml(a, false)).join('')}</div>` : ''}
-            </section>`;
-        }
-
-        function homeAnnouncementsHtml() {
-            return `<div id="homeAnnouncementsBox">${homeAnnouncementsInnerHtml()}</div>`;
-        }
-
-        function annMaybeShowUrgentPopup() {
-            if (parseRoute().name !== 'home') return;
-            const host = el('modalHost');
-            if (host && !host.classList.contains('hidden')) return;
-            const urgent = annList.find(a => annTargetsMe(a) && a.requireResponse !== false && a.popupOnHome === true && !annMyEffectiveResponse(a) && !annPopupShownIds.has(a.id + ':' + (a.revision || 1)));
-            if (!urgent) return;
-            annPopupShownIds.add(urgent.id + ':' + (urgent.revision || 1));
-            const [, typeLabel, icon, , badgeCls, , okLbl, objLbl] = annTypeInfo(urgent.type);
-            const allowObj = urgent.allowObjection !== false;
-            openModal({
-                title: 'بيان هام يتطلب ردك',
-                size: 'lg',
-                body: `<div class="space-y-4">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(urgent.badge || typeLabel)}</span>
-                        <span class="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">يظل ظاهراً حتى يتم الرد</span>
-                    </div>
-                    <h4 class="text-lg font-extrabold text-slate-900">${esc(urgent.title || '')}</h4>
-                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-800 whitespace-pre-line leading-relaxed font-medium">${esc(urgent.body || '')}</div>
-                    ${urgent.eventDate ? `<div class="text-xs font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(urgent.eventDate)}</div>` : ''}
-                    ${urgent.image ? `<img src="${esc(urgent.image)}" alt="" class="max-h-56 mx-auto rounded-xl border border-slate-200 object-contain">` : ''}
-                    <div id="annModalObjBox" class="hidden rounded-xl bg-rose-50 border border-rose-200 p-3 space-y-2">
-                        <label class="block text-xs font-extrabold text-rose-800">سبب الاعتراض (إجباري):</label>
-                        <textarea id="annModalObjText" rows="3" maxlength="1500" class="${INPUT_CLS}" placeholder="اكتب سبب اعتراضك بوضوح..."></textarea>
-                        <div class="flex justify-end"><button type="button" onclick="annSubmitModalObjection('${esc(urgent.id)}')" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold">إرسال الاعتراض</button></div>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200">
-                        <button type="button" onclick="annSubmitResponse('${esc(urgent.id)}','approved',true)" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-check"></i> ${esc(okLbl)}</button>
-                        ${allowObj ? `<button type="button" onclick="el('annModalObjBox').classList.toggle('hidden');el('annModalObjText').focus()" class="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border-2 border-rose-300 text-rose-700 text-sm font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-hand"></i> ${esc(objLbl)}</button>` : ''}
-                    </div>
-                </div>`
-            });
-        }
+        // Announcements now live cleanly in the floating side popup (#annSidePopup) — keeping #/home uncluttered
+        function homeAnnouncementsInnerHtml() { return ''; }
+        function homeAnnouncementsHtml() { return ''; }
+        function annMaybeShowUrgentPopup() { annPopupMaybeShow(false); }
 
         function annToggleObjectionBox(annId) {
             annObjectionOpenId = (annObjectionOpenId === annId) ? null : annId;
-            annRepaintHome();
+            if (parseRoute().name === 'home') annPopupMaybeShow(true, true);
             const host = el('modalHost');
             if (host && !host.classList.contains('hidden') && !annCanManage()) openMyAnnouncementsModal();
             if (annObjectionOpenId) {
-                setTimeout(() => { const ta = el('annObjReason_' + annObjectionOpenId); if (ta) ta.focus(); }, 40);
+                setTimeout(() => {
+                    const ta = document.querySelector('#annSidePopup #annObjReason_' + annObjectionOpenId) || el('annObjReason_' + annObjectionOpenId);
+                    if (ta) ta.focus();
+                }, 40);
             }
         }
 
@@ -12525,7 +12775,7 @@
         }
 
         function annSubmitObjection(annId) {
-            const ta = el('annObjReason_' + annId);
+            const tas = [...document.querySelectorAll('#annObjReason_' + annId)]; const ta = tas.find(x => x.value.trim()) || tas[0];
             annSubmitResponse(annId, 'objected', false, ta ? ta.value : '');
         }
 
@@ -13007,7 +13257,7 @@
             }).join('');
             const period = homeCfg.timeColors ? homePeriod(new Date().getHours()) : '';
             const sky = homeCfg.sunArc ? homeSkyPos() : null;
-            setTimeout(() => { debtPopupMaybeShow(); annMaybeShowUrgentPopup(); }, 180);
+            setTimeout(() => { debtPopupMaybeShow(); annPopupMaybeShow(); }, 180);
             const style = `<style>
                 .home-hero { position: relative; overflow: hidden; border-radius: 18px; padding: 46px 20px 14px; text-align: center; background: linear-gradient(135deg, rgb(var(--surface)) 0%, rgb(var(--page-bg)) 100%); border: 1px solid rgb(var(--accent)); box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 10px 22px -14px rgb(var(--brand-900) / .45); --hero-ink: rgb(var(--brand-800)); --hero-sub: #475569; color: var(--hero-ink); }
                 .home-hero::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .35); border-radius: 13px; pointer-events: none; }
@@ -15998,5 +16248,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fbf09e19f56e79',t:'MTc5NTU2MDI4Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fbf09e19f56e79',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fc01dd19c483a0',t:'MTc5NTU2MDk5MA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fc01dd19c483a0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
