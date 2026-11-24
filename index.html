@@ -5575,6 +5575,17 @@
 
         const custNoLabel = c => String(c.no || 0).padStart(4, '0');
         const custRemaining = c => r2(numOr0(c.amount) - numOr0(c.paid));
+        const custNameKey = name => String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+        // رصيد حساب العميل من فواتيره: مجموع (المدفوع − المبلغ). موجب = ليه رصيد عندنا، سالب = عليه
+        function custCreditOf(customer, exceptId = '') {
+            const k = custNameKey(customer);
+            if (!k) return 0;
+            return r2(appData.custOrders.filter(c => c.id !== exceptId && custNameKey(c.customer) === k)
+                .reduce((acc, c) => acc + (numOr0(c.paid) - numOr0(c.amount)), 0));
+        }
+        function custCreditText(v) {
+            return v > 0 ? `ليه رصيد ${fmtMoney(v)}` : v < 0 ? `عليه ${fmtMoney(-v)}` : 'لا ليه ولا عليه (0.00 ج.م)';
+        }
         const custSorted = list => [...list].sort((a, b) => (b.no || 0) - (a.no || 0));
         function nextCustNo() { return Math.max(0, ...appData.custOrders.map(c => Number(c.no) || 0)) + 1; }
 
@@ -7398,7 +7409,7 @@
                         <td class="py-3 px-3">${esc(c.completeness || '—')}</td>
                         <td class="py-3 px-3 whitespace-nowrap">${fmtMoney(numOr0(c.amount))}</td>
                         <td class="py-3 px-3 whitespace-nowrap">${fmtMoney(numOr0(c.paid))}</td>
-                        <td class="py-3 px-3 whitespace-nowrap font-bold ${custRemaining(c) > 0 ? 'text-rose-700' : ''}">${fmtMoney(custRemaining(c))}</td>
+                        <td class="py-3 px-3 whitespace-nowrap font-bold ${custRemaining(c) > 0 ? 'text-rose-700' : ''}">${custRemaining(c) < 0 ? `<span class="text-emerald-700">رصيد ${fmtMoney(-custRemaining(c))}</span>` : fmtMoney(custRemaining(c))}</td>
                         <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.validUntil) || '—')}</td>
                         <td class="py-3 px-3">${custDeliveryBadge(c)}</td>
                         <td class="py-3 px-3 whitespace-nowrap">${c.transport === 'نقل' ? '<span class="text-sky-700 font-bold"><i class="fa-solid fa-truck"></i> نقل</span>' : '<span class="text-slate-400">بدون نقل</span>'}</td>
@@ -7620,7 +7631,7 @@
                 ['حالة الطلبية: ' + CUST_COMPLETENESS.join(' / ') + ' (الافتراضي: كاملة).'],
                 ['حالة التسليم: ' + CUST_DELIVERY.join(' / ') + ' (الافتراضي: لم تُسلم).'],
                 ['المندوب: اكتب اسم المندوب زي ما هو مسجل في النظام. ولو الاسم جديد، هيظهرلك قبل الحفظ إن هيتعمل مندوب جديد بيه.'],
-                ['المدفوع: لازم يكون أقل من أو يساوي مبلغ الطلبية، غير كده الصف هيتخطى ويظهر في تقرير الاستيراد.'],
+                ['المدفوع: لو أكبر من مبلغ الطلبية، الزيادة بتنزل رصيد للعميل في حسابه.'],
                 ['عمود «الباقي» للقراءة بس — بيتحسب تلقائيًا (المبلغ - المدفوع) ومش محتاج تملاه.'],
                 [''],
                 ['مثال لصف جاهز (نفس ترتيب الأعمدة):'],
@@ -7696,7 +7707,7 @@
                 const paidRaw = pickValue(row, ['المدفوع', 'المبلغ المدفوع', 'Paid']);
                 const paid = (paidRaw === '' || paidRaw === null || paidRaw === undefined) ? 0 : custImportMoney(paidRaw);
                 if (paid === null || paid < 0) { errors.push({ row: rowNo, reason: 'المدفوع مش صحيح' }); return; }
-                if (paid > amount) { errors.push({ row: rowNo, reason: 'المدفوع أكبر من مبلغ الطلبية' }); return; }
+
                 let date = custImportDate(pickValue(row, ['التاريخ', 'تاريخ الطلبية', 'تاريخ الفاتورة', 'Date']));
                 if (date === null) { errors.push({ row: rowNo, reason: 'التاريخ مش مفهوم (اكتبه 2026-11-22 أو 22/11/2026)' }); return; }
                 if (!date) { date = todayISO(); warnings++; }
@@ -7884,8 +7895,23 @@
             const f = el('modalForm'), box = el('custRemainPreview');
             if (!f || !box || !f.elements.amount) return;
             const rem = r2(numOr0(f.elements.amount.value) - numOr0(f.elements.paid.value));
-            box.textContent = fmtMoney(rem);
+            box.textContent = rem < 0 ? `لا يوجد باقي — والزيادة ${fmtMoney(-rem)} هتنزل في رصيد حساب العميل` : fmtMoney(rem);
             box.classList.toggle('text-rose-700', rem > 0);
+            box.classList.toggle('text-emerald-700', rem < 0);
+            custBalancePreview();
+        }
+
+        // رصيد حساب العميل أثناء ملء الفاتورة: رصيده الحالي من فواتيره، وأثر الفاتورة دي عليه
+        function custBalancePreview() {
+            const f = el('modalForm'), box = el('custBalancePreview');
+            if (!f || !box) return;
+            const name = f.elements.customer ? f.elements.customer.value : '';
+            if (!String(name || '').trim()) { box.textContent = 'اكتب اسم العميل عشان يظهر رصيد حسابه'; box.className = `${INPUT_CLS} bg-emerald-50/60 font-bold text-slate-500`; return; }
+            const before = custCreditOf(name, box.dataset.except || '');
+            const delta = r2(numOr0(f.elements.paid ? f.elements.paid.value : 0) - numOr0(f.elements.amount ? f.elements.amount.value : 0));
+            const after = r2(before + delta);
+            box.textContent = `حاليًا: ${custCreditText(before)}${delta ? ` ← وبعد الفاتورة دي: ${custCreditText(after)}` : ''}`;
+            box.className = `${INPUT_CLS} bg-emerald-50/60 font-bold ${after > 0 ? 'text-emerald-700' : after < 0 ? 'text-rose-700' : 'text-slate-600'}`;
         }
 
         function openCustModal(id = null) {
@@ -7907,7 +7933,7 @@
                 body: `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('التاريخ *', `<input name="date" type="date" required value="${esc(c ? c.date : todayISO())}" class="${INPUT_CLS}">`)}
-                        ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" class="${INPUT_CLS}">`)}
+                        ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" oninput="custRemainingPreview()" class="${INPUT_CLS}">`)}
                         ${field('تليفون العميل', `<input name="customerPhone" type="tel" value="${esc(c?.customerPhone)}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'رقم الموبايل اللي في الفاتورة')}
                         ${field('رقم الطلب *', `<input name="no" type="number" min="1" step="1" required value="${c ? esc(c.no) : nextCustNo()}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'بياخد رقم تلقائي، وتقدر تكتب غيره')}
                         ${sel('repId', 'اسم المندوب', repOpts, c ? c.repId : '')}
@@ -7917,6 +7943,7 @@
                         ${field('مبلغ الطلبية (ج.م) *', `<input name="amount" type="number" step="0.01" min="0" required value="${c ? esc(c.amount) : ''}" oninput="custRemainingPreview()" dir="ltr" class="${INPUT_CLS} font-mono">`)}
                         ${field('المدفوع (ج.م)', `<input name="paid" type="number" step="0.01" min="0" value="${c ? esc(c.paid) : ''}" oninput="custRemainingPreview()" dir="ltr" class="${INPUT_CLS} font-mono">`)}
                         ${field('الباقي (ج.م)', `<div id="custRemainPreview" class="${INPUT_CLS} bg-slate-50 font-bold">0.00 ج.م</div>`)}
+                        ${field('رصيد حساب العميل', `<div id="custBalancePreview" data-except="${c ? esc(c.id) : ''}" class="${INPUT_CLS} bg-emerald-50/60 font-bold">—</div>`, 'بيتحسب تلقائيًا من فواتير العميل: أي زيادة يدفعها عن مبلغ فاتورة بتنزل رصيد ليه في حسابه')}
                         ${field('مدة الطلبية (تاريخ الانتهاء)', `<input name="validUntil" type="date" value="${esc(c?.validUntil)}" class="${INPUT_CLS}">`, 'اختياري')}
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -7943,7 +7970,7 @@
             if (!date || !customer) return toast('اكتب التاريخ واسم العميل', 'error'), false;
             if (!(amount >= 0) || amount > 999999999999.99) return toast('اكتب مبلغ الطلبية', 'error'), false;
             if (!(paid >= 0)) return toast('المدفوع مش ممكن يكون سالب', 'error'), false;
-            if (paid > amount) return toast('المدفوع أكبر من مبلغ الطلبية', 'error'), false;
+            // المدفوع ممكن يزيد عن مبلغ الفاتورة: الزيادة بتنزل رصيد للعميل في حسابه
             if (validUntil && validUntil < date) return toast('مدة الطلبية لازم تكون بعد التاريخ', 'error'), false;
             const transport = String(fd.get('transport') || 'بدون نقل');
             if (!CUST_TRANSPORT.includes(transport)) return toast('اختر الشحن والنقل من القائمة', 'error'), false;
@@ -7966,15 +7993,16 @@
                 customerPhone: String(fd.get('customerPhone') || '').trim(),
                 notes: String(fd.get('notes') || '').trim()
             };
+            const excess = r2(paid - amount);
             if (c) {
                 Object.assign(c, data, { updatedAt: new Date().toISOString(), updatedBy: orderUserName() });
                 log('تعديل طلبية عميل', `${custNoLabel(c)} — ${customer}`);
-                toast('تم حفظ التعديلات', 'success');
+                toast(excess > 0 ? `تم حفظ التعديلات — والزيادة ${fmtMoney(excess)} نزلت في رصيد حساب العميل (${custCreditText(custCreditOf(customer))})` : 'تم حفظ التعديلات', 'success', null, excess > 0 ? 6000 : 3000);
             } else {
                 const n = { id: uid('CUST-'), no: nextCustNo(), ...data, createdAt: new Date().toISOString(), createdBy: orderUserName(), updatedAt: '', updatedBy: '' };
                 appData.custOrders.push(n);
                 log('إضافة طلبية عميل', `${custNoLabel(n)} — ${customer}`);
-                toast('تمت إضافة الطلبية', 'success');
+                toast(excess > 0 ? `تمت إضافة الطلبية — والزيادة ${fmtMoney(excess)} نزلت في رصيد حساب العميل (${custCreditText(custCreditOf(customer))})` : 'تمت إضافة الطلبية', 'success', null, excess > 0 ? 6000 : 3000);
             }
             const savedId = c ? c.id : appData.custOrders[appData.custOrders.length - 1].id;
             saveState();
@@ -8098,6 +8126,7 @@
                 <span class="font-bold text-slate-600 shrink-0">${label}</span>
                 <span class="text-slate-900 text-end break-words min-w-0">${value}</span></div>`;
             const rem = custRemaining(c);
+            const credit = custCreditOf(c.customer);
             const stamp = (by, at) => (at ? `${esc(fmtDateTime(at))}${by ? ' — ' + esc(by) : ''}` : '—');
             return `<div>
                 ${row('الرقم', `<span class="font-mono font-bold">${esc(custNoLabel(c))}</span>`)}
@@ -8109,7 +8138,9 @@
                 ${row('حالة الطلبية', esc(c.completeness || '—'))}
                 ${row('المبلغ', fmtMoney(numOr0(c.amount)))}
                 ${row('المدفوع', fmtMoney(numOr0(c.paid)))}
-                ${row('الباقي', `<b class="${rem > 0 ? 'text-rose-700' : ''}">${fmtMoney(rem)}</b>`)}
+                ${row('الباقي', `<b class="${rem > 0 ? 'text-rose-700' : ''}">${rem < 0 ? 'لا يوجد باقي' : fmtMoney(rem)}</b>`)}
+                ${rem < 0 ? row('زيادة نزلت في رصيد الحساب', `<b class="text-emerald-700">${fmtMoney(-rem)}</b>`) : ''}
+                ${row('رصيد حساب العميل', `<b class="${credit > 0 ? 'text-emerald-700' : credit < 0 ? 'text-rose-700' : ''}">${custCreditText(credit)}</b>`)}
                 ${rem > 0 && custBalanceDueDate(c) ? row('آخر موعد لسداد الباقي', `<b class="text-rose-700">${esc(fmtDateAr(custBalanceDueDate(c)))}</b> <span class="text-xs text-slate-500">(7 أيام من تاريخ حجز الفاتورة)</span>`) : ''}
                 ${row('مدة الطلبية', esc(fmtDateAr(c.validUntil) || '—'))}
                 ${row('حالة التسليم', custDeliveryBadge(c))}
@@ -8159,7 +8190,7 @@
                 'برجاء سداد المبلغ المتبقي في موعد أقصاه ' + (dueDate ? fmtDateAr(dueDate) : 'خلال 7 أيام من تاريخ حجز الفاتورة') + ' (7 أيام من تاريخ حجز الفاتورة' + (holdDate ? ' بتاريخ ' + fmtDateAr(holdDate) : '') + ').',
                 'وفي حال عدم السداد خلال المهلة، سيتم فك حجز البضاعة، وسيُرحَّل المبلغ المدفوع كرصيد لصالحكم في حسابكم لدينا.',
                 'شكرًا لتعاونكم 🙏'
-            ].join('\n') : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏';
+            ].join('\n') : (remaining < 0 ? 'الحساب مسدد بالكامل، والمبلغ الزيادة ' + fmtMoney(-remaining) + ' اتسجل رصيد لصالحكم في حسابكم لدينا — شكرًا لتعاملكم معنا 🙏' : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏');
             const lines = [
                 'أهلاً ' + (c.customer || '') + ' 🌟',
                 'فاتورة رقم ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' بتاريخ ' + fmtDateAr(c.date) : ''),
@@ -8175,7 +8206,7 @@
             const rows = (appData.custOrders || []).filter(c => c.customer === customer && (!repId || c.repId === repId));
             if (!rows.length) return toast('مفيش فواتير للعميل ده', 'error');
             const tot = rows.reduce((a, c) => a + numOr0(c.amount), 0), paid = rows.reduce((a, c) => a + numOr0(c.paid), 0);
-            const lines = ['كشف حساب — ' + customer, ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))), 'الإجمالي: ' + fmtMoney(tot) + ' · المدفوع: ' + fmtMoney(paid) + ' · المتبقي: ' + fmtMoney(tot - paid), '— ' + (appData.settings.systemName || 'الرحمة')];
+            const lines = ['كشف حساب — ' + customer, ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))), 'الإجمالي: ' + fmtMoney(tot) + ' · المدفوع: ' + fmtMoney(paid) + ' · ' + (tot - paid >= 0 ? 'المتبقي: ' + fmtMoney(tot - paid) : 'رصيد لصالحكم عندنا: ' + fmtMoney(paid - tot)), '— ' + (appData.settings.systemName || 'الرحمة')];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
         }
         function printCustOrder(id) {
@@ -12785,5 +12816,5 @@
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f8625d6f9aadf5',t:'MTc5NTUyMjk5OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f8625d6f9aadf5',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
