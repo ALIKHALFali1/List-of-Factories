@@ -778,7 +778,8 @@
             { title: 'المديونيات والتحصيل', items: [
                 ['debts.view', 'عرض قسم المديونيات وسجل الإجراءات والتعليقات والطباعة'],
                 ['debts.manage', 'إضافة وتعديل المديونيات وتسجيل الدفعات واتخاذ الإجراءات والتصعيد'],
-                ['debts.delete', 'حذف ملفات المديونيات']
+                ['debts.delete', 'حذف ملفات المديونيات'],
+                ['debts.popup', 'عرض القائمة المنبثقة للمديونيات على الشاشة الرئيسية']
             ] }
         ];
         const ALL_PERMS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i[0]));
@@ -2262,6 +2263,7 @@
             chatStop(); chatStart();
             expStop(); expStart();
             debtStop(); debtStart();
+            debtPopupCfgStop(); debtPopupCfgStart();
         }
 
         function stopSync() {
@@ -2292,6 +2294,7 @@
             cmpStop();
             expStop();
             debtStop();
+            debtPopupCfgStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -4445,6 +4448,7 @@
             }
             ensureHomePersonalPerm();
             if (!(parseRoute().name === 'shipping' && parseRoute().param === 'screen')) shipLeaveScreen();
+            if (parseRoute().name !== 'home') debtPopupUnmount();
             let { name, param } = parseRoute();
 
             if (!ROUTES[name]) name = 'dashboard';
@@ -10314,7 +10318,7 @@
         };
 
         function debtStart() {
-            if (debtStarted || !rtdb || !fbUser || !debtCanView()) return;
+            if (debtStarted || !rtdb || !fbUser || !(debtCanView() || can('debts.popup'))) return;
             debtStarted = true;
             const dRef = rtdb.ref('debts');
             const dCb = snap => {
@@ -10336,6 +10340,8 @@
                 if (r.name === 'debts') {
                     if (r.param === 'log') renderDebtLog();
                     else render();
+                } else if (r.name === 'home') {
+                    debtPopupMaybeShow(true);
                 }
             };
             dRef.on('value', dCb, err => console.warn('debts listener', err && err.code));
@@ -10463,6 +10469,7 @@
                     ${btn("navigate('debts/log')", 'سجل متابعة وإجراءات المديونيات', 'fa-route', BTN_SECONDARY + ' !bg-slate-800 !text-white hover:!bg-slate-900')}
                     ${btn('printDebtList()', 'طباعة الكشف', 'fa-print', BTN_SECONDARY)}
                     ${btn('exportDebtList()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                    ${debtCanConfigPopup() ? btn('openDebtPopupSettings()', 'القائمة المنبثقة بالرئيسية', 'fa-sliders', BTN_SECONDARY) : ''}
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
                     <div class="relative">
@@ -10484,6 +10491,7 @@
                 const cmtCount = (debtCommentsMap[d.id] || []).length;
                 return `<div class="flex items-center justify-center gap-1 flex-wrap">
                     <button type="button" onclick="openDebtDetail('${id}')" title="عرض الملف والسجل" class="${BTN_ICON} text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
+                    <button type="button" onclick="printDebtDetail('${id}')" title="طباعة ملف العميل والسجل" class="${BTN_ICON} text-slate-600 hover:text-slate-900 hover:bg-slate-100"><i class="fa-solid fa-print"></i></button>
                     ${debtCanManage() ? `<button type="button" onclick="openDebtActionModal('${id}')" title="تسجيل إجراء / تصعيد ضد العميل" class="${BTN_ICON} text-orange-600 hover:text-orange-700 hover:bg-orange-50"><i class="fa-solid fa-bolt"></i></button>` : ''}
                     ${debtCanManage() && debtRemaining(d) > 0 ? `<button type="button" onclick="openDebtPaymentModal('${id}')" title="تسجيل دفعة سداد" class="${BTN_ICON} text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"><i class="fa-solid fa-money-bill-wave"></i></button>` : ''}
                     <button type="button" onclick="openDebtComments('${id}')" title="التعليقات والملاحظات" class="${BTN_ICON} relative text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-comments"></i>${cmtCount ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-brand-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${cmtCount}</span>` : ''}</button>
@@ -10993,6 +11001,7 @@
                         ${debtCanManage() && rem > 0 ? `<button type="button" onclick="openDebtPaymentModal('${cid}')" class="${BTN_PRIMARY} !bg-emerald-600 hover:!bg-emerald-700"><i class="fa-solid fa-money-bill-wave"></i> تسجيل دفعة</button>` : ''}
                         ${d.phone ? `<button type="button" onclick="openDebtWhatsAppModal('${cid}')" class="${BTN_SECONDARY} !text-emerald-700 !border-emerald-300"><i class="fa-brands fa-whatsapp"></i> واتساب حاد</button>` : ''}
                         <button type="button" onclick="openDebtComments('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-comments"></i> التعليقات (${cmts.length})</button>
+                        <button type="button" onclick="printDebtDetail('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-print"></i> طباعة الملف والسجل</button>
                         ${debtCanManage() ? `<button type="button" onclick="openDebtModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
                     </div>
                     <div class="space-y-2">
@@ -11321,6 +11330,470 @@
             toast('تم تصدير سجل المديونيات بنجاح', 'success');
         }
 
+        // ---- طباعة ملف عميل مديونية واحد بالكامل (البيانات + الدفعات + السجل + التعليقات) ----
+        function printDebtDetail(id) {
+            if (!(debtCanView() || can('debts.popup'))) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const d = debtList.find(x => x.id === id);
+            if (!d) return toast('الملف مش موجود', 'error');
+            const rem = debtRemaining(d);
+            const days = debtDaysOverdue(d);
+            const [, stageLabel, col, , hex] = debtStageInfo(d.stage);
+            const cmts = debtCommentsMap[d.id] || [];
+
+            const infoRows = `<table><tbody>
+                <tr><th style="width:18%">اسم العميل</th><td class="cust">${esc(d.customer)}${d.evading && rem > 0 ? ' — [متهرب من السداد 🚨]' : ''}</td><th style="width:18%">المرحلة الحالية</th><td><span class="chip" style="background:${DEBT_PRINT_BG[col]};border:1px solid ${hex}">${esc(stageLabel)}</span>${days > 0 ? ` · متأخر ${days} يوم` : ''}</td></tr>
+                <tr><th>التليفون</th><td class="num">${esc(d.phone || '—')}${d.altPhone ? ' / ' + esc(d.altPhone) : ''}</td><th>المندوب</th><td>${esc(d.repName || '—')}</td></tr>
+                <tr><th>مصدر المديونية</th><td>${esc(debtSourceLabel(d.sourceType))}</td><th>رقم المستند</th><td class="num">${esc(d.refNo || '—')}</td></tr>
+                <tr><th>بداية المديونية</th><td>${esc(d.originDate ? fmtWaDate(d.originDate) : '—')}</td><th>تاريخ الاستحقاق</th><td>${esc(d.dueDate ? fmtWaDate(d.dueDate) : '—')}</td></tr>
+                <tr><th>العنوان</th><td colspan="3">${esc(d.address || '—')}</td></tr>
+                <tr><th>السبب والتفاصيل</th><td colspan="3">${esc(d.reason || '—')}</td></tr>
+                ${d.notes ? `<tr><th>ملاحظات داخلية</th><td colspan="3" style="white-space:pre-wrap">${esc(d.notes)}</td></tr>` : ''}
+            </tbody></table>`;
+
+            const moneyBar = `<table><thead><tr><th>إجمالي المديونية</th><th>إجمالي المدفوع</th><th>المتبقي الفعلي</th></tr></thead><tbody><tr>
+                <td class="num" style="font-size:11pt;font-weight:800">${fmtMoney(d.totalAmount)}</td>
+                <td class="num" style="font-size:11pt;font-weight:800;color:#047857">${fmtMoney(d.paidAmount)}</td>
+                <td class="num" style="font-size:11.5pt;font-weight:900;color:${rem > 0 ? '#be123c' : '#047857'}">${fmtMoney(rem)}</td>
+            </tr></tbody></table>`;
+
+            const payRows = d.payments.length
+                ? `<table><thead><tr><th>#</th><th>التاريخ</th><th>المبلغ</th><th>طريقة الدفع</th><th>ملاحظة</th><th>بواسطة</th></tr></thead><tbody>${d.payments.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(fmtWaDate(p.date))}</td><td class="num"><b>${fmtMoney(p.amount)}</b></td><td>${esc(p.method || '—')}</td><td>${esc(p.note || '—')}</td><td>${esc(p.by || '—')}</td></tr>`).join('')}</tbody></table>`
+                : '<p class="muted">لا توجد دفعات سداد مسجلة حتى الآن.</p>';
+
+            const evRows = d.events.length
+                ? `<table><thead><tr><th>#</th><th>التاريخ والوقت</th><th>نوع الإجراء</th><th>التفاصيل</th><th>بواسطة</th></tr></thead><tbody>${d.events.map((e, i) => `<tr><td>${i + 1}</td><td class="num">${esc(debtFmtDateTime(e.t))}</td><td><b>${esc(e.actionLabel || 'متابعة')}</b></td><td>${esc(e.detail || '—')}</td><td>${esc(e.by || '—')}</td></tr>`).join('')}</tbody></table>`
+                : '<p class="muted">لا توجد إجراءات مسجلة حتى الآن.</p>';
+
+            const cmtRows = cmts.length
+                ? `<table><thead><tr><th>#</th><th>التاريخ والوقت</th><th>المعلّق</th><th>التعليق</th></tr></thead><tbody>${cmts.map((c, i) => `<tr><td>${i + 1}</td><td class="num">${esc(debtFmtDateTime(c.t))}</td><td>${esc(c.by || '—')}</td><td style="white-space:pre-wrap">${esc(c.text || '')}</td></tr>`).join('')}</tbody></table>`
+                : '';
+
+            const body = `
+                <h2>بيانات العميل والمديونية</h2>${infoRows}
+                <h2>الملخص المالي</h2>${moneyBar}
+                <h2>سجل الدفعات (${d.payments.length})</h2>${payRows}
+                <h2>سجل المتابعة والإجراءات (${d.events.length})</h2>${evRows}
+                ${cmtRows ? `<h2>التعليقات والملاحظات الداخلية (${cmts.length})</h2>${cmtRows}` : ''}
+                <div class="foot">تمت الطباعة بواسطة: <b>${esc(orderUserName())}</b> · بتاريخ: ${esc(fmtWaDate(todayISO()))} · ${esc(appData.settings.systemName || 'الرحمة')}</div>`;
+            printHtml(shipPrintDoc(`ملف مديونية: ${d.customer}`, `طباعة كاملة بالدفعات وسجل الإجراءات — ${fmtWaDate(todayISO())}`, body, false));
+        }
+
+        // ---- القائمة المنبثقة الجانبية للمديونيات على الشاشة الرئيسية (خفيفة جداً + سحب للجنب للإخفاء + تحكم كامل) ----
+        const DEBT_POPUP_LOCAL_KEY = 'debtHomePopupMuted';
+        const DEBT_POPUP_DEFAULT = {
+            enabled: true,
+            side: 'left',           // 'left' | 'right'
+            audience: 'debts_perm', // 'admin_only' | 'debts_perm' | 'popup_perm' | 'custom_roles'
+            allowedRoles: [],
+            stages: ['followup', 'warning', 'final_notice', 'suspended', 'legal'],
+            evadingOnly: false,
+            minRemaining: 0,
+            maxItems: 8,
+            autoHideSec: 0,         // 0 = يدوي بالسحب فقط
+            oncePerSession: false
+        };
+        let debtPopupCfg = { ...DEBT_POPUP_DEFAULT };
+        let debtPopupCfgUnsub = null, debtPopupCfgStarted = false;
+        let debtPopupDismissedSession = false;
+        let debtPopupDismissedVisit = false;
+        let debtPopupAutoTimer = null;
+        let debtPopupStyleInjected = false;
+
+        const debtCanConfigPopup = () => isSystemAdmin() || can('debts.manage') || can('settings.manage');
+
+        function debtPopupNormCfg(raw) {
+            const c = (raw && typeof raw === 'object') ? raw : {};
+            const validStages = DEBT_STAGES.filter(s => s[0] !== 'settled').map(s => s[0]);
+            const stages = Array.isArray(c.stages)
+                ? c.stages.filter(s => validStages.includes(s))
+                : (c.stages && typeof c.stages === 'object' ? Object.values(c.stages).filter(s => validStages.includes(s)) : [...DEBT_POPUP_DEFAULT.stages]);
+            const roles = Array.isArray(c.allowedRoles)
+                ? c.allowedRoles.map(String)
+                : (c.allowedRoles && typeof c.allowedRoles === 'object' ? Object.values(c.allowedRoles).map(String) : []);
+            return {
+                enabled: c.enabled !== false,
+                side: c.side === 'right' ? 'right' : 'left',
+                audience: ['admin_only', 'debts_perm', 'popup_perm', 'custom_roles'].includes(c.audience) ? c.audience : 'debts_perm',
+                allowedRoles: roles,
+                stages,
+                evadingOnly: c.evadingOnly === true,
+                minRemaining: Math.max(0, Number(c.minRemaining) || 0),
+                maxItems: Math.min(20, Math.max(1, parseInt(c.maxItems, 10) || 8)),
+                autoHideSec: Math.min(120, Math.max(0, parseInt(c.autoHideSec, 10) || 0)),
+                oncePerSession: c.oncePerSession === true
+            };
+        }
+
+        function debtPopupCfgStart() {
+            if (debtPopupCfgStarted || !rtdb || !fbUser || !(debtCanView() || can('debts.popup') || can('settings.manage'))) return;
+            debtPopupCfgStarted = true;
+            const ref = rtdb.ref('settings/debtPopup');
+            const cb = snap => {
+                debtPopupCfg = debtPopupNormCfg(snap.val());
+                if (parseRoute().name === 'home') debtPopupMaybeShow(true);
+            };
+            ref.on('value', cb, () => {});
+            debtPopupCfgUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+        }
+
+        function debtPopupCfgStop() {
+            if (debtPopupCfgUnsub) { try { debtPopupCfgUnsub(); } catch (e) { /* noop */ } debtPopupCfgUnsub = null; }
+            debtPopupCfgStarted = false;
+            debtPopupDismissedSession = false;
+            debtPopupDismissedVisit = false;
+            debtPopupUnmount();
+        }
+
+        function debtPopupLocalMuted() {
+            try { return localStorage.getItem(DEBT_POPUP_LOCAL_KEY) === '1'; } catch (e) { return false; }
+        }
+        function debtPopupSetLocalMuted(on) {
+            try { if (on) localStorage.setItem(DEBT_POPUP_LOCAL_KEY, '1'); else localStorage.removeItem(DEBT_POPUP_LOCAL_KEY); } catch (e) { /* noop */ }
+        }
+
+        function debtPopupUserAllowed() {
+            const u = currentUser();
+            if (!u || !u.active) return false;
+            if (!debtPopupCfg.enabled) return false;
+            if (!(debtCanView() || can('debts.popup'))) return false;
+            const aud = debtPopupCfg.audience;
+            if (aud === 'admin_only') return isSystemAdmin(u);
+            if (aud === 'popup_perm') return isSystemAdmin(u) || can('debts.popup');
+            if (aud === 'custom_roles') return isSystemAdmin(u) || debtPopupCfg.allowedRoles.includes(u.roleId);
+            return debtCanView() || can('debts.popup');
+        }
+
+        function debtPopupMatchingItems() {
+            const cfg = debtPopupCfg;
+            if (!cfg.stages.length) return [];
+            return debtList
+                .filter(d => {
+                    const rem = debtRemaining(d);
+                    if (!(rem > 0) || d.stage === 'settled') return false;
+                    if (!cfg.stages.includes(d.stage)) return false;
+                    if (cfg.evadingOnly && !d.evading) return false;
+                    if (cfg.minRemaining > 0 && rem < cfg.minRemaining) return false;
+                    return true;
+                })
+                .sort((a, b) => (b.evading - a.evading) || (debtRemaining(b) - debtRemaining(a)) || (debtDaysOverdue(b) - debtDaysOverdue(a)));
+        }
+
+        function debtPopupInjectStyle() {
+            if (debtPopupStyleInjected) return;
+            debtPopupStyleInjected = true;
+            const st = document.createElement('style');
+            st.id = 'debtPopupStyle';
+            st.textContent = `
+                .dp-panel{position:fixed;top:4.8rem;z-index:45;width:min(21.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);display:flex;flex-direction:column;border-radius:1rem;background:#fff;border:1px solid #fecdd3;box-shadow:0 18px 42px -12px rgba(15,23,42,.28);will-change:transform,opacity;transition:transform .34s cubic-bezier(.22,1,.36,1),opacity .28s ease;touch-action:pan-y;user-select:none}
+                .dp-panel.dp-left{left:.9rem;transform:translate3d(-115%,0,0);opacity:0}
+                .dp-panel.dp-right{right:.9rem;transform:translate3d(115%,0,0);opacity:0}
+                .dp-panel.dp-open{transform:translate3d(0,0,0)!important;opacity:1!important}
+                .dp-panel.dp-dragging{transition:none!important}
+                .dp-tab{position:fixed;top:5.2rem;z-index:44;display:inline-flex;align-items:center;gap:.45rem;padding:.5rem .75rem;background:#be123c;color:#fff;font-size:.75rem;font-weight:800;box-shadow:0 8px 20px -6px rgba(190,18,60,.55);cursor:pointer;transition:transform .2s ease,opacity .2s ease}
+                .dp-tab:hover{background:#9f1239}
+                .dp-tab.dp-left{left:0;border-radius:0 .85rem .85rem 0}
+                .dp-tab.dp-right{right:0;border-radius:.85rem 0 0 .85rem}
+            `;
+            document.head.appendChild(st);
+        }
+
+        function debtPopupClearTimer() {
+            if (debtPopupAutoTimer) { clearTimeout(debtPopupAutoTimer); debtPopupAutoTimer = null; }
+        }
+
+        function debtPopupUnmount() {
+            debtPopupClearTimer();
+            const p = document.getElementById('debtSidePopup');
+            if (p) p.remove();
+            const t = document.getElementById('debtSideTab');
+            if (t) t.remove();
+            debtPopupDismissedVisit = false;
+        }
+
+        function debtPopupRenderTab(count) {
+            const oldTab = document.getElementById('debtSideTab');
+            if (oldTab) oldTab.remove();
+            if (parseRoute().name !== 'home' || !count || !debtPopupUserAllowed()) return;
+            const sideCls = debtPopupCfg.side === 'right' ? 'dp-right' : 'dp-left';
+            const btnEl = document.createElement('button');
+            btnEl.id = 'debtSideTab';
+            btnEl.type = 'button';
+            btnEl.className = 'dp-tab ' + sideCls;
+            btnEl.title = 'إظهار قائمة تنبيهات المديونيات';
+            btnEl.innerHTML = `<i class="fa-solid fa-scale-balanced"></i><span>مديونيات (${count})</span>`;
+            btnEl.onclick = () => {
+                debtPopupSetLocalMuted(false);
+                debtPopupDismissedSession = false;
+                debtPopupDismissedVisit = false;
+                debtPopupMaybeShow(true);
+            };
+            document.body.appendChild(btnEl);
+        }
+
+        function debtPopupDismiss(muteDevice) {
+            debtPopupClearTimer();
+            const panel = document.getElementById('debtSidePopup');
+            const count = debtPopupMatchingItems().length;
+            debtPopupDismissedVisit = true;
+            if (debtPopupCfg.oncePerSession) debtPopupDismissedSession = true;
+            if (muteDevice) debtPopupSetLocalMuted(true);
+            if (panel) {
+                panel.classList.remove('dp-dragging', 'dp-open');
+                panel.style.transform = '';
+                panel.style.opacity = '';
+                setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); }, 300);
+            } else {
+                debtPopupRenderTab(count);
+            }
+        }
+
+        function debtPopupBindSwipe(panel) {
+            const isLeft = debtPopupCfg.side !== 'right';
+            let startX = 0, startY = 0, dx = 0, active = false, locked = false;
+            const onStart = (x, y) => {
+                startX = x; startY = y; dx = 0; active = true; locked = false;
+                debtPopupClearTimer();
+            };
+            const onMove = (x, y, ev) => {
+                if (!active) return;
+                const mx = x - startX, my = y - startY;
+                if (!locked) {
+                    if (Math.abs(my) > Math.abs(mx) && Math.abs(my) > 8) { active = false; return; }
+                    if (Math.abs(mx) > 8) { locked = true; panel.classList.add('dp-dragging'); }
+                    else return;
+                }
+                // allow dragging mainly toward the side edge
+                dx = isLeft ? Math.min(24, mx) : Math.max(-24, mx);
+                if (ev && ev.cancelable) ev.preventDefault();
+                panel.style.transform = `translate3d(${dx}px, 0, 0)`;
+                panel.style.opacity = String(Math.max(0.15, 1 - Math.abs(dx) / 240));
+            };
+            const onEnd = () => {
+                if (!active) return;
+                active = false;
+                panel.classList.remove('dp-dragging');
+                const shouldClose = isLeft ? (dx < -72) : (dx > 72);
+                if (shouldClose) {
+                    panel.style.transform = `translate3d(${isLeft ? '-115%' : '115%'}, 0, 0)`;
+                    panel.style.opacity = '0';
+                    debtPopupDismissedVisit = true;
+                    if (debtPopupCfg.oncePerSession) debtPopupDismissedSession = true;
+                    const count = debtPopupMatchingItems().length;
+                    setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); }, 280);
+                } else {
+                    panel.style.transform = '';
+                    panel.style.opacity = '';
+                    debtPopupArmAutoHide();
+                }
+            };
+            panel.addEventListener('touchstart', e => { if (e.touches.length === 1) onStart(e.touches[0].clientX, e.touches[0].clientY); }, { passive: true });
+            panel.addEventListener('touchmove', e => { if (e.touches.length === 1) onMove(e.touches[0].clientX, e.touches[0].clientY, e); }, { passive: false });
+            panel.addEventListener('touchend', onEnd, { passive: true });
+            panel.addEventListener('pointerdown', e => {
+                if (e.pointerType === 'touch' || e.button !== 0 || e.target.closest('button, a, input, select')) return;
+                onStart(e.clientX, e.clientY);
+                try { panel.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
+            });
+            panel.addEventListener('pointermove', e => { if (e.pointerType !== 'touch') onMove(e.clientX, e.clientY, e); });
+            panel.addEventListener('pointerup', e => { if (e.pointerType !== 'touch') onEnd(); });
+            panel.addEventListener('pointercancel', e => { if (e.pointerType !== 'touch') onEnd(); });
+            panel.addEventListener('mouseenter', debtPopupClearTimer);
+            panel.addEventListener('mouseleave', debtPopupArmAutoHide);
+        }
+
+        function debtPopupArmAutoHide() {
+            debtPopupClearTimer();
+            const sec = debtPopupCfg.autoHideSec;
+            if (sec > 0 && document.getElementById('debtSidePopup')) {
+                debtPopupAutoTimer = setTimeout(() => debtPopupDismiss(false), sec * 1000);
+            }
+        }
+
+        function debtPopupMaybeShow(isRefresh) {
+            if (parseRoute().name !== 'home') { debtPopupUnmount(); return; }
+            if (!debtPopupUserAllowed()) { debtPopupUnmount(); return; }
+            const all = debtPopupMatchingItems();
+            if (!all.length) { debtPopupUnmount(); return; }
+            debtPopupInjectStyle();
+            if (debtPopupLocalMuted() || debtPopupDismissedVisit || (debtPopupCfg.oncePerSession && debtPopupDismissedSession)) {
+                const oldP = document.getElementById('debtSidePopup');
+                if (oldP) oldP.remove();
+                debtPopupRenderTab(all.length);
+                return;
+            }
+            const oldTab = document.getElementById('debtSideTab');
+            if (oldTab) oldTab.remove();
+
+            const items = all.slice(0, debtPopupCfg.maxItems);
+            const totalRem = r2(all.reduce((a, d) => a + debtRemaining(d), 0));
+            const sideCls = debtPopupCfg.side === 'right' ? 'dp-right' : 'dp-left';
+            const swipeHint = debtPopupCfg.side === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء';
+
+            let panel = document.getElementById('debtSidePopup');
+            const alreadyOpen = !!(panel && panel.classList.contains('dp-open'));
+            if (!panel) {
+                panel = document.createElement('aside');
+                panel.id = 'debtSidePopup';
+                panel.setAttribute('aria-label', 'تنبيه المديونيات');
+                document.body.appendChild(panel);
+                debtPopupBindSwipe(panel);
+            }
+            panel.className = 'dp-panel ' + sideCls + (alreadyOpen ? ' dp-open' : '');
+            panel.innerHTML = `
+                <div class="px-3.5 py-2.5 rounded-t-2xl bg-gradient-to-l from-rose-700 to-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
+                    <div class="min-w-0">
+                        <div class="font-black text-sm flex items-center gap-1.5">
+                            <i class="fa-solid fa-scale-balanced text-rose-200"></i>
+                            <span>مديونيات تحتاج متابعة</span>
+                            <span class="px-1.5 py-0.5 rounded-full bg-white/20 text-[11px] font-mono">${all.length}</span>
+                        </div>
+                        <div class="text-[11px] text-rose-100 font-bold mt-0.5">إجمالي المتبقي: <span class="font-mono">${fmtMoney(totalRem)}</span></div>
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        ${debtCanConfigPopup() ? `<button type="button" onclick="openDebtPopupSettings()" title="إعدادات القائمة المنبثقة" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/25 flex items-center justify-center text-xs"><i class="fa-solid fa-gear"></i></button>` : ''}
+                        <button type="button" onclick="debtPopupDismiss(false)" title="إخفاء" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/25 flex items-center justify-center text-xs"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                </div>
+                <div class="divide-y divide-slate-100 overflow-y-auto flex-1 px-1">
+                    ${items.map(d => {
+                        const rem = debtRemaining(d);
+                        const days = debtDaysOverdue(d);
+                        const [, stLabel, stCol] = debtStageInfo(d.stage);
+                        return `<button type="button" onclick="openDebtDetail('${esc(d.id)}')" class="w-full text-right px-2.5 py-2.5 hover:bg-rose-50/60 rounded-xl transition-colors flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="font-black text-xs text-slate-800 flex items-center gap-1 flex-wrap">
+                                    <span class="truncate">${esc(d.customer)}</span>
+                                    ${d.evading ? '<span class="px-1 py-0.2 rounded bg-rose-600 text-white text-[9px] font-black">🚨 متهرب</span>' : ''}
+                                </div>
+                                <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+                                    <span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${DEBT_STAGE_CLS[stCol]}">${esc(stLabel)}</span>
+                                    ${days > 0 ? `<span class="text-[10px] font-bold text-rose-600">متأخر ${days} يوم</span>` : ''}
+                                </div>
+                            </div>
+                            <div class="text-left shrink-0">
+                                <div class="font-mono font-black text-xs text-rose-700">${fmtMoney(rem)}</div>
+                                <div class="text-[10px] text-slate-400">اضغط للفتح</div>
+                            </div>
+                        </button>`;
+                    }).join('')}
+                </div>
+                <div class="px-3 py-2 bg-slate-50 border-t border-slate-100 rounded-b-2xl flex items-center justify-between gap-2 shrink-0">
+                    <span class="text-[10px] font-bold text-slate-400">${swipeHint}</span>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="debtPopupDismiss(true)" title="عدم الإظهار على هذا الجهاز" class="text-[10px] font-bold text-slate-400 hover:text-rose-600">إخفاء بجهازي</button>
+                        ${debtCanView() ? `<button type="button" onclick="navigate('debts')" class="text-xs font-black text-rose-700 hover:text-rose-900">كل المديونيات ←</button>` : ''}
+                    </div>
+                </div>`;
+
+            if (!alreadyOpen) {
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    if (panel && panel.parentNode) panel.classList.add('dp-open');
+                }));
+            }
+            if (!isRefresh || !alreadyOpen) debtPopupArmAutoHide();
+        }
+
+        function openDebtPopupSettings() {
+            if (!debtCanConfigPopup()) return toast('ليس لديك صلاحية تعديل إعدادات القائمة المنبثقة', 'error');
+            const c = debtPopupCfg;
+            const rolesList = Object.values(appData.roles || {});
+            const stagesList = DEBT_STAGES.filter(s => s[0] !== 'settled');
+            const localMuted = debtPopupLocalMuted();
+            openModal({
+                title: '⚙️ إعدادات القائمة المنبثقة للمديونيات (الشاشة الرئيسية)',
+                submitText: 'حفظ الإعدادات',
+                size: 'lg',
+                body: `
+                    <label class="flex items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                        <div>
+                            <div class="font-black text-sm text-slate-800">تفعيل القائمة المنبثقة عند فتح الشاشة الرئيسية</div>
+                            <div class="text-xs text-slate-500">يمكنك إيقافها تماماً أو تشغيلها في أي وقت بدون أي حمل على الموقع</div>
+                        </div>
+                        <input type="checkbox" name="enabled" ${c.enabled ? 'checked' : ''} class="w-5 h-5 accent-rose-600 shrink-0">
+                    </label>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('الصلاحية — من يرى القائمة المنبثقة؟', `<select name="audience" onchange="const b=el('dpRolesBox'); if(b) b.classList.toggle('hidden', this.value!=='custom_roles');" class="${INPUT_CLS}">
+                            <option value="debts_perm" ${c.audience === 'debts_perm' ? 'selected' : ''}>كل من لديه صلاحية المديونيات أو القائمة المنبثقة</option>
+                            <option value="admin_only" ${c.audience === 'admin_only' ? 'selected' : ''}>مدير النظام فقط</option>
+                            <option value="popup_perm" ${c.audience === 'popup_perm' ? 'selected' : ''}>من لديه صلاحية «القائمة المنبثقة» فقط + المدير</option>
+                            <option value="custom_roles" ${c.audience === 'custom_roles' ? 'selected' : ''}>أدوار محددة أختارها بنفسي</option>
+                        </select>`)}
+                        ${field('مكان الظهور والسحب', `<select name="side" class="${INPUT_CLS}">
+                            <option value="left" ${c.side === 'left' ? 'selected' : ''}>من الجانب الأيسر (الأفضل مع القائمة الجانبية)</option>
+                            <option value="right" ${c.side === 'right' ? 'selected' : ''}>من الجانب الأيمن</option>
+                        </select>`)}
+                    </div>
+                    <div id="dpRolesBox" class="${c.audience === 'custom_roles' ? '' : 'hidden'} p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                        <div class="text-xs font-black text-slate-700">اختر الأدوار المسموح لها برؤية القائمة المنبثقة:</div>
+                        <div class="flex flex-wrap gap-2">
+                            ${rolesList.map(r => `<label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-bold cursor-pointer">
+                                <input type="checkbox" name="role_${esc(r.id)}" ${(r.locked || c.allowedRoles.includes(r.id)) ? 'checked' : ''} ${r.locked ? 'disabled' : ''} class="accent-rose-600">
+                                <span>${esc(r.name)}</span>
+                            </label>`).join('')}
+                        </div>
+                        <p class="text-[11px] text-slate-500">تأكد أن الدور المختار لديه صلاحية «عرض المديونيات» أو «القائمة المنبثقة للمديونيات» من شاشة الأدوار والصلاحيات.</p>
+                    </div>
+                    <div class="p-3 rounded-xl bg-rose-50/50 border border-rose-200 space-y-2">
+                        <div class="text-xs font-black text-slate-800">أي فئات من عملاء المديونيات تظهر في القائمة؟</div>
+                        <div class="flex flex-wrap gap-2">
+                            ${stagesList.map(([k, label, col]) => `<label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold cursor-pointer ${DEBT_STAGE_CLS[col]}">
+                                <input type="checkbox" name="st_${k}" ${c.stages.includes(k) ? 'checked' : ''} class="accent-rose-600">
+                                <span>${esc(label)}</span>
+                            </label>`).join('')}
+                        </div>
+                        <label class="flex items-center gap-2 pt-1 cursor-pointer">
+                            <input type="checkbox" name="evadingOnly" ${c.evadingOnly ? 'checked' : ''} class="w-4 h-4 accent-rose-600">
+                            <span class="text-xs font-black text-rose-800">🚨 إظهار العملاء المصنّفين «متهربون» فقط</span>
+                        </label>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        ${field('أقل مبلغ متبقي للظهور (ج.م)', `<input name="minRemaining" type="number" min="0" step="100" dir="ltr" value="${c.minRemaining}" class="${INPUT_CLS}">`, '0 = كل المبالغ')}
+                        ${field('الحد الأقصى للعملاء', `<select name="maxItems" class="${INPUT_CLS}">${[5, 8, 12, 15, 20].map(n => `<option value="${n}" ${c.maxItems === n ? 'selected' : ''}>${n} عملاء</option>`).join('')}</select>`)}
+                        ${field('الإخفاء التلقائي', `<select name="autoHideSec" class="${INPUT_CLS}">
+                            <option value="0" ${c.autoHideSec === 0 ? 'selected' : ''}>يدوي بالسحب فقط</option>
+                            <option value="10" ${c.autoHideSec === 10 ? 'selected' : ''}>بعد 10 ثواني</option>
+                            <option value="20" ${c.autoHideSec === 20 ? 'selected' : ''}>بعد 20 ثانية</option>
+                            <option value="30" ${c.autoHideSec === 30 ? 'selected' : ''}>بعد 30 ثانية</option>
+                        </select>`)}
+                    </div>
+                    <label class="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                        <input type="checkbox" name="oncePerSession" ${c.oncePerSession ? 'checked' : ''} class="w-4 h-4 accent-rose-600">
+                        <span>الظهور مرة واحدة فقط في الجلسة (بدل كل مرة أرجع للرئيسية)</span>
+                    </label>
+                    ${localMuted ? `<div class="p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-2 text-xs"><span class="font-bold text-amber-800">القائمة مخفية محلياً على هذا الجهاز حالياً</span><button type="button" onclick="debtPopupSetLocalMuted(false); toast('تم تفعيلها على جهازك', 'success'); this.parentElement.remove();" class="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold">إعادة إظهارها بجهازي</button></div>` : ''}
+                `,
+                onSubmit: async fd => {
+                    const stages = stagesList.map(s => s[0]).filter(k => fd.get('st_' + k) === 'on');
+                    const allowedRoles = rolesList.filter(r => !r.locked && fd.get('role_' + r.id) === 'on').map(r => r.id);
+                    const next = debtPopupNormCfg({
+                        enabled: fd.get('enabled') === 'on',
+                        side: String(fd.get('side') || 'left'),
+                        audience: String(fd.get('audience') || 'debts_perm'),
+                        allowedRoles,
+                        stages,
+                        evadingOnly: fd.get('evadingOnly') === 'on',
+                        minRemaining: Number(fd.get('minRemaining')) || 0,
+                        maxItems: Number(fd.get('maxItems')) || 8,
+                        autoHideSec: Number(fd.get('autoHideSec')) || 0,
+                        oncePerSession: fd.get('oncePerSession') === 'on'
+                    });
+                    try {
+                        await rtdb.ref('settings/debtPopup').set(dbClean(next));
+                        debtPopupCfg = next;
+                        debtPopupDismissedSession = false;
+                        debtPopupDismissedVisit = false;
+                        if (next.enabled) debtPopupSetLocalMuted(false);
+                        if (parseRoute().name === 'home') debtPopupMaybeShow(true);
+                        log('تعديل إعدادات قائمة المديونيات المنبثقة', next.enabled ? `مفعّلة (${next.stages.length} فئات)` : 'موقوفة');
+                        toast('تم حفظ إعدادات القائمة المنبثقة بنجاح', 'success');
+                    } catch (err) {
+                        debtSaveFailed(err);
+                        return false;
+                    }
+                }
+            });
+        }
+
         const VIEWS = {
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
@@ -11600,6 +12073,7 @@
             }).join('');
             const period = homeCfg.timeColors ? homePeriod(new Date().getHours()) : '';
             const sky = homeCfg.sunArc ? homeSkyPos() : null;
+            setTimeout(() => debtPopupMaybeShow(), 120);
             const style = `<style>
                 .home-hero { position: relative; overflow: hidden; border-radius: 18px; padding: 46px 20px 14px; text-align: center; background: linear-gradient(135deg, rgb(var(--surface)) 0%, rgb(var(--page-bg)) 100%); border: 1px solid rgb(var(--accent)); box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 10px 22px -14px rgb(var(--brand-900) / .45); --hero-ink: rgb(var(--brand-800)); --hero-sub: #475569; color: var(--hero-ink); }
                 .home-hero::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .35); border-radius: 13px; pointer-events: none; }
@@ -14524,5 +14998,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fb23a5db19ed45',t:'MTc5NTU1MTg4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fb23a5db19ed45',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fb7e3109704bed',t:'MTc5NTU1NTU5Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fb7e3109704bed',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
