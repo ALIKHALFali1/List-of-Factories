@@ -11642,6 +11642,7 @@
             const t = document.getElementById('debtSideTab');
             if (t) t.remove();
             debtPopupDismissedVisit = false;
+            if (typeof sidePopupsReflow === 'function') sidePopupsReflow();
         }
 
         function debtPopupRenderTab(count) {
@@ -11662,6 +11663,7 @@
                 debtPopupMaybeShow(true);
             };
             document.body.appendChild(btnEl);
+            if (typeof sidePopupsReflow === 'function') requestAnimationFrame(sidePopupsReflow);
         }
 
         function debtPopupDismiss(muteDevice) {
@@ -11675,7 +11677,7 @@
                 panel.classList.remove('dp-dragging', 'dp-open');
                 panel.style.transform = '';
                 panel.style.opacity = '';
-                setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); }, 300);
+                setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); if (typeof sidePopupsReflow === 'function') sidePopupsReflow(); }, 300);
             } else {
                 debtPopupRenderTab(count);
             }
@@ -11713,7 +11715,7 @@
                     debtPopupDismissedVisit = true;
                     if (debtPopupCfg.oncePerSession) debtPopupDismissedSession = true;
                     const count = debtPopupMatchingItems().length;
-                    setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); }, 280);
+                    setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); if (typeof sidePopupsReflow === 'function') sidePopupsReflow(); }, 280);
                 } else {
                     panel.style.transform = '';
                     panel.style.opacity = '';
@@ -11825,6 +11827,7 @@
                 }));
             }
             if (!isRefresh || !alreadyOpen) debtPopupArmAutoHide();
+            if (typeof sidePopupsReflow === 'function') requestAnimationFrame(sidePopupsReflow);
         }
 
         function openDebtPopupSettings() {
@@ -12309,9 +12312,76 @@
         function annPopupTabSide() {
             const pos = annPopupPosition();
             if (pos === 'right' || pos === 'left') return pos;
-            // When popup is centered, dock the reopen tab opposite to Debts so tabs never collide
-            return (typeof debtPopupCfg !== 'undefined' && debtPopupCfg && debtPopupCfg.side === 'right') ? 'left' : 'right';
+            // When centered and closed, dock tab on the same side cleanly below Debts tab
+            return (typeof debtPopupCfg !== 'undefined' && debtPopupCfg && debtPopupCfg.side === 'right') ? 'right' : 'left';
         }
+
+        function sidePopupsReflow() {
+            const dPanel = document.getElementById('debtSidePopup');
+            const aPanel = document.getElementById('annSidePopup');
+            const dTab = document.getElementById('debtSideTab');
+            const aTab = document.getElementById('annSideTab');
+
+            // Reset inline overrides first
+            [dPanel, aPanel, dTab, aTab].forEach(node => {
+                if (!node) return;
+                node.style.top = '';
+                node.style.maxHeight = '';
+            });
+
+            const dSide = (typeof debtPopupCfg !== 'undefined' && debtPopupCfg && (debtPopupCfg.side === 'left' || debtPopupCfg.side === 'right')) ? debtPopupCfg.side : null;
+            const aPos = (typeof annPopupPosition === 'function') ? annPopupPosition() : 'center';
+            const aSide = (aPos === 'left' || aPos === 'right') ? aPos : null;
+            const dTabSide = (typeof debtPopupCfg !== 'undefined' && debtPopupCfg && debtPopupCfg.side === 'right') ? 'right' : 'left';
+            const aTabSide = (typeof annPopupTabSide === 'function') ? annPopupTabSide() : 'right';
+
+            const topStart = 76;   // 4.75rem (below top header)
+            const tabStart = 82;   // 5.125rem
+            const bottomPad = 14;
+            const gap = 10;
+            const availH = Math.max(240, window.innerHeight - topStart - bottomPad);
+
+            // 1. Both OPEN panels on the SAME side -> stack vertically: Debts on top, Announcements directly below
+            if (dPanel && aPanel && dSide && dSide === aSide) {
+                const maxDebtH = Math.max(150, Math.floor((availH - gap) * 0.46));
+                dPanel.style.top = topStart + 'px';
+                dPanel.style.maxHeight = maxDebtH + 'px';
+                const dH = Math.min(dPanel.offsetHeight || maxDebtH, maxDebtH);
+                const aTop = topStart + dH + gap;
+                const aMaxH = Math.max(160, window.innerHeight - aTop - bottomPad);
+                aPanel.style.top = aTop + 'px';
+                aPanel.style.maxHeight = aMaxH + 'px';
+                return;
+            }
+
+            // 2. Debts panel OPEN + Announcements TAB on the same side -> Announcements tab sits below Debts panel
+            if (dPanel && aTab && dSide && dSide === aTabSide) {
+                const maxDebtH = Math.max(160, availH - 52);
+                dPanel.style.top = topStart + 'px';
+                dPanel.style.maxHeight = maxDebtH + 'px';
+                const dH = Math.min(dPanel.offsetHeight || maxDebtH, maxDebtH);
+                aTab.style.top = Math.min(window.innerHeight - 46, topStart + dH + gap) + 'px';
+                return;
+            }
+
+            // 3. Debts TAB + Announcements panel OPEN on the same side -> Debts tab on top, Announcements panel below it
+            if (dTab && aPanel && aSide && dTabSide === aSide) {
+                dTab.style.top = tabStart + 'px';
+                const dTabH = dTab.offsetHeight || 38;
+                const aTop = tabStart + dTabH + gap;
+                aPanel.style.top = aTop + 'px';
+                aPanel.style.maxHeight = Math.max(180, window.innerHeight - aTop - bottomPad) + 'px';
+                return;
+            }
+
+            // 4. Both TABS visible on the same side -> Debts tab on top, Announcements tab directly below it
+            if (dTab && aTab && dTabSide === aTabSide) {
+                dTab.style.top = tabStart + 'px';
+                const dTabH = dTab.offsetHeight || 38;
+                aTab.style.top = (tabStart + dTabH + gap) + 'px';
+            }
+        }
+        window.addEventListener('resize', () => { if (typeof sidePopupsReflow === 'function') sidePopupsReflow(); }, { passive: true });
 
         function annPopupInjectStyle() {
             if (annPopupStyleInjected) return;
@@ -12371,6 +12441,7 @@
             const t = document.getElementById('annSideTab');
             if (t) t.remove();
             annPopupDismissedVisit = false;
+            if (typeof sidePopupsReflow === 'function') sidePopupsReflow();
         }
 
         function annPopupVisibleItems() {
@@ -12403,6 +12474,7 @@
                 annPopupMaybeShow(true, true);
             };
             document.body.appendChild(btnEl);
+            requestAnimationFrame(sidePopupsReflow);
         }
 
         function annPopupNudgeLocked() {
@@ -12433,7 +12505,7 @@
                 panel.classList.remove('ap-dragging', 'ap-open');
                 panel.style.transform = '';
                 panel.style.opacity = '';
-                setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); }, 300);
+                setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); sidePopupsReflow(); }, 300);
             } else {
                 annPopupRenderTab(visible.length, pendingCount);
             }
@@ -12474,7 +12546,7 @@
                     panel.style.opacity = '0';
                     annPopupDismissedVisit = true;
                     const { visible, pendingCount } = annPopupVisibleItems();
-                    setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); }, 280);
+                    setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); sidePopupsReflow(); }, 280);
                 } else {
                     panel.style.transform = '';
                     panel.style.opacity = '';
@@ -12695,6 +12767,7 @@
                     if (panel && panel.parentNode) panel.classList.add('ap-open');
                 }));
             }
+            requestAnimationFrame(sidePopupsReflow);
         }
 
         function annStart() {
@@ -16515,5 +16588,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fc155b6ea80e66',t:'MTc5NTU2MTc4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fc155b6ea80e66',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fc200bdfc1cc66',t:'MTc5NTU2MjIyNg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fc200bdfc1cc66',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
