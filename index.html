@@ -11544,7 +11544,7 @@
                 : (c.allowedRoles && typeof c.allowedRoles === 'object' ? Object.values(c.allowedRoles).map(String) : []);
             return {
                 enabled: c.enabled !== false,
-                side: c.side === 'right' ? 'right' : 'left',
+                side: ['left', 'right', 'center'].includes(c.side) ? c.side : 'left',
                 audience: ['admin_only', 'debts_perm', 'popup_perm', 'custom_roles'].includes(c.audience) ? c.audience : 'debts_perm',
                 allowedRoles: roles,
                 stages,
@@ -11619,7 +11619,9 @@
                 .dp-panel{position:fixed;top:4.8rem;z-index:45;width:min(21.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);display:flex;flex-direction:column;border-radius:1rem;background:#fff;border:1px solid #fecdd3;box-shadow:0 18px 42px -12px rgba(15,23,42,.28);will-change:transform,opacity;transition:transform .34s cubic-bezier(.22,1,.36,1),opacity .28s ease;touch-action:pan-y;user-select:none}
                 .dp-panel.dp-left{left:.9rem;transform:translate3d(-115%,0,0);opacity:0}
                 .dp-panel.dp-right{right:.9rem;transform:translate3d(115%,0,0);opacity:0}
+                .dp-panel.dp-center{top:50%;left:50%;right:auto;width:min(28rem,calc(100vw - 1.5rem));max-height:min(82vh,42rem);transform:translate3d(-50%,-50%,0) scale(.94);opacity:0;border-radius:1.25rem}
                 .dp-panel.dp-open{transform:translate3d(0,0,0)!important;opacity:1!important}
+                .dp-panel.dp-center.dp-open{transform:translate3d(-50%,-50%,0) scale(1)!important;opacity:1!important}
                 .dp-panel.dp-dragging{transition:none!important}
                 .dp-tab{position:fixed;top:5.2rem;z-index:44;display:inline-flex;align-items:center;gap:.45rem;padding:.5rem .75rem;background:#be123c;color:#fff;font-size:.75rem;font-weight:800;box-shadow:0 8px 20px -6px rgba(190,18,60,.55);cursor:pointer;transition:transform .2s ease,opacity .2s ease}
                 .dp-tab:hover{background:#9f1239}
@@ -11687,7 +11689,7 @@
                 debtPopupClearTimer();
             };
             const onMove = (x, y, ev) => {
-                if (!active) return;
+                if (!active || debtPopupCfg.side === 'center') return;
                 const mx = x - startX, my = y - startY;
                 if (!locked) {
                     if (Math.abs(my) > Math.abs(mx) && Math.abs(my) > 8) { active = false; return; }
@@ -11758,8 +11760,8 @@
 
             const items = all.slice(0, debtPopupCfg.maxItems);
             const totalRem = r2(all.reduce((a, d) => a + debtRemaining(d), 0));
-            const sideCls = debtPopupCfg.side === 'right' ? 'dp-right' : 'dp-left';
-            const swipeHint = debtPopupCfg.side === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء';
+            const sideCls = debtPopupCfg.side === 'center' ? 'dp-center' : (debtPopupCfg.side === 'right' ? 'dp-right' : 'dp-left');
+            const swipeHint = debtPopupCfg.side === 'center' ? 'اضغط ✕ للإغلاق' : (debtPopupCfg.side === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء');
 
             let panel = document.getElementById('debtSidePopup');
             const alreadyOpen = !!(panel && panel.classList.contains('dp-open'));
@@ -11853,6 +11855,7 @@
                         ${field('مكان الظهور والسحب', `<select name="side" class="${INPUT_CLS}">
                             <option value="left" ${c.side === 'left' ? 'selected' : ''}>من الجانب الأيسر (الأفضل مع القائمة الجانبية)</option>
                             <option value="right" ${c.side === 'right' ? 'selected' : ''}>من الجانب الأيمن</option>
+                            <option value="center" ${c.side === 'center' ? 'selected' : ''}>في منتصف الشاشة</option>
                         </select>`)}
                     </div>
                     <div id="dpRolesBox" class="${c.audience === 'custom_roles' ? '' : 'hidden'} p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
@@ -12266,11 +12269,33 @@
             openModal({ title: 'البيانات والإعلانات العامة', body, size: 'lg' });
         }
 
-        // ---------- Floating Side Popup for Announcements (sibling of debtSidePopup) ----------
+        // ---------- Luxury Announcements Popup (Center / Right / Left + Mandatory Lock) ----------
         const ANN_POPUP_LOCAL_KEY = 'alrahma_ann_popup_muted_v1';
+        const ANN_POPUP_DEFAULT = {
+            enabled: true,
+            position: 'center',       // 'center' | 'right' | 'left'
+            lockUntilResponse: true,  // hide X & block close on first view until approved/objected
+            backdropBlur: true
+        };
+        let annPopupCfg = { ...ANN_POPUP_DEFAULT };
+        let annPopupCfgUnsub = null;
         let annPopupStyleInjected = false;
         let annPopupDismissedVisit = false;
         let annPopupAutoOpenedPendingKey = '';
+
+        function annPopupNormCfg(raw) {
+            const c = (raw && typeof raw === 'object') ? raw : {};
+            return {
+                enabled: c.enabled !== false,
+                position: ['center', 'right', 'left'].includes(c.position) ? c.position : 'center',
+                lockUntilResponse: c.lockUntilResponse !== false,
+                backdropBlur: c.backdropBlur !== false
+            };
+        }
+
+        function annPopupGetCfg() {
+            return annPopupNormCfg(annPopupCfg || (appData && appData.settings && appData.settings.annPopup));
+        }
 
         function annPopupLocalMuted() {
             try { return localStorage.getItem(ANN_POPUP_LOCAL_KEY) === '1'; } catch (e) { return false; }
@@ -12278,34 +12303,69 @@
         function annPopupSetLocalMuted(on) {
             try { if (on) localStorage.setItem(ANN_POPUP_LOCAL_KEY, '1'); else localStorage.removeItem(ANN_POPUP_LOCAL_KEY); } catch (e) { /* noop */ }
         }
-        function annPopupSide() {
-            // Sit cleanly on the opposite side of the Debts popup so they never overlap
+        function annPopupPosition() {
+            return annPopupGetCfg().position;
+        }
+        function annPopupTabSide() {
+            const pos = annPopupPosition();
+            if (pos === 'right' || pos === 'left') return pos;
+            // When popup is centered, dock the reopen tab opposite to Debts so tabs never collide
             return (typeof debtPopupCfg !== 'undefined' && debtPopupCfg && debtPopupCfg.side === 'right') ? 'left' : 'right';
         }
+
         function annPopupInjectStyle() {
             if (annPopupStyleInjected) return;
             annPopupStyleInjected = true;
             const st = document.createElement('style');
             st.id = 'annPopupStyle';
             st.textContent = `
-                .ap-panel{position:fixed;top:4.8rem;z-index:46;width:min(23.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);display:flex;flex-direction:column;border-radius:1rem;background:#fff;border:1px solid #bae6fd;box-shadow:0 18px 42px -12px rgba(15,23,42,.30);will-change:transform,opacity;transition:transform .34s cubic-bezier(.22,1,.36,1),opacity .28s ease;touch-action:pan-y}
-                .ap-panel.ap-urgent{border-color:#fda4af;box-shadow:0 18px 44px -10px rgba(190,18,60,.32)}
-                .ap-panel.ap-left{left:.9rem;transform:translate3d(-115%,0,0);opacity:0}
-                .ap-panel.ap-right{right:.9rem;transform:translate3d(115%,0,0);opacity:0}
-                .ap-panel.ap-open{transform:translate3d(0,0,0)!important;opacity:1!important}
+                .ap-backdrop{position:fixed;inset:0;z-index:47;background:rgba(15,23,42,.54);opacity:0;transition:opacity .28s ease}
+                .ap-backdrop.ap-blur{backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+                .ap-backdrop.ap-open{opacity:1}
+                .ap-panel{position:fixed;z-index:48;display:flex;flex-direction:column;border-radius:1.45rem;background:#ffffff;border:1px solid rgba(148,163,184,.28);box-shadow:0 28px 65px -16px rgba(15,23,42,.42),0 0 0 1px rgba(255,255,255,.65) inset;will-change:transform,opacity;transition:transform .36s cubic-bezier(.22,1,.36,1),opacity .28s ease;touch-action:pan-y;overflow:hidden}
+                .ap-panel.ap-urgent{border-color:rgba(244,63,94,.42);box-shadow:0 28px 70px -14px rgba(159,18,57,.38),0 0 0 1px rgba(255,255,255,.7) inset}
+                .ap-panel.ap-center{top:50%;left:50%;width:min(34.5rem,calc(100vw - 1.5rem));max-height:min(86vh,46rem);transform:translate3d(-50%,-50%,0) scale(.93);opacity:0}
+                .ap-panel.ap-center.ap-open{transform:translate3d(-50%,-50%,0) scale(1)!important;opacity:1!important}
+                .ap-panel.ap-left{top:4.8rem;left:.9rem;width:min(24.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);transform:translate3d(-115%,0,0);opacity:0}
+                .ap-panel.ap-right{top:4.8rem;right:.9rem;width:min(24.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);transform:translate3d(115%,0,0);opacity:0}
+                .ap-panel.ap-left.ap-open,.ap-panel.ap-right.ap-open{transform:translate3d(0,0,0)!important;opacity:1!important}
                 .ap-panel.ap-dragging{transition:none!important}
-                .ap-tab{position:fixed;top:5.2rem;z-index:45;display:inline-flex;align-items:center;gap:.45rem;padding:.52rem .8rem;background:#0369a1;color:#fff;font-size:.75rem;font-weight:800;box-shadow:0 8px 20px -6px rgba(3,105,161,.55);cursor:pointer;transition:transform .2s ease,opacity .2s ease,background .2s ease}
-                .ap-tab:hover{background:#075985}
-                .ap-tab.ap-tab-urgent{background:#d97706;box-shadow:0 8px 22px -6px rgba(217,119,6,.62);animation:apPulse 1.8s infinite}
-                .ap-tab.ap-tab-urgent:hover{background:#b45309}
-                .ap-tab.ap-left{left:0;border-radius:0 .85rem .85rem 0}
-                .ap-tab.ap-right{right:0;border-radius:.85rem 0 0 .85rem}
+                .ap-panel.ap-shake{animation:apShake .38s ease}
+                .ap-head{position:relative;overflow:hidden}
+                .ap-head::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 18% 20%,rgba(255,255,255,.22),transparent 52%),radial-gradient(circle at 86% 90%,rgba(251,191,36,.18),transparent 46%);pointer-events:none}
+                .ap-head-gold{height:2px;background:linear-gradient(90deg,transparent,rgba(251,191,36,.75),transparent)}
+                .ap-card{position:relative;background:#fff;border-radius:1.1rem;border:1px solid #e2e8f0;box-shadow:0 4px 16px -6px rgba(15,23,42,.08);overflow:hidden;transition:box-shadow .2s ease,border-color .2s ease}
+                .ap-card.ap-card-pending{border-color:#fda4af;box-shadow:0 8px 24px -8px rgba(225,29,72,.20)}
+                .ap-card-bar{height:4px;width:100%}
+                .ap-body-box{background:linear-gradient(180deg,#f8fafc 0%,#ffffff 100%);border:1px solid #e2e8f0;border-radius:.85rem;padding:.85rem 1rem;font-size:.875rem;line-height:1.8;color:#1e293b;white-space:pre-line;font-weight:500}
+                .ap-close-pop{animation:apPopIn .28s cubic-bezier(.22,1,.36,1)}
+                .ap-tab{position:fixed;top:5.2rem;z-index:45;display:inline-flex;align-items:center;gap:.45rem;padding:.55rem .85rem;background:linear-gradient(135deg,#0f172a,#0369a1);color:#fff;font-size:.76rem;font-weight:800;box-shadow:0 10px 24px -6px rgba(3,105,161,.55);cursor:pointer;transition:transform .2s ease,opacity .2s ease,filter .2s ease}
+                .ap-tab:hover{filter:brightness(1.08);transform:translateY(-1px)}
+                .ap-tab.ap-tab-urgent{background:linear-gradient(135deg,#be123c,#d97706);box-shadow:0 10px 24px -6px rgba(217,119,6,.62);animation:apPulse 1.8s infinite}
+                .ap-tab.ap-left{left:0;border-radius:0 .9rem .9rem 0}
+                .ap-tab.ap-right{right:0;border-radius:.9rem 0 0 .9rem}
                 @keyframes apPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
+                @keyframes apPopIn{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
+                @keyframes apShake{0%,100%{transform:translate3d(-50%,-50%,0)}20%{transform:translate3d(calc(-50% - 7px),-50%,0)}40%{transform:translate3d(calc(-50% + 7px),-50%,0)}60%{transform:translate3d(calc(-50% - 5px),-50%,0)}80%{transform:translate3d(calc(-50% + 4px),-50%,0)}}
             `;
             document.head.appendChild(st);
         }
 
+        function annPopupAccentGradient(type) {
+            const map = {
+                directive: 'linear-gradient(90deg,#4f46e5,#2563eb)',
+                discount:  'linear-gradient(90deg,#059669,#10b981)',
+                invitation:'linear-gradient(90deg,#7c3aed,#a855f7)',
+                congrats:  'linear-gradient(90deg,#d97706,#f59e0b)',
+                alert:     'linear-gradient(90deg,#e11d48,#f43f5e)',
+                general:   'linear-gradient(90deg,#0284c7,#0ea5e9)'
+            };
+            return map[type] || map.general;
+        }
+
         function annPopupUnmount() {
+            const b = document.getElementById('annPopupBackdrop');
+            if (b) b.remove();
             const p = document.getElementById('annSidePopup');
             if (p) p.remove();
             const t = document.getElementById('annSideTab');
@@ -12320,11 +12380,15 @@
             return { visible: [...pending, ...other], pendingCount: pending.length };
         }
 
+        function annPopupIsLocked(pendingCount) {
+            return pendingCount > 0 && annPopupGetCfg().lockUntilResponse !== false;
+        }
+
         function annPopupRenderTab(totalCount, pendingCount) {
             const oldTab = document.getElementById('annSideTab');
             if (oldTab) oldTab.remove();
             if (parseRoute().name !== 'home' || !totalCount) return;
-            const sideCls = annPopupSide() === 'right' ? 'ap-right' : 'ap-left';
+            const sideCls = annPopupTabSide() === 'right' ? 'ap-right' : 'ap-left';
             const btnEl = document.createElement('button');
             btnEl.id = 'annSideTab';
             btnEl.type = 'button';
@@ -12341,11 +12405,30 @@
             document.body.appendChild(btnEl);
         }
 
-        function annPopupDismiss(muteDevice) {
+        function annPopupNudgeLocked() {
             const panel = document.getElementById('annSidePopup');
+            if (panel && annPopupPosition() === 'center') {
+                panel.classList.remove('ap-shake');
+                void panel.offsetWidth;
+                panel.classList.add('ap-shake');
+            }
+            toast('يرجى الضغط على (موافق) أو (اعتراض) أولاً ليظهر زر الإغلاق', 'info', null, 3200);
+        }
+
+        function annPopupDismiss(muteDevice) {
             const { visible, pendingCount } = annPopupVisibleItems();
+            if (annPopupIsLocked(pendingCount)) {
+                annPopupNudgeLocked();
+                return;
+            }
+            const panel = document.getElementById('annSidePopup');
+            const backdrop = document.getElementById('annPopupBackdrop');
             annPopupDismissedVisit = true;
             if (muteDevice) annPopupSetLocalMuted(true);
+            if (backdrop) {
+                backdrop.classList.remove('ap-open');
+                setTimeout(() => { if (backdrop.parentNode) backdrop.remove(); }, 280);
+            }
             if (panel) {
                 panel.classList.remove('ap-dragging', 'ap-open');
                 panel.style.transform = '';
@@ -12358,10 +12441,17 @@
 
         function annPopupBindSwipe(panel) {
             let startX = 0, startY = 0, dx = 0, active = false, locked = false;
-            const onStart = (x, y) => { startX = x; startY = y; dx = 0; active = true; locked = false; };
+            const canSwipe = () => {
+                const pos = annPopupPosition();
+                if (pos === 'center') return false;
+                const { pendingCount } = annPopupVisibleItems();
+                if (annPopupIsLocked(pendingCount)) return false;
+                return true;
+            };
+            const onStart = (x, y) => { if (!canSwipe()) return; startX = x; startY = y; dx = 0; active = true; locked = false; };
             const onMove = (x, y, ev) => {
                 if (!active) return;
-                const isLeft = annPopupSide() === 'left';
+                const isLeft = annPopupPosition() === 'left';
                 const mx = x - startX, my = y - startY;
                 if (!locked) {
                     if (Math.abs(my) > Math.abs(mx) && Math.abs(my) > 8) { active = false; return; }
@@ -12377,7 +12467,7 @@
                 if (!active) return;
                 active = false;
                 panel.classList.remove('ap-dragging');
-                const isLeft = annPopupSide() === 'left';
+                const isLeft = annPopupPosition() === 'left';
                 const shouldClose = isLeft ? (dx < -72) : (dx > 72);
                 if (shouldClose) {
                     panel.style.transform = `translate3d(${isLeft ? '-115%' : '115%'}, 0, 0)`;
@@ -12408,73 +12498,80 @@
         }
 
         function annPopupCardHtml(a, isPendingMandatory) {
-            const [, typeLabel, icon, cardCls, badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(a.type);
+            const [, typeLabel, icon, , badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(a.type);
             const myResp = annMyEffectiveResponse(a);
             const allowObj = a.allowObjection !== false;
             const showObjBox = annObjectionOpenId === a.id;
+            const accentGrad = annPopupAccentGradient(a.type);
 
             const statusHtml = myResp
                 ? (myResp.status === 'objected'
-                    ? `<div class="mt-2 rounded-lg bg-rose-50 border border-rose-200 p-2 text-[11px] text-rose-900">
-                        <div class="flex items-center justify-between gap-1">
-                            <span class="font-extrabold"><i class="fa-solid fa-hand"></i> تم تسجيل اعتراضك</span>
-                            <button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[10px] font-bold underline text-rose-700">تعديل</button>
+                    ? `<div class="mt-3 rounded-xl bg-gradient-to-l from-rose-50 to-white border border-rose-200 p-3 text-xs text-rose-950 shadow-xs">
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="font-black text-rose-700 flex items-center gap-1.5"><i class="fa-solid fa-circle-exclamation text-rose-600"></i> تم تسجيل اعتراضك بنجاح</span>
+                            <button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[11px] font-extrabold underline text-rose-700 hover:text-rose-900">تعديل الرد</button>
                         </div>
-                        <p class="mt-0.5 whitespace-pre-line">${esc(myResp.reason || '')}</p>
+                        <p class="mt-1.5 text-slate-700 whitespace-pre-line bg-white/80 rounded-lg px-2.5 py-1.5 border border-rose-100"><b class="text-rose-800">السبب:</b> ${esc(myResp.reason || '')}</p>
                     </div>`
-                    : `<div class="mt-2 rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 text-[11px] text-emerald-900 flex items-center justify-between gap-1">
-                        <span class="font-extrabold"><i class="fa-solid fa-circle-check"></i> ${a.type === 'congrats' ? 'تم تسجيل تفاعلك 🎉' : (a.type === 'invitation' ? 'تم تأكيد حضورك' : 'تمت الموافقة')}</span>
-                        ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[10px] font-bold underline text-emerald-700">اعتراض</button>` : ''}
+                    : `<div class="mt-3 rounded-xl bg-gradient-to-l from-emerald-50 to-teal-50/50 border border-emerald-200 px-3.5 py-2.5 text-xs text-emerald-950 flex flex-wrap items-center justify-between gap-2 shadow-xs">
+                        <span class="font-black text-emerald-800 flex items-center gap-1.5"><i class="fa-solid fa-circle-check text-emerald-600 text-sm"></i> ${a.type === 'congrats' ? 'تم تسجيل تفاعلك بنجاح 🎉' : (a.type === 'invitation' ? 'تم تأكيد حضورك بنجاح' : 'تم تسجيل موافقتك والتزامك بنجاح')}</span>
+                        ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[11px] font-bold underline text-emerald-700 hover:text-emerald-900">تغيير إلى اعتراض</button>` : ''}
                     </div>`)
                 : '';
 
             const actionsHtml = (!myResp || showObjBox) ? `
-                <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <button type="button" onclick="annSubmitResponse('${esc(a.id)}','approved')" class="flex-1 min-w-[6.5rem] px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm flex items-center justify-center gap-1">
-                        <i class="fa-solid fa-check"></i> ${esc(okLbl)}
+                <div class="mt-3.5 flex flex-wrap items-center gap-2">
+                    <button type="button" onclick="annSubmitResponse('${esc(a.id)}','approved')" class="flex-1 min-w-[8rem] px-4 py-2.5 rounded-xl bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-[.98] text-white text-xs sm:text-sm font-black shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-circle-check"></i> ${esc(okLbl)}
                     </button>
-                    ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="flex-1 min-w-[6.5rem] px-2.5 py-1.5 rounded-lg ${showObjBox ? 'bg-rose-700 text-white' : 'bg-white border border-rose-300 text-rose-700 hover:bg-rose-50'} text-xs font-extrabold flex items-center justify-center gap-1">
+                    ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="flex-1 min-w-[8rem] px-4 py-2.5 rounded-xl ${showObjBox ? 'bg-rose-700 text-white shadow-md shadow-rose-700/20' : 'bg-rose-50/70 hover:bg-rose-100 border-2 border-rose-200 text-rose-700'} active:scale-[.98] text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5">
                         <i class="fa-solid fa-hand"></i> ${esc(objLbl)}
                     </button>` : ''}
                 </div>
-                ${showObjBox ? `<div class="mt-2 rounded-lg bg-white border border-rose-300 p-2 space-y-1.5">
-                    <label class="block text-[11px] font-extrabold text-rose-800">سبب الاعتراض (إجباري):</label>
-                    <textarea id="annObjReason_${esc(a.id)}" rows="2" maxlength="1500" class="${INPUT_CLS} !py-1.5 !text-xs" placeholder="اكتب سبب اعتراضك بوضوح...">${esc(myResp?.reason || '')}</textarea>
-                    <div class="flex items-center justify-end gap-1.5">
-                        <button type="button" onclick="annToggleObjectionBox(null)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold">إلغاء</button>
-                        <button type="button" onclick="annSubmitObjection('${esc(a.id)}')" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-extrabold">إرسال</button>
+                ${showObjBox ? `<div class="mt-3 rounded-xl bg-rose-50/60 border-2 border-rose-200 p-3 space-y-2">
+                    <label class="block text-xs font-black text-rose-900"><i class="fa-solid fa-pen-to-square text-rose-600"></i> اكتب سبب الاعتراض / الملاحظة بوضوح (إجباري):</label>
+                    <textarea id="annObjReason_${esc(a.id)}" rows="3" maxlength="1500" class="${INPUT_CLS} !bg-white !text-xs sm:!text-sm" placeholder="اكتب السبب بوضوح هنا...">${esc(myResp?.reason || '')}</textarea>
+                    <div class="flex items-center justify-end gap-2">
+                        <button type="button" onclick="annToggleObjectionBox(null)" class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-bold">إلغاء</button>
+                        <button type="button" onclick="annSubmitObjection('${esc(a.id)}')" class="px-4 py-1.5 rounded-xl bg-gradient-to-l from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white text-xs font-black shadow-sm flex items-center gap-1.5"><i class="fa-solid fa-paper-plane"></i> إرسال الاعتراض</button>
                     </div>
                 </div>` : ''}` : '';
 
-            return `<article class="rounded-xl border ${cardCls} p-3 shadow-xs transition-all ${isPendingMandatory ? 'ring-2 ring-rose-400/60' : ''}">
-                <div class="flex items-start justify-between gap-1.5">
-                    <div class="flex flex-wrap items-center gap-1">
-                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold ${badgeCls}">
-                            <i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}
-                        </span>
-                        ${isPendingMandatory ? '<span class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200 animate-pulse">بانتظار ردك</span>' : ''}
+            return `<article class="ap-card ${isPendingMandatory ? 'ap-card-pending' : ''}">
+                <div class="ap-card-bar" style="background:${accentGrad}"></div>
+                <div class="p-4">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="flex flex-wrap items-center gap-1.5">
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-black shadow-xs ${badgeCls}">
+                                <i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}
+                            </span>
+                            ${isPendingMandatory ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-700 border border-rose-200 animate-pulse"><i class="fa-solid fa-lock text-[9px]"></i> إلزامي · بانتظار ردك</span>' : ''}
+                            ${(Number(a.revision) || 1) > 1 ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200">تحديث #${Number(a.revision)}</span>` : ''}
+                        </div>
+                        ${annCanManage() ? `<div class="flex items-center gap-1 shrink-0">
+                            <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" title="تقرير الردود والاعتراضات" class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-brand-50 text-brand-700 text-xs flex items-center justify-center transition-colors"><i class="fa-solid fa-chart-pie"></i></button>
+                            <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" title="تعديل الإعلان" class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs flex items-center justify-center transition-colors"><i class="fa-solid fa-pen"></i></button>
+                        </div>` : ''}
                     </div>
-                    ${annCanManage() ? `<div class="flex items-center gap-1 shrink-0">
-                        <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" title="تقرير الردود" class="w-6 h-6 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-brand-600 text-[11px] flex items-center justify-center"><i class="fa-solid fa-chart-pie"></i></button>
-                        <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" title="تعديل" class="w-6 h-6 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-slate-600 text-[11px] flex items-center justify-center"><i class="fa-solid fa-pen"></i></button>
-                    </div>` : ''}
+                    <h4 class="mt-2.5 text-base font-black ${titleCls} leading-snug">${esc(a.title || '')}</h4>
+                    <div class="mt-2.5 ap-body-box">${esc(a.body || '')}</div>
+                    ${a.eventDate ? `<div class="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50 border border-amber-200 text-xs font-extrabold text-amber-900"><i class="fa-solid fa-calendar-day text-amber-600"></i> ${esc(a.eventDate)}</div>` : ''}
+                    ${a.image ? `<div class="mt-3 relative group cursor-zoom-in overflow-hidden rounded-xl border border-slate-200 bg-slate-50" onclick="window.open('${esc(a.image)}','_blank')"><img src="${esc(a.image)}" alt="" class="max-h-48 w-full object-contain bg-white"><span class="absolute bottom-2 left-2 px-2 py-0.5 rounded-lg bg-slate-900/70 text-white text-[10px] font-bold opacity-85 group-hover:opacity-100"><i class="fa-solid fa-magnifying-glass-plus"></i> اضغط للتكبير</span></div>` : ''}
+                    <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 font-medium">
+                        <span><i class="fa-solid fa-user-tie text-slate-400"></i> ${esc(a.createdBy || 'الإدارة')}</span>
+                        <span><i class="fa-regular fa-clock text-slate-400"></i> ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
+                        ${a.expiresAt ? `<span><i class="fa-solid fa-hourglass-end text-slate-400"></i> حتى ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
+                    </div>
+                    ${statusHtml}
+                    ${actionsHtml}
                 </div>
-                <h4 class="mt-1.5 text-sm font-black ${titleCls} leading-snug">${esc(a.title || '')}</h4>
-                <p class="mt-1 text-xs text-slate-700 leading-relaxed whitespace-pre-line font-medium">${esc(a.body || '')}</p>
-                ${a.eventDate ? `<div class="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/80 border border-slate-200 text-[11px] font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(a.eventDate)}</div>` : ''}
-                ${a.image ? `<div class="mt-2"><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-36 w-full rounded-lg border border-slate-200 object-cover bg-white cursor-zoom-in"></div>` : ''}
-                <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
-                    <span><i class="fa-solid fa-user-tie"></i> ${esc(a.createdBy || 'الإدارة')}</span>
-                    <span>· ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
-                    ${a.expiresAt ? `<span>· حتى ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
-                </div>
-                ${statusHtml}
-                ${actionsHtml}
             </article>`;
         }
 
         function annPopupMaybeShow(isRefresh, forceOpen) {
             if (parseRoute().name !== 'home') { annPopupUnmount(); return; }
+            const cfg = annPopupGetCfg();
+            if (!cfg.enabled && !forceOpen) { annPopupUnmount(); return; }
             const { visible, pendingCount } = annPopupVisibleItems();
             if (!visible.length) { annPopupUnmount(); return; }
             annPopupInjectStyle();
@@ -12490,8 +12587,11 @@
             }
 
             const hasPending = pendingCount > 0;
+            const isLocked = annPopupIsLocked(pendingCount);
             const muted = !hasPending && annPopupLocalMuted();
-            if (!forceOpen && (muted || annPopupDismissedVisit)) {
+            if (!forceOpen && !isLocked && (muted || annPopupDismissedVisit)) {
+                const oldB = document.getElementById('annPopupBackdrop');
+                if (oldB) oldB.remove();
                 const oldP = document.getElementById('annSidePopup');
                 if (oldP) oldP.remove();
                 annPopupRenderTab(visible.length, pendingCount);
@@ -12500,9 +12600,29 @@
             const oldTab = document.getElementById('annSideTab');
             if (oldTab) oldTab.remove();
 
-            const side = annPopupSide();
-            const sideCls = side === 'right' ? 'ap-right' : 'ap-left';
-            const swipeHint = side === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء';
+            const pos = cfg.position;
+            const posCls = pos === 'center' ? 'ap-center' : (pos === 'right' ? 'ap-right' : 'ap-left');
+            const swipeHint = pos === 'center'
+                ? (isLocked ? '🔒 اختر موافق أو اعتراض ليظهر زر الإغلاق' : 'يمكنك الإغلاق الآن بالضغط على ✕ أو زر الإغلاق')
+                : (isLocked ? '🔒 اختر موافق أو اعتراض ليظهر زر الإغلاق' : (pos === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء'));
+
+            // Backdrop for centered mode
+            let backdrop = document.getElementById('annPopupBackdrop');
+            if (pos === 'center') {
+                if (!backdrop) {
+                    backdrop = document.createElement('div');
+                    backdrop.id = 'annPopupBackdrop';
+                    backdrop.onclick = () => {
+                        if (annPopupIsLocked(annPopupVisibleItems().pendingCount)) annPopupNudgeLocked();
+                        else annPopupDismiss(false);
+                    };
+                    document.body.appendChild(backdrop);
+                }
+                backdrop.className = 'ap-backdrop' + (cfg.backdropBlur ? ' ap-blur' : '') + (backdrop.classList.contains('ap-open') ? ' ap-open' : '');
+                requestAnimationFrame(() => requestAnimationFrame(() => { if (backdrop && backdrop.parentNode) backdrop.classList.add('ap-open'); }));
+            } else if (backdrop) {
+                backdrop.remove();
+            }
 
             let panel = document.getElementById('annSidePopup');
             const alreadyOpen = !!(panel && panel.classList.contains('ap-open'));
@@ -12513,39 +12633,56 @@
             } else {
                 panel = document.createElement('aside');
                 panel.id = 'annSidePopup';
+                panel.setAttribute('role', 'dialog');
                 panel.setAttribute('aria-label', 'البيانات والإعلانات العامة');
                 document.body.appendChild(panel);
                 annPopupBindSwipe(panel);
             }
 
-            panel.className = 'ap-panel ' + sideCls + (hasPending ? ' ap-urgent' : '') + (alreadyOpen ? ' ap-open' : '');
-            const headerGrad = hasPending ? 'from-amber-600 via-rose-700 to-slate-900' : 'from-sky-700 to-slate-900';
+            panel.className = 'ap-panel ' + posCls + (hasPending ? ' ap-urgent' : '') + (alreadyOpen ? ' ap-open' : '');
+            const headerStyle = hasPending
+                ? 'background:linear-gradient(135deg,#450a0a 0%,#9f1239 52%,#d97706 100%)'
+                : 'background:linear-gradient(135deg,#0f172a 0%,#0c4a6e 55%,#0369a1 100%)';
+
             panel.innerHTML = `
-                <div class="px-3.5 py-2.5 rounded-t-2xl bg-gradient-to-l ${headerGrad} text-white flex items-center justify-between gap-2 shrink-0">
-                    <div class="min-w-0">
-                        <div class="font-black text-sm flex items-center gap-1.5">
-                            <i class="fa-solid fa-bullhorn ${hasPending ? 'text-amber-200' : 'text-sky-200'}"></i>
-                            <span>البيانات والإعلانات</span>
-                            <span class="px-1.5 py-0.5 rounded-full bg-white/20 text-[11px] font-mono">${visible.length}</span>
+                <div class="ap-head px-4 py-3.5 text-white shrink-0" style="${headerStyle}">
+                    <div class="relative z-10 flex items-center justify-between gap-3">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0 shadow-inner">
+                                <i class="fa-solid ${hasPending ? 'fa-bullhorn text-amber-200 animate-bounce' : 'fa-bullhorn text-sky-200'} text-base"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="font-black text-base flex items-center gap-2 flex-wrap">
+                                    <span>بيانات وإعلانات الإدارة</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-white/20 border border-white/20 text-[11px] font-mono">${visible.length}</span>
+                                </div>
+                                <div class="text-xs ${hasPending ? 'text-amber-100' : 'text-sky-100'} font-bold mt-0.5 flex items-center gap-1.5">
+                                    ${hasPending
+                                        ? `<i class="fa-solid fa-bell text-amber-200"></i> <span>لديك ${pendingCount} بيان هام بانتظار ردك الآن</span>`
+                                        : `<i class="fa-solid fa-circle-check text-emerald-300"></i> <span>تم الاطلاع على جميع البيانات الإلزامية</span>`}
+                                </div>
+                            </div>
                         </div>
-                        <div class="text-[11px] ${hasPending ? 'text-amber-100' : 'text-sky-100'} font-bold mt-0.5">
-                            ${hasPending ? `يوجد ${pendingCount} بيان هام بانتظار ردك` : `${visible.length} إعلان نشط موجه لك`}
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            ${annCanManage() ? `<button type="button" onclick="openAnnouncementForm()" title="إضافة بيان جديد" class="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/30 border border-white/15 flex items-center justify-center text-xs transition-colors"><i class="fa-solid fa-plus"></i></button>
+                            <button type="button" onclick="navigate('settings/popups')" title="إعدادات مكان القوائم المنبثقة" class="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/25 border border-white/10 flex items-center justify-center text-xs transition-colors"><i class="fa-solid fa-sliders"></i></button>` : ''}
+                            ${!isLocked ? `<button type="button" onclick="annPopupDismiss(false)" title="إغلاق" class="ap-close-pop w-8 h-8 rounded-xl bg-white/20 hover:bg-rose-500 border border-white/25 flex items-center justify-center text-sm font-black transition-colors"><i class="fa-solid fa-xmark"></i></button>` : ''}
                         </div>
-                    </div>
-                    <div class="flex items-center gap-1 shrink-0">
-                        ${annCanManage() ? `<button type="button" onclick="openAnnouncementForm()" title="إضافة بيان جديد" class="w-7 h-7 rounded-lg bg-white/15 hover:bg-white/30 flex items-center justify-center text-xs"><i class="fa-solid fa-plus"></i></button>
-                        <button type="button" onclick="openAnnouncementsManager()" title="إدارة البيانات والتقارير" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/25 flex items-center justify-center text-xs"><i class="fa-solid fa-gear"></i></button>` : ''}
-                        <button type="button" onclick="annPopupDismiss(false)" title="إخفاء" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/25 flex items-center justify-center text-xs"><i class="fa-solid fa-xmark"></i></button>
                     </div>
                 </div>
-                <div data-ap-scroll class="p-2.5 space-y-2.5 overflow-y-auto flex-1 bg-slate-50/70">
+                <div class="ap-head-gold shrink-0"></div>
+                <div data-ap-scroll class="p-3.5 space-y-3 overflow-y-auto flex-1 bg-slate-100/75">
                     ${visible.map(a => annPopupCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}
                 </div>
-                <div class="px-3 py-2 bg-slate-50 border-t border-slate-100 rounded-b-2xl flex items-center justify-between gap-2 shrink-0">
-                    <span class="text-[10px] font-bold text-slate-400">${swipeHint}</span>
+                <div class="px-4 py-2.5 bg-white border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                    <span class="text-[11px] font-bold ${isLocked ? 'text-rose-700' : 'text-slate-500'}">${swipeHint}</span>
                     <div class="flex items-center gap-2">
-                        ${!hasPending ? `<button type="button" onclick="annPopupDismiss(true)" title="عدم الإظهار تلقائياً على هذا الجهاز" class="text-[10px] font-bold text-slate-400 hover:text-sky-700">إخفاء بجهازي</button>` : ''}
-                        <button type="button" onclick="${annCanManage() ? 'openAnnouncementsManager()' : 'openMyAnnouncementsModal()'}" class="text-xs font-black text-sky-700 hover:text-sky-900">${annCanManage() ? 'الإدارة ←' : 'عرض موسّع ←'}</button>
+                        ${!isLocked ? `
+                            <button type="button" onclick="annPopupDismiss(true)" title="عدم الإظهار تلقائياً على هذا الجهاز" class="text-[11px] font-bold text-slate-400 hover:text-slate-700 px-2 py-1">إخفاء بجهازي</button>
+                            <button type="button" onclick="annPopupDismiss(false)" class="ap-close-pop px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-xmark"></i> إغلاق</button>
+                        ` : `
+                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-black"><i class="fa-solid fa-lock"></i> مطلوب الرد أولاً</span>
+                        `}
                     </div>
                 </div>`;
 
@@ -12575,10 +12712,19 @@
             };
             ref.on('value', cb, err => console.warn('announcements listener', err && err.code));
             annListUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+            const cfgRef = rtdb.ref('settings/main/annPopup');
+            const cfgCb = snap => {
+                annPopupCfg = annPopupNormCfg(snap.val());
+                if (parseRoute().name === 'home') annPopupMaybeShow(true);
+            };
+            cfgRef.on('value', cfgCb, () => {});
+            annPopupCfgUnsub = () => { try { cfgRef.off('value', cfgCb); } catch (e) { /* noop */ } };
         }
 
         function annStop() {
             if (annListUnsub) { try { annListUnsub(); } catch (e) { /* noop */ } annListUnsub = null; }
+            if (annPopupCfgUnsub) { try { annPopupCfgUnsub(); } catch (e) { /* noop */ } annPopupCfgUnsub = null; }
+            annPopupCfg = { ...ANN_POPUP_DEFAULT };
             Object.values(annRespUnsubs).forEach(u => { try { u(); } catch (e) { /* noop */ } });
             annRespUnsubs = {};
             annList = [];
@@ -14571,11 +14717,132 @@
             toast(removed ? `تم تنظيف ${removed} إشعار قديم بنجاح` : 'الإشعارات نظيفة ومضبوطة بالفعل', 'success');
         }
 
+        function popupsSettingsHtml() {
+            const ac = annPopupGetCfg();
+            const dc = debtPopupCfg || DEBT_POPUP_DEFAULT;
+            const canAnn = annCanManage() || can('settings.manage');
+            const canDebt = debtCanConfigPopup();
+            const posCard = (name, val, cur, icon, title, sub) => `
+                <label class="relative flex flex-col items-center text-center gap-1.5 p-3.5 rounded-2xl border-2 cursor-pointer transition-all ${cur === val ? 'border-brand-600 bg-brand-50/70 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'}" onclick="this.parentElement.querySelectorAll('label').forEach(l=>{l.classList.remove('border-brand-600','bg-brand-50/70','shadow-sm');l.classList.add('border-slate-200','bg-white');});this.classList.remove('border-slate-200','bg-white');this.classList.add('border-brand-600','bg-brand-50/70','shadow-sm');">
+                    <input type="radio" name="${name}" value="${val}" ${cur === val ? 'checked' : ''} class="sr-only">
+                    <span class="w-10 h-10 rounded-xl ${cur === val ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600'} flex items-center justify-center text-base"><i class="fa-solid ${icon}"></i></span>
+                    <span class="font-black text-xs sm:text-sm text-slate-800">${title}</span>
+                    <span class="text-[11px] text-slate-500">${sub}</span>
+                </label>`;
+            return `<div class="space-y-5">
+                ${canAnn ? `<section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h3 class="font-black text-lg text-slate-900 flex items-center gap-2"><i class="fa-solid fa-bullhorn text-brand-600"></i> القائمة المنبثقة للبيانات والإعلانات</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">تحكم في مكان ظهور قائمة الإعلانات وقفل زر الإغلاق حتى يقوم الموظف بالموافقة أو الاعتراض.</p>
+                        </div>
+                        ${btn("navigate('home'); setTimeout(() => annPopupMaybeShow(true, true), 260);", 'معاينة القائمة', 'fa-eye', BTN_SECONDARY)}
+                    </div>
+                    <label class="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                        <span class="text-sm"><b class="block text-slate-800">تفعيل القائمة المنبثقة للإعلانات عند فتح الرئيسية</b><span class="text-xs text-slate-500">تظهر تلقائياً للموظفين المستهدفين فور دخولهم الشاشة الرئيسية.</span></span>
+                        <input id="popAnnEnabled" type="checkbox" ${ac.enabled ? 'checked' : ''} class="w-5 h-5 mt-0.5 accent-brand-600 shrink-0">
+                    </label>
+                    <div class="space-y-2">
+                        <div class="text-xs font-black text-slate-700">مكان ظهور قائمة الإعلانات في الشاشة:</div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            ${posCard('popAnnPos', 'center', ac.position, 'fa-window-maximize', 'منتصف الشاشة', 'بطاقة فاخرة في نص الشاشة (مُوصى به)')}
+                            ${posCard('popAnnPos', 'right', ac.position, 'fa-align-right', 'على يمين الشاشة', 'قائمة جانبية تنسدل من اليمين')}
+                            ${posCard('popAnnPos', 'left', ac.position, 'fa-align-left', 'على يسار الشاشة', 'قائمة جانبية تنسدل من اليسار')}
+                        </div>
+                    </div>
+                    <div class="space-y-2.5">
+                        <label class="flex items-start gap-3 p-3.5 rounded-xl bg-rose-50/60 border border-rose-200 cursor-pointer">
+                            <input id="popAnnLock" type="checkbox" ${ac.lockUntilResponse ? 'checked' : ''} class="w-5 h-5 mt-0.5 accent-rose-600 shrink-0">
+                            <span class="text-sm"><b class="block text-rose-900">إخفاء علامة الخروج (✕) في أول ظهور حتى الموافقة أو الاعتراض</b><span class="text-xs text-rose-700">عند وجود بيان إلزامي، لا يظهر زر الإغلاق ولا يمكن سحب القائمة إلا بعد أن يضغط الموظف «موافق» أو يرسل «اعتراض مع ذكر السبب»، وبعدها يظهر زر الخروج فوراً.</span></span>
+                        </label>
+                        <label class="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                            <input id="popAnnBlur" type="checkbox" ${ac.backdropBlur ? 'checked' : ''} class="w-5 h-5 mt-0.5 accent-brand-600 shrink-0">
+                            <span class="text-sm"><b class="block text-slate-800">خلفية ضبابية ناعمة خلف قائمة منتصف الشاشة</b><span class="text-xs text-slate-500">تُبرز الإعلان بوضوح وجمالية عند اختيار وضع «منتصف الشاشة».</span></span>
+                        </label>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                        ${btn('saveAnnPopupSettings()', 'حفظ إعدادات قائمة الإعلانات', 'fa-floppy-disk')}
+                        ${btn('openAnnouncementsManager()', 'إدارة الإعلانات والتقارير', 'fa-list-check', BTN_SECONDARY)}
+                    </div>
+                </section>` : ''}
+
+                ${canDebt ? `<section class="bg-white rounded-2xl border border-rose-200/80 p-5 sm:p-6 shadow-sm space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h3 class="font-black text-lg text-slate-900 flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-rose-600"></i> القائمة المنبثقة للمديونيات</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">حدد مكان ظهور قائمة تنبيهات المديونيات (يمين / يسار / منتصف الشاشة) أو عدّل الفئات والأدوار.</p>
+                        </div>
+                        ${btn('openDebtPopupSettings()', 'الإعدادات المتقدمة للمديونيات', 'fa-sliders', BTN_SECONDARY)}
+                    </div>
+                    <label class="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                        <span class="text-sm"><b class="block text-slate-800">تفعيل القائمة المنبثقة للمديونيات عند فتح الرئيسية</b><span class="text-xs text-slate-500">تظهر فقط للمستخدمين الذين لديهم صلاحية عرض المديونيات أو القائمة المنبثقة.</span></span>
+                        <input id="popDebtEnabled" type="checkbox" ${dc.enabled ? 'checked' : ''} class="w-5 h-5 mt-0.5 accent-rose-600 shrink-0">
+                    </label>
+                    <div class="space-y-2">
+                        <div class="text-xs font-black text-slate-700">مكان ظهور قائمة المديونيات في الشاشة:</div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            ${posCard('popDebtPos', 'left', dc.side, 'fa-align-left', 'على يسار الشاشة', 'قائمة جانبية من اليسار (الافتراضي)')}
+                            ${posCard('popDebtPos', 'right', dc.side, 'fa-align-right', 'على يمين الشاشة', 'قائمة جانبية من اليمين')}
+                            ${posCard('popDebtPos', 'center', dc.side, 'fa-window-maximize', 'منتصف الشاشة', 'بطاقة في منتصف الشاشة')}
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                        ${btn('saveDebtPopupPosSettings()', 'حفظ إعدادات قائمة المديونيات', 'fa-floppy-disk')}
+                    </div>
+                </section>` : ''}
+            </div>`;
+        }
+
+        async function saveAnnPopupSettings() {
+            if (!(can('settings.manage') || annCanManage()) || !rtdb) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const posEl = document.querySelector('input[name="popAnnPos"]:checked');
+            const payload = annPopupNormCfg({
+                enabled: !!el('popAnnEnabled')?.checked,
+                position: posEl ? posEl.value : 'center',
+                lockUntilResponse: !!el('popAnnLock')?.checked,
+                backdropBlur: !!el('popAnnBlur')?.checked
+            });
+            try {
+                await rtdb.ref('settings/main/annPopup').set(payload);
+                annPopupCfg = payload;
+                if (appData && appData.settings) appData.settings.annPopup = payload;
+                annPopupSetLocalMuted(false);
+                annPopupDismissedVisit = false;
+                log('تعديل إعدادات القائمة المنبثقة للإعلانات', `المكان: ${payload.position} · قفل الإغلاق: ${payload.lockUntilResponse ? 'نعم' : 'لا'}`);
+                toast('تم حفظ إعدادات القائمة المنبثقة للإعلانات بنجاح', 'success');
+            } catch (e) {
+                console.error(e);
+                toast('تعذر حفظ الإعدادات — تأكد من صلاحية إدارة الإعدادات', 'error');
+            }
+        }
+
+        async function saveDebtPopupPosSettings() {
+            if (!debtCanConfigPopup() || !rtdb) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const posEl = document.querySelector('input[name="popDebtPos"]:checked');
+            const next = debtPopupNormCfg({
+                ...debtPopupCfg,
+                enabled: !!el('popDebtEnabled')?.checked,
+                side: posEl ? posEl.value : 'left'
+            });
+            try {
+                await rtdb.ref('settings/debtPopup').set(dbClean(next));
+                debtPopupCfg = next;
+                debtPopupDismissedSession = false;
+                debtPopupDismissedVisit = false;
+                if (next.enabled) debtPopupSetLocalMuted(false);
+                log('تعديل مكان القائمة المنبثقة للمديونيات', `المكان: ${next.side}`);
+                toast('تم حفظ إعدادات قائمة المديونيات المنبثقة بنجاح', 'success');
+            } catch (e) {
+                debtSaveFailed(e);
+            }
+        }
+
         function settingsSections() {
             const canSys = can('settings.manage');
             const out = [];
             if (canSys) out.push({ key: 'identity', title: 'هوية النظام', icon: 'fa-id-card', desc: 'اسم النظام والشعار ومدة تنبيه انتهاء اللستات.', html: settingsIdentityHtml });
             if (annCanManage()) out.push({ key: 'announcements', title: 'البيانات والإعلانات العامة', icon: 'fa-bullhorn', desc: 'نشر القرارات الإلزامية، التهنئات، الدعوات والعروض حسب الأدوار مع تقارير الموافقات والاعتراضات.', html: () => `<section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4"><h3 class="font-bold text-lg"><i class="fa-solid fa-bullhorn text-brand-600"></i> إدارة البيانات والإعلانات العامة</h3><p class="text-sm text-slate-600">يمكنك إضافة قرارات إدارية إلزامية (تظل ظاهرة باستمرار حتى يضغط المندوب موافقة أو اعتراض مع ذكر السبب)، أو تهنئة أو دعوة أو عرض وتوجيهها لأي دور من أدوار المنظومة.</p><div class="flex flex-wrap gap-2">${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}${btn('openAnnouncementsManager()', 'عرض كل البيانات والتقارير', 'fa-sliders', BTN_SECONDARY)}</div></section>` });
+            if (canSys || annCanManage() || debtCanConfigPopup()) out.push({ key: 'popups', title: 'القوائم المنبثقة', icon: 'fa-window-restore', desc: 'تحديد مكان ظهور قائمة الإعلانات وقائمة المديونيات (منتصف الشاشة، يمين، يسار) وقفل زر الإغلاق حتى الرد.', html: popupsSettingsHtml });
             if (canSys) out.push({ key: 'server', title: 'مساحة وأداء السيرفر', icon: 'fa-server', desc: 'ضغط الصور الذكي، فصل الملفات لـ Firebase Storage، وتنظيف الإشعارات القديمة.', html: serverSettingsHtml });
             if (can('home.personal')) out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
             if (can('home.personal')) out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
@@ -16248,5 +16515,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fc01dd19c483a0',t:'MTc5NTU2MDk5MA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fc01dd19c483a0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fc155b6ea80e66',t:'MTc5NTU2MTc4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fc155b6ea80e66',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
