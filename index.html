@@ -2713,15 +2713,61 @@
             return map[err && err.code] || ('حدث خطأ: ' + (err && err.message ? err.message : err));
         }
 
-        // Creates a login for another user without signing the admin out (uses a second Firebase app)
+        // Creates a login for another user without signing the admin out (uses a second Firebase app).
+        // If the email was previously deleted from /users (still exists in Firebase Auth), automatically
+        // reconnects the existing Auth UID (via sign-in if the same password is entered, or via the
+        // admin-only deletedUsers archive + password-reset email).
         async function createAuthAccount(email, password) {
+            const normEmail = String(email || '').trim().toLowerCase();
             const app2 = firebase.initializeApp(FIREBASE_CONFIG, 'create-user-' + Date.now());
             try {
                 const a2 = app2.auth();
                 if (FIREBASE_EMULATORS) a2.useEmulator(FIREBASE_EMULATORS.auth);
-                const cred = await a2.createUserWithEmailAndPassword(email, password);
-                await a2.signOut();
-                return cred.user.uid;
+                try {
+                    const cred = await a2.createUserWithEmailAndPassword(normEmail, password);
+                    const uid = cred.user.uid;
+                    await a2.signOut();
+                    try { await rtdb.ref('deletedUsers/' + uid).remove(); } catch (e) { /* noop */ }
+                    return uid;
+                } catch (err) {
+                    if (!err || err.code !== 'auth/email-already-in-use') throw err;
+                    // 1) Try signing in with the provided password (works automatically if reusing the old password)
+                    try {
+                        const cred2 = await a2.signInWithEmailAndPassword(normEmail, password);
+                        const uid = cred2.user.uid;
+                        await a2.signOut();
+                        if (appData && Array.isArray(appData.users) && appData.users.some(u => u.id === uid)) {
+                            throw userError('هذا الحساب موجود بالفعل في قائمة المستخدمين');
+                        }
+                        try { await rtdb.ref('deletedUsers/' + uid).remove(); } catch (e) { /* noop */ }
+                        return uid;
+                    } catch (signInErr) {
+                        if (signInErr && signInErr.userMessage) throw signInErr;
+                        // 2) Check admin-only deletedUsers archive to recover the original UID even with a different password
+                        try {
+                            const snap = await rtdb.ref('deletedUsers').once('value');
+                            const archived = snap.val() || {};
+                            const match = Object.entries(archived).find(([, v]) => v && String(v.email || '').toLowerCase() === normEmail);
+                            if (match) {
+                                const [oldUid] = match;
+                                if (appData && Array.isArray(appData.users) && appData.users.some(u => u.id === oldUid)) {
+                                    throw userError('هذا الحساب موجود بالفعل في قائمة المستخدمين');
+                                }
+                                try { await rtdb.ref('deletedUsers/' + oldUid).remove(); } catch (e) { /* noop */ }
+                                if (!normEmail.endsWith('.local')) {
+                                    try { await fbAuth.sendPasswordResetEmail(normEmail); } catch (e) { /* noop */ }
+                                    toast('تمت إعادة ربط الحساب المحذوف سابقاً وإرسال رابط تعيين كلمة المرور إلى ' + normEmail + ' (أو يدخل بكلمة مروره القديمة)', 'info', null, 8000);
+                                } else {
+                                    toast('تمت إعادة ربط الحساب المحذوف سابقاً (يدخل بنفس الرقم السري القديم)', 'info', null, 8000);
+                                }
+                                return oldUid;
+                            }
+                        } catch (archErr) {
+                            if (archErr && archErr.userMessage) throw archErr;
+                        }
+                        throw userError('البريد مسجّل مسبقاً في Firebase Authentication (حُذف من القائمة فقط). اكتب كلمة مروره القديمة لإعادة ربطه تلقائياً، أو احذفه من Firebase Console → Authentication → Users ثم أضفه من جديد.');
+                    }
+                }
             } finally {
                 await app2.delete();
             }
@@ -11528,10 +11574,20 @@
             }
             finalizePendingUndo();
             appData.users.splice(idx, 1);
+            rtdb.ref('deletedUsers/' + u.id).set({
+                email: String(u.email || '').toLowerCase(),
+                name: u.name || '',
+                deletedAt: new Date().toISOString()
+            }).catch(() => {});
             saveState();
             render();
             scheduleUndo(`تم حذف المستخدم "${u.name}"`,
-                () => { appData.users.splice(Math.min(idx, appData.users.length), 0, u); saveState(); render(); },
+                () => {
+                    appData.users.splice(Math.min(idx, appData.users.length), 0, u);
+                    rtdb.ref('deletedUsers/' + u.id).remove().catch(() => {});
+                    saveState();
+                    render();
+                },
                 () => log('حذف مستخدم', u.name));
         }
 
@@ -13327,5 +13383,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f99589dbc4a26a',t:'MTc5NTUzNTU4MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f99589dbc4a26a',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f9c7d089dac8e1',t:'MTc5NTUzNzY0MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f9c7d089dac8e1',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
