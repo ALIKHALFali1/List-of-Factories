@@ -633,6 +633,10 @@
                         <i class="fa-solid fa-magnifying-glass text-lg"></i>
                     </button>
                     <div id="topActions" class="flex items-center gap-2 shrink-0"></div>
+                    <button type="button" id="annTopBtn" onclick="openAnnTopButton()" class="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-brand-600" aria-label="البيانات والإعلانات العامة" title="البيانات والإعلانات العامة">
+                        <i class="fa-solid fa-bullhorn text-lg"></i>
+                        <span id="annTopBadge" class="hidden absolute top-0 left-0 min-w-[20px] h-5 px-1 rounded-full bg-rose-600 text-white text-[11px] font-bold flex items-center justify-center shadow"></span>
+                    </button>
                     <button type="button" id="chatTopBtn" onclick="navigate('chat')" class="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-brand-600" aria-label="المحادثات" title="المحادثات">
                         <i class="fa-regular fa-comments text-lg"></i>
                         <span id="chatTopBadge" class="hidden absolute top-0 left-0 min-w-[20px] h-5 px-1 rounded-full bg-rose-600 text-white text-[11px] font-bold flex items-center justify-center shadow"></span>
@@ -12190,26 +12194,77 @@
         }
 
 
-        // ================= البيانات والإعلانات العامة الإلزامية (الصفحة الرئيسية) =================
+        // ================= البيانات والإعلانات العامة الإلزامية (الصفحة الرئيسية + الزر العلوي) =================
         const ANN_TYPES = [
-            ['directive',    'قرار / بيان إداري هام', 'fa-gavel',              'border-rose-300 bg-gradient-to-l from-rose-50 via-amber-50/80 to-white',        'bg-rose-600 text-white',    'text-rose-900',    'موافق وملتزم',   'اعتراض مع السبب'],
+            ['directive',    'قرار / بيان إداري هام', 'fa-gavel',              'border-rose-300 bg-gradient-to-l from-rose-50 via-amber-50/80 to-white',        'bg-rose-600 text-white',    'text-rose-900',    'موافق وملتزم',     'اعتراض مع السبب'],
             ['warning',      'تنبيه / تحذير عاجل',    'fa-triangle-exclamation','border-red-400 bg-gradient-to-l from-red-50 via-orange-50/70 to-white',          'bg-red-600 text-white',     'text-red-900',     'تم العلم والالتزام','اعتراض مع السبب'],
-            ['offer',        'عرض / خصم / تسعير',     'fa-tags',               'border-teal-300 bg-gradient-to-l from-teal-50 via-emerald-50/70 to-white',       'bg-teal-600 text-white',    'text-teal-900',    'تم العلم بالعرض','ملاحظة / اعتراض'],
-            ['announcement', 'إعلان عام',             'fa-bullhorn',           'border-sky-300 bg-gradient-to-l from-sky-50 via-blue-50/70 to-white',            'bg-sky-600 text-white',     'text-sky-900',     'موافق / تم العلم','اعتراض مع السبب'],
-            ['congrats',     'تهنئة / فرحة',          'fa-champagne-glasses',  'border-amber-300 bg-gradient-to-l from-amber-50 via-emerald-50/70 to-white',     'bg-amber-500 text-white',   'text-amber-900',   'ألف مبروك 🎉',    'ملاحظة / رد'],
-            ['invitation',   'دعوة / اجتماع / مناسبة','fa-envelope-open-text', 'border-indigo-300 bg-gradient-to-l from-indigo-50 via-purple-50/70 to-white',    'bg-indigo-600 text-white',  'text-indigo-900',  'تأكيد الحضور',   'اعتذار مع السبب']
+            ['offer',        'عرض / خصم / تسعير',     'fa-tags',               'border-teal-300 bg-gradient-to-l from-teal-50 via-emerald-50/70 to-white',       'bg-teal-600 text-white',    'text-teal-900',    'تم العلم بالعرض',  'ملاحظة / اعتراض'],
+            ['announcement', 'إعلان عام',             'fa-bullhorn',           'border-sky-300 bg-gradient-to-l from-sky-50 via-blue-50/70 to-white',            'bg-sky-600 text-white',     'text-sky-900',     'موافق / تم العلم', 'اعتراض مع السبب'],
+            ['congrats',     'تهنئة / فرحة',          'fa-champagne-glasses',  'border-amber-300 bg-gradient-to-l from-amber-50 via-emerald-50/70 to-white',     'bg-amber-500 text-white',   'text-amber-900',   'ألف مبروك 🎉',      'ملاحظة / رد'],
+            ['invitation',   'دعوة / اجتماع / مناسبة','fa-envelope-open-text', 'border-indigo-300 bg-gradient-to-l from-indigo-50 via-purple-50/70 to-white',    'bg-indigo-600 text-white',  'text-indigo-900',  'تأكيد الحضور',     'اعتذار مع السبب']
         ];
         const annTypeInfo = t => ANN_TYPES.find(x => x[0] === t) || ANN_TYPES[0];
         const annCanManage = () => isSystemAdmin() || can('announcements.manage') || can('settings.manage');
 
         let annList = [];
-        let annMyResponses = {};          // annId -> my response object
+        let annMyResponses = {};
         let annStarted = false;
         let annListUnsub = null;
-        let annRespUnsubs = {};           // annId -> unsub
-        let annObjectionOpenId = null;    // inline objection box open on home
-        let annPopupShownIds = new Set(); // avoid nagging within same page load if already popped once
-        let annFormPendingImg = null;     // null = unchanged, '' = removed, string = new dataUrl/url
+        let annRespUnsubs = {};
+        let annObjectionOpenId = null;
+        let annPopupShownIds = new Set();
+        let annFormPendingImg = null;
+
+        function annAllRolesArr() {
+            const raw = appData?.roles;
+            if (!raw) return [];
+            if (Array.isArray(raw)) return raw;
+            return Object.entries(raw).map(([id, r]) => ({ id, ...(r || {}) }));
+        }
+
+        function annRoleNameById(roleId) {
+            if (!roleId) return '—';
+            const raw = appData?.roles;
+            if (raw && !Array.isArray(raw) && raw[roleId]?.name) return raw[roleId].name;
+            const found = annAllRolesArr().find(x => x.id === roleId);
+            return found?.name || roleId;
+        }
+
+        function annUpdateTopBadge() {
+            const badge = el('annTopBadge');
+            const btn = el('annTopBtn');
+            if (!badge || !btn) return;
+            const visible = annList.filter(a => annTargetsMe(a));
+            const pending = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a)).length;
+            const activeCnt = visible.length;
+            if (pending > 0) {
+                badge.textContent = pending > 9 ? '9+' : String(pending);
+                badge.classList.remove('hidden', 'bg-brand-600');
+                badge.classList.add('bg-rose-600');
+                btn.title = `لديك ${pending} بيان هام بانتظار ردك`;
+            } else if (activeCnt > 0 && !annCanManage()) {
+                badge.textContent = activeCnt > 9 ? '9+' : String(activeCnt);
+                badge.classList.remove('hidden', 'bg-rose-600');
+                badge.classList.add('bg-brand-600');
+                btn.title = `البيانات والإعلانات النشطة (${activeCnt})`;
+            } else {
+                badge.classList.add('hidden');
+                btn.title = annCanManage() ? 'إدارة البيانات والإعلانات العامة' : 'البيانات والإعلانات العامة';
+            }
+        }
+
+        function openAnnTopButton() {
+            if (annCanManage()) return openAnnouncementsManager();
+            return openMyAnnouncementsModal();
+        }
+
+        function openMyAnnouncementsModal() {
+            const visible = annList.filter(a => annTargetsMe(a));
+            const body = visible.length
+                ? `<div class="space-y-3 max-h-[65vh] overflow-y-auto">${visible.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
+                : `<div class="py-10 text-center text-slate-500 text-sm"><i class="fa-solid fa-bullhorn text-2xl text-slate-300 mb-2 block"></i>لا توجد بيانات أو إعلانات نشطة موجهة لك حالياً</div>`;
+            openModal({ title: 'البيانات والإعلانات العامة', body, size: 'lg' });
+        }
 
         function annStart() {
             if (annStarted || !rtdb || !fbUser) return;
@@ -12221,6 +12276,7 @@
                     .map(([id, v]) => ({ id, ...(v || {}) }))
                     .sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) || String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
                 annSyncMyResponseListeners();
+                annUpdateTopBadge();
                 if (parseRoute().name === 'home') {
                     annRepaintHome();
                     annMaybeShowUrgentPopup();
@@ -12239,6 +12295,7 @@
             annObjectionOpenId = null;
             annPopupShownIds = new Set();
             annStarted = false;
+            annUpdateTopBadge();
         }
 
         function annIsExpired(a) {
@@ -12260,7 +12317,7 @@
             const r = annMyResponses[a.id];
             if (!r) return null;
             const rev = Number(a.revision) || 1;
-            if ((Number(r.revision) || 1) < rev) return null; // edited with re-ack required
+            if ((Number(r.revision) || 1) < rev) return null;
             return r;
         }
 
@@ -12281,16 +12338,12 @@
                 const cb = snap => {
                     const v = snap.val();
                     if (v) annMyResponses[id] = v; else delete annMyResponses[id];
+                    annUpdateTopBadge();
                     if (parseRoute().name === 'home') annRepaintHome();
                 };
                 ref.on('value', cb, () => {});
                 annRespUnsubs[id] = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
             });
-        }
-
-        function annRoleNameById(roleId) {
-            const r = (appData?.roles || []).find(x => x.id === roleId);
-            return r ? r.name : (roleId || '—');
         }
 
         function annAudienceLabel(a) {
@@ -12303,6 +12356,7 @@
         function annRepaintHome() {
             const box = el('homeAnnouncementsBox');
             if (box) box.innerHTML = homeAnnouncementsInnerHtml();
+            annUpdateTopBadge();
         }
 
         function annCardHtml(a, isPendingMandatory) {
@@ -12354,10 +12408,10 @@
                         ${!requireResp ? '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-white/80 text-slate-600 border border-slate-200">إعلان عام</span>' : ''}
                         ${(Number(a.revision) || 1) > 1 ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">تحديث #${Number(a.revision)}</span>` : ''}
                     </div>
-                    <div class="flex items-center gap-1.5">
-                        ${annCanManage() ? `<button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="px-2.5 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1" title="تقرير الموافقات والاعتراضات"><i class="fa-solid fa-chart-pie text-brand-600"></i> الردود</button>
-                        <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-2 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold" title="تعديل البيان"><i class="fa-solid fa-pen"></i></button>` : ''}
-                    </div>
+                    ${annCanManage() ? `<div class="flex items-center gap-1.5">
+                        <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="px-2.5 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1" title="تقرير الموافقات والاعتراضات"><i class="fa-solid fa-chart-pie text-brand-600"></i> الردود</button>
+                        <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-2 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold" title="تعديل البيان"><i class="fa-solid fa-pen"></i></button>
+                    </div>` : ''}
                 </div>
                 <h3 class="mt-2.5 text-base sm:text-lg font-extrabold ${titleCls}">${esc(a.title || '')}</h3>
                 <p class="mt-1.5 text-sm text-slate-800 leading-relaxed whitespace-pre-line font-medium">${esc(a.body || '')}</p>
@@ -12374,30 +12428,15 @@
             </article>`;
         }
 
+        // Clean Home Screen: shows ONLY active announcements targeted to the user (no management buttons cluttering #/home!)
         function homeAnnouncementsInnerHtml() {
             const visible = annList.filter(a => annTargetsMe(a));
+            if (!visible.length) return '';
             const pendingMandatory = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
             const otherActive = visible.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)));
-            const canMgr = annCanManage();
-            if (!visible.length && !canMgr) return '';
             return `<section class="space-y-3">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div class="flex items-center gap-2">
-                        <h3 class="font-extrabold text-sm sm:text-base text-slate-800 flex items-center gap-2">
-                            <i class="fa-solid fa-bullhorn text-brand-600"></i> البيانات والإعلانات العامة
-                        </h3>
-                        ${pendingMandatory.length ? `<span class="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-extrabold">${pendingMandatory.length} بانتظار ردك</span>` : ''}
-                    </div>
-                    ${canMgr ? `<div class="flex items-center gap-2">
-                        <button type="button" onclick="openAnnouncementForm()" class="px-3 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-plus"></i> بيان / إعلان جديد</button>
-                        <button type="button" onclick="openAnnouncementsManager()" class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1.5"><i class="fa-solid fa-sliders"></i> الإدارة والتقارير (${annList.length})</button>
-                    </div>` : ''}
-                </div>
                 ${pendingMandatory.length ? `<div class="space-y-3">${pendingMandatory.map(a => annCardHtml(a, true)).join('')}</div>` : ''}
                 ${otherActive.length ? `<div class="space-y-3">${otherActive.map(a => annCardHtml(a, false)).join('')}</div>` : ''}
-                ${(!visible.length && canMgr) ? `<div class="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
-                    <span>لا توجد بيانات أو إعلانات نشطة موجهة لدورك حالياً. يمكنك نشر قرار إداري أو تهنئة أو دعوة أو خصم وتحديد الأدوار المستهدفة.</span>
-                </div>` : ''}
             </section>`;
         }
 
@@ -12407,40 +12446,43 @@
 
         function annMaybeShowUrgentPopup() {
             if (parseRoute().name !== 'home') return;
-            const modalOpen = el('modalBackdrop') && !el('modalBackdrop').classList.contains('hidden');
-            if (modalOpen) return;
+            const host = el('modalHost');
+            if (host && !host.classList.contains('hidden')) return;
             const urgent = annList.find(a => annTargetsMe(a) && a.requireResponse !== false && a.popupOnHome === true && !annMyEffectiveResponse(a) && !annPopupShownIds.has(a.id + ':' + (a.revision || 1)));
             if (!urgent) return;
             annPopupShownIds.add(urgent.id + ':' + (urgent.revision || 1));
             const [, typeLabel, icon, , badgeCls, , okLbl, objLbl] = annTypeInfo(urgent.type);
             const allowObj = urgent.allowObjection !== false;
-            openModal(`بيان هام يتطلب ردك`, `<div class="space-y-4">
-                <div class="flex flex-wrap items-center gap-2">
-                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(urgent.badge || typeLabel)}</span>
-                    <span class="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">يظل ظاهراً حتى يتم الرد</span>
-                </div>
-                <h4 class="text-lg font-extrabold text-slate-900">${esc(urgent.title || '')}</h4>
-                <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-800 whitespace-pre-line leading-relaxed font-medium">${esc(urgent.body || '')}</div>
-                ${urgent.eventDate ? `<div class="text-xs font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(urgent.eventDate)}</div>` : ''}
-                ${urgent.image ? `<img src="${esc(urgent.image)}" alt="" class="max-h-56 mx-auto rounded-xl border border-slate-200 object-contain">` : ''}
-                <div id="annModalObjBox" class="hidden rounded-xl bg-rose-50 border border-rose-200 p-3 space-y-2">
-                    <label class="block text-xs font-extrabold text-rose-800">سبب الاعتراض (إجباري):</label>
-                    <textarea id="annModalObjText" rows="3" maxlength="1500" class="${INPUT_CLS}" placeholder="اكتب سبب اعتراضك بوضوح..."></textarea>
-                    <div class="flex justify-end"><button type="button" onclick="annSubmitModalObjection('${esc(urgent.id)}')" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold">إرسال الاعتراض</button></div>
-                </div>
-                <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
-                    <div class="flex flex-wrap gap-2">
+            openModal({
+                title: 'بيان هام يتطلب ردك',
+                size: 'lg',
+                body: `<div class="space-y-4">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(urgent.badge || typeLabel)}</span>
+                        <span class="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">يظل ظاهراً حتى يتم الرد</span>
+                    </div>
+                    <h4 class="text-lg font-extrabold text-slate-900">${esc(urgent.title || '')}</h4>
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-800 whitespace-pre-line leading-relaxed font-medium">${esc(urgent.body || '')}</div>
+                    ${urgent.eventDate ? `<div class="text-xs font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(urgent.eventDate)}</div>` : ''}
+                    ${urgent.image ? `<img src="${esc(urgent.image)}" alt="" class="max-h-56 mx-auto rounded-xl border border-slate-200 object-contain">` : ''}
+                    <div id="annModalObjBox" class="hidden rounded-xl bg-rose-50 border border-rose-200 p-3 space-y-2">
+                        <label class="block text-xs font-extrabold text-rose-800">سبب الاعتراض (إجباري):</label>
+                        <textarea id="annModalObjText" rows="3" maxlength="1500" class="${INPUT_CLS}" placeholder="اكتب سبب اعتراضك بوضوح..."></textarea>
+                        <div class="flex justify-end"><button type="button" onclick="annSubmitModalObjection('${esc(urgent.id)}')" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold">إرسال الاعتراض</button></div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200">
                         <button type="button" onclick="annSubmitResponse('${esc(urgent.id)}','approved',true)" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-check"></i> ${esc(okLbl)}</button>
                         ${allowObj ? `<button type="button" onclick="el('annModalObjBox').classList.toggle('hidden');el('annModalObjText').focus()" class="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border-2 border-rose-300 text-rose-700 text-sm font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-hand"></i> ${esc(objLbl)}</button>` : ''}
                     </div>
-                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY} !text-xs">مراجعة لاحقاً</button>
-                </div>
-            </div>`, 'max-w-xl');
+                </div>`
+            });
         }
 
         function annToggleObjectionBox(annId) {
             annObjectionOpenId = (annObjectionOpenId === annId) ? null : annId;
             annRepaintHome();
+            const host = el('modalHost');
+            if (host && !host.classList.contains('hidden') && !annCanManage()) openMyAnnouncementsModal();
             if (annObjectionOpenId) {
                 setTimeout(() => { const ta = el('annObjReason_' + annObjectionOpenId); if (ta) ta.focus(); }, 40);
             }
@@ -12495,15 +12537,18 @@
         // ---- إدارة البيانات والإعلانات (للمدير والمصرح لهم) ----
         async function openAnnouncementsManager() {
             if (!annCanManage()) return toast('ليس لديك صلاحية لإدارة البيانات والإعلانات', 'error');
-            openModal('إدارة البيانات والإعلانات العامة', `<div class="space-y-4">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <p class="text-xs text-slate-500">انشر قرارات إدارية إلزامية، تهنئات، دعوات، عروض وخصومات، وحدّد الأدوار المستهدفة وتابع ردود كل موظف.</p>
-                    <button type="button" onclick="openAnnouncementForm()" class="${BTN_PRIMARY} !py-2"><i class="fa-solid fa-plus"></i> إضافة بيان / إعلان جديد</button>
-                </div>
-                <div id="annMgrList" class="space-y-3"><div class="text-center py-6 text-slate-400 text-sm">جاري تحميل البيانات والإحصائيات...</div></div>
-            </div>`, 'max-w-3xl');
+            openModal({
+                title: 'إدارة البيانات والإعلانات العامة',
+                size: 'lg',
+                body: `<div class="space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <p class="text-xs text-slate-500">انشر قرارات إدارية إلزامية، تهنئات، دعوات، عروض وخصومات، وحدّد الأدوار المستهدفة وتابع ردود كل موظف.</p>
+                        <button type="button" onclick="openAnnouncementForm()" class="${BTN_PRIMARY} !py-2"><i class="fa-solid fa-plus"></i> إضافة بيان / إعلان جديد</button>
+                    </div>
+                    <div id="annMgrList" class="space-y-3 max-h-[58vh] overflow-y-auto pr-1"><div class="text-center py-6 text-slate-400 text-sm">جاري تحميل البيانات والإحصائيات...</div></div>
+                </div>`
+            });
 
-            // Fetch summary counts for each announcement
             const counts = {};
             await Promise.all(annList.map(async a => {
                 try {
@@ -12630,7 +12675,7 @@
             if (!annCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const cur = editId ? annList.find(x => x.id === editId) : null;
             annFormPendingImg = null;
-            const roles = (appData?.roles || []);
+            const roles = annAllRolesArr();
             const dirUsers = [...userDirectoryMap.values()].filter(u => u && u.active !== false);
             const roleCount = rid => dirUsers.filter(u => u.roleId === rid).length;
             const selRoles = Array.isArray(cur?.targetRoles) ? cur.targetRoles : [];
@@ -12638,117 +12683,117 @@
             const typeVal = cur?.type || 'directive';
             const curImg = cur?.image || '';
 
-            openModal(cur ? 'تعديل البيان / الإعلان' : 'إضافة بيان أو إعلان جديد', `<form onsubmit="saveAnnouncementForm(event,'${esc(editId || '')}')" class="space-y-4">
-                <div>
-                    <label class="block text-xs font-extrabold text-slate-700 mb-1.5">نوع وشكل البيان:</label>
-                    <select id="annFType" onchange="annFormTypeChanged()" class="${INPUT_CLS} font-bold">
-                        ${ANN_TYPES.map(([k, lbl]) => `<option value="${k}" ${typeVal === k ? 'selected' : ''}>${esc(lbl)}</option>`).join('')}
-                    </select>
-                </div>
-
-                <div class="grid sm:grid-cols-2 gap-3">
+            openModal({
+                title: cur ? 'تعديل البيان / الإعلان' : 'إضافة بيان أو إعلان جديد',
+                size: 'lg',
+                submitText: cur ? 'حفظ التعديلات' : 'نشر البيان الآن',
+                onSubmit: () => saveAnnouncementForm(editId || ''),
+                onOpen: () => setTimeout(annUpdateFormPreview, 30),
+                body: `<div class="space-y-4 max-h-[62vh] overflow-y-auto pr-1">
                     <div>
-                        <label class="block text-xs font-bold text-slate-700 mb-1">عنوان البيان / الإعلان *</label>
-                        <input id="annFTitle" required maxlength="160" oninput="annUpdateFormPreview()" value="${esc(cur?.title || '')}" class="${INPUT_CLS}" placeholder="مثال: ممنوع عمل خصومات على السيراميك هذه الفترة">
+                        <label class="block text-xs font-extrabold text-slate-700 mb-1.5">نوع وشكل البيان:</label>
+                        <select id="annFType" onchange="annFormTypeChanged()" class="${INPUT_CLS} font-bold">
+                            ${ANN_TYPES.map(([k, lbl]) => `<option value="${k}" ${typeVal === k ? 'selected' : ''}>${esc(lbl)}</option>`).join('')}
+                        </select>
                     </div>
-                    <div>
-                        <label class="block text-xs font-bold text-slate-700 mb-1">الشارة العلوية (اختياري)</label>
-                        <input id="annFBadge" maxlength="60" oninput="this.dataset.touched='1';annUpdateFormPreview()" value="${esc(cur?.badge || annTypeInfo(typeVal)[1])}" class="${INPUT_CLS}" placeholder="مثال: قرار إداري عاجل / تهنئة خاصة">
-                    </div>
-                </div>
 
-                <div>
-                    <label class="block text-xs font-bold text-slate-700 mb-1">نص البيان والتفاصيل *</label>
-                    <textarea id="annFBody" required rows="4" maxlength="3000" oninput="annUpdateFormPreview()" class="${INPUT_CLS}" placeholder="اكتب تفاصيل القرار أو التهنئة أو الدعوة أو العرض بالكامل...">${esc(cur?.body || '')}</textarea>
-                </div>
-
-                <div class="grid sm:grid-cols-2 gap-3">
-                    <div>
-                        <label class="block text-xs font-bold text-slate-700 mb-1">موعد / مكان (ممتاز للدعوات والعروض)</label>
-                        <input id="annFEventDate" maxlength="120" oninput="annUpdateFormPreview()" value="${esc(cur?.eventDate || '')}" class="${INPUT_CLS}" placeholder="مثال: الخميس 5 مساءً — قاعة الاجتماعات">
+                    <div class="grid sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">عنوان البيان / الإعلان *</label>
+                            <input id="annFTitle" required maxlength="160" oninput="annUpdateFormPreview()" value="${esc(cur?.title || '')}" class="${INPUT_CLS}" placeholder="مثال: ممنوع عمل خصومات على السيراميك هذه الفترة">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">الشارة العلوية (اختياري)</label>
+                            <input id="annFBadge" maxlength="60" oninput="this.dataset.touched='1';annUpdateFormPreview()" value="${esc(cur?.badge || annTypeInfo(typeVal)[1])}" class="${INPUT_CLS}" placeholder="مثال: قرار إداري عاجل / تهنئة خاصة">
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ انتهاء تلقائي (اختياري)</label>
-                        <input id="annFExpires" type="date" value="${esc(cur?.expiresAt || '')}" class="${INPUT_CLS}">
-                    </div>
-                </div>
 
-                <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2.5">
-                    <label class="block text-xs font-extrabold text-slate-800"><i class="fa-solid fa-users text-brand-600"></i> الفئة المستهدفة (من أدوار المنظومة):</label>
-                    <div class="flex flex-wrap gap-3 text-sm">
-                        <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
-                            <input type="radio" name="annAud" value="all" ${audMode === 'all' ? 'checked' : ''} onchange="el('annRolesPick').classList.add('hidden')" class="accent-brand-600">
-                            <span>الكل (جميع المستخدمين)</span>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">نص البيان والتفاصيل *</label>
+                        <textarea id="annFBody" required rows="4" maxlength="3000" oninput="annUpdateFormPreview()" class="${INPUT_CLS}" placeholder="اكتب تفاصيل القرار أو التهنئة أو الدعوة أو العرض بالكامل...">${esc(cur?.body || '')}</textarea>
+                    </div>
+
+                    <div class="grid sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">موعد / مكان (ممتاز للدعوات والعروض)</label>
+                            <input id="annFEventDate" maxlength="120" oninput="annUpdateFormPreview()" value="${esc(cur?.eventDate || '')}" class="${INPUT_CLS}" placeholder="مثال: الخميس 5 مساءً — قاعة الاجتماعات">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ انتهاء تلقائي (اختياري)</label>
+                            <input id="annFExpires" type="date" value="${esc(cur?.expiresAt || '')}" class="${INPUT_CLS}">
+                        </div>
+                    </div>
+
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2.5">
+                        <label class="block text-xs font-extrabold text-slate-800"><i class="fa-solid fa-users text-brand-600"></i> الفئة المستهدفة (من أدوار المنظومة):</label>
+                        <div class="flex flex-wrap gap-3 text-sm">
+                            <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
+                                <input type="radio" name="annAud" value="all" ${audMode === 'all' ? 'checked' : ''} onchange="el('annRolesPick').classList.add('hidden')" class="accent-brand-600">
+                                <span>الكل (جميع المستخدمين)</span>
+                            </label>
+                            <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
+                                <input type="radio" name="annAud" value="roles" ${audMode === 'roles' ? 'checked' : ''} onchange="el('annRolesPick').classList.remove('hidden')" class="accent-brand-600">
+                                <span>أدوار محددة (مندوبين / شحن / محاسب...)</span>
+                            </label>
+                        </div>
+                        <div id="annRolesPick" class="${audMode === 'roles' ? '' : 'hidden'} grid sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200">
+                            ${roles.length ? roles.map(r => `<label class="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 cursor-pointer text-xs hover:border-brand-400">
+                                <span class="flex items-center gap-2 font-bold text-slate-800">
+                                    <input type="checkbox" name="annRoleChk" value="${esc(r.id)}" ${selRoles.includes(r.id) ? 'checked' : ''} class="w-4 h-4 accent-brand-600">
+                                    ${esc(r.name || r.id)}
+                                </span>
+                                <span class="text-[11px] text-slate-500">${roleCount(r.id)} مستخدم</span>
+                            </label>`).join('') : '<p class="text-xs text-amber-700 col-span-2">لم تُحمّل قائمة الأدوار — تأكد من نشر قواعد قاعدة البيانات.</p>'}
+                        </div>
+                    </div>
+
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2">
+                        <label class="block text-xs font-extrabold text-slate-800">خيارات الظهور والرد:</label>
+                        <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                            <input id="annFRequire" type="checkbox" ${(cur ? cur.requireResponse !== false : true) ? 'checked' : ''} onchange="this.dataset.touched='1'" class="w-4 h-4 mt-0.5 accent-brand-600">
+                            <span><b>إلزامي بالرد المستمر:</b> يظل ظاهراً بوضوح في أعلى الصفحة الرئيسية باستمرار حتى يضغط المستخدم موافقة أو اعتراض</span>
                         </label>
-                        <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
-                            <input type="radio" name="annAud" value="roles" ${audMode === 'roles' ? 'checked' : ''} onchange="el('annRolesPick').classList.remove('hidden')" class="accent-brand-600">
-                            <span>أدوار محددة (مندوبين / شحن / محاسب...)</span>
+                        <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                            <input id="annFAllowObj" type="checkbox" ${(cur ? cur.allowObjection !== false : true) ? 'checked' : ''} onchange="this.dataset.touched='1';annUpdateFormPreview()" class="w-4 h-4 mt-0.5 accent-brand-600">
+                            <span><b>السماح بالاعتراض مع إجبار كتابة السبب:</b> يظهر زر «اعتراض» ويجبر المستخدم على توضيح السبب قبل الإرسال</span>
                         </label>
+                        <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                            <input id="annFPopup" type="checkbox" ${cur?.popupOnHome ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-brand-600">
+                            <span><b>إبراز كنافذة فورية عند فتح الرئيسية:</b> تفتح نافذة منبثقة بالبيان فور دخول المستهدف لحين الرد</span>
+                        </label>
+                        <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                            <input id="annFPinned" type="checkbox" ${(cur ? cur.pinned !== false : true) ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-brand-600">
+                            <span><b>تثبيت في الأعلى (أولوية قصوى)</b></span>
+                        </label>
+                        ${cur ? `<label class="flex items-start gap-2.5 cursor-pointer text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                            <input id="annFBumpRev" type="checkbox" class="w-4 h-4 mt-0.5 accent-amber-600">
+                            <span><b>إعادة طلب الموافقة من الجميع بعد هذا التعديل:</b> سيظهر البيان مجدداً كـ «بانتظار ردك» لكل المستهدفين</span>
+                        </label>` : ''}
                     </div>
-                    <div id="annRolesPick" class="${audMode === 'roles' ? '' : 'hidden'} grid sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200">
-                        ${roles.length ? roles.map(r => `<label class="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 cursor-pointer text-xs hover:border-brand-400">
-                            <span class="flex items-center gap-2 font-bold text-slate-800">
-                                <input type="checkbox" name="annRoleChk" value="${esc(r.id)}" ${selRoles.includes(r.id) ? 'checked' : ''} class="w-4 h-4 accent-brand-600">
-                                ${esc(r.name)}
-                            </span>
-                            <span class="text-[11px] text-slate-500">${roleCount(r.id)} مستخدم</span>
-                        </label>`).join('') : '<p class="text-xs text-amber-700 col-span-2">لم تُحمّل قائمة الأدوار — تأكد من صلاحية قراءة الأدوار.</p>'}
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">صورة / تصميم مرفق مع البيان (اختياري — يُضغط تلقائياً):</label>
+                        <input type="file" accept="image/*" onchange="annOnImagePicked(this)" class="text-xs">
+                        <div id="annFImgPreview">${curImg ? `<div class="flex items-center gap-3 mt-2"><img src="${esc(curImg)}" class="h-20 rounded-xl border border-slate-200 object-contain bg-white"><button type="button" onclick="annClearFormImage()" class="text-xs font-bold text-rose-600 hover:underline">إزالة الصورة</button></div>` : ''}</div>
                     </div>
-                </div>
 
-                <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2">
-                    <label class="block text-xs font-extrabold text-slate-800">خيارات الظهور والرد:</label>
-                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
-                        <input id="annFRequire" type="checkbox" ${(cur ? cur.requireResponse !== false : true) ? 'checked' : ''} onchange="this.dataset.touched='1'" class="w-4 h-4 mt-0.5 accent-brand-600">
-                        <span><b>إلزامي بالرد المستمر:</b> يظل ظاهراً بوضوح في أعلى الصفحة الرئيسية باستمرار حتى يضغط المستخدم موافقة أو اعتراض</span>
-                    </label>
-                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
-                        <input id="annFAllowObj" type="checkbox" ${(cur ? cur.allowObjection !== false : true) ? 'checked' : ''} onchange="this.dataset.touched='1';annUpdateFormPreview()" class="w-4 h-4 mt-0.5 accent-brand-600">
-                        <span><b>السماح بالاعتراض مع إجبار كتابة السبب:</b> يظهر زر «اعتراض» ويجبر المستخدم على توضيح السبب قبل الإرسال</span>
-                    </label>
-                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
-                        <input id="annFPopup" type="checkbox" ${cur?.popupOnHome ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-brand-600">
-                        <span><b>إبراز كنافذة فورية عند فتح الرئيسية:</b> تفتح نافذة منبثقة بالبيان فور دخول المستهدف لحين الرد</span>
-                    </label>
-                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
-                        <input id="annFPinned" type="checkbox" ${(cur ? cur.pinned !== false : true) ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-brand-600">
-                        <span><b>تثبيت في الأعلى (أولوية قصوى)</b></span>
-                    </label>
-                    ${cur ? `<label class="flex items-start gap-2.5 cursor-pointer text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
-                        <input id="annFBumpRev" type="checkbox" class="w-4 h-4 mt-0.5 accent-amber-600">
-                        <span><b>إعادة طلب الموافقة من الجميع بعد هذا التعديل:</b> سيظهر البيان مجدداً كـ «بانتظار ردك» لكل المستهدفين</span>
-                    </label>` : ''}
-                </div>
-
-                <div>
-                    <label class="block text-xs font-bold text-slate-700 mb-1">صورة / تصميم مرفق مع البيان (اختياري — يُضغط تلقائياً):</label>
-                    <input type="file" accept="image/*" onchange="annOnImagePicked(this)" class="text-xs">
-                    <div id="annFImgPreview">${curImg ? `<div class="flex items-center gap-3 mt-2"><img src="${esc(curImg)}" class="h-20 rounded-xl border border-slate-200 object-contain bg-white"><button type="button" onclick="annClearFormImage()" class="text-xs font-bold text-rose-600 hover:underline">إزالة الصورة</button></div>` : ''}</div>
-                </div>
-
-                <div>
-                    <div class="text-[11px] font-bold text-slate-500 mb-1">معاينة مباشرة لشكل البيان:</div>
-                    <div id="annFormPreview"></div>
-                </div>
-
-                <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200">
-                    <button type="button" onclick="openAnnouncementsManager()" class="${BTN_SECONDARY}">رجوع للقائمة</button>
-                    <button type="submit" class="${BTN_PRIMARY}"><i class="fa-solid fa-paper-plane"></i> ${cur ? 'حفظ التعديلات' : 'نشر البيان الآن'}</button>
-                </div>
-            </form>`, 'max-w-2xl');
-            setTimeout(annUpdateFormPreview, 30);
+                    <div>
+                        <div class="text-[11px] font-bold text-slate-500 mb-1">معاينة مباشرة لشكل البيان:</div>
+                        <div id="annFormPreview"></div>
+                    </div>
+                </div>`
+            });
         }
 
-        async function saveAnnouncementForm(e, editId) {
-            e.preventDefault();
-            if (!annCanManage() || !rtdb || !fbUser) return;
+        async function saveAnnouncementForm(editId) {
+            if (!annCanManage() || !rtdb || !fbUser) return false;
             const cur = editId ? annList.find(x => x.id === editId) : null;
             const title = (el('annFTitle')?.value || '').trim();
             const body = (el('annFBody')?.value || '').trim();
-            if (!title || !body) return toast('اكتب العنوان ونص البيان', 'error');
+            if (!title || !body) { toast('اكتب العنوان ونص البيان', 'error'); return false; }
             const audMode = (document.querySelector('input[name="annAud"]:checked') || {}).value || 'all';
             const targetRoles = audMode === 'roles' ? [...document.querySelectorAll('input[name="annRoleChk"]:checked')].map(x => x.value) : [];
-            if (audMode === 'roles' && !targetRoles.length) return toast('اختر دوراً واحداً على الأقل من الأدوار المستهدفة', 'error');
+            if (audMode === 'roles' && !targetRoles.length) { toast('اختر دوراً واحداً على الأقل من الأدوار المستهدفة', 'error'); return false; }
 
             const id = cur ? cur.id : uid('ANN-');
             const now = new Date().toISOString();
@@ -12789,9 +12834,11 @@
                 notifyDirect(cur ? 'عدّل' : 'نشر', 'بيان وإعلان عام', title, { col: 'announcements', id });
                 toast(cur ? 'تم تحديث البيان بنجاح' : 'تم نشر البيان على الصفحة الرئيسية بنجاح', 'success');
                 openAnnouncementsManager();
+                return false; // keep the newly opened manager modal open
             } catch (err) {
                 console.error(err);
                 toast('تعذر حفظ البيان. تأكد من نشر قواعد قاعدة البيانات الجديدة', 'error');
+                return false;
             }
         }
 
@@ -12824,7 +12871,7 @@
             const a = annList.find(x => x.id === annId);
             if (!a) return toast('البيان غير موجود', 'error');
             const activeTab = tab || 'all';
-            openModal('تقرير الموافقات والاعتراضات', `<div class="py-8 text-center text-slate-400 text-sm">جاري تحميل الردود...</div>`, 'max-w-3xl');
+            openModal({ title: 'تقرير الموافقات والاعتراضات', size: 'lg', body: `<div class="py-8 text-center text-slate-400 text-sm">جاري تحميل الردود...</div>` });
             try {
                 const respMap = (await rtdb.ref('announcementResponses/' + annId).once('value')).val() || {};
                 const rev = Number(a.revision) || 1;
@@ -12845,7 +12892,6 @@
                         pending.push({ uid: u.id, name: u.name, roleName: annRoleNameById(u.roleId), status: 'pending', reason: '', at: '' });
                     }
                 });
-                // Include any responders outside current directory snapshot
                 Object.entries(respMap).forEach(([uidKey, r]) => {
                     if (seenUids.has(uidKey) || !r || (Number(r.revision) || 1) < rev) return;
                     const row = { uid: uidKey, name: r.userName || uidKey, roleName: r.roleName || annRoleNameById(r.roleId), status: r.status, reason: r.reason || '', at: r.at || '' };
@@ -12889,35 +12935,39 @@
                 </div>`;
             }).join('') : '<div class="text-center py-6 text-slate-400 text-sm">لا توجد عناصر في هذا التصنيف</div>';
 
-            openModal('تقرير الموافقات والاعتراضات', `<div class="space-y-4">
-                <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
-                    <div class="font-extrabold text-slate-900">${esc(a.title || '')}</div>
-                    <div class="text-xs text-slate-500 mt-1">الفئة المستهدفة: <b>${esc(annAudienceLabel(a))}</b> · النسخة #${Number(a.revision) || 1}</div>
-                    <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                        <div class="rounded-xl bg-white border border-slate-200 p-2"><div class="text-[11px] text-slate-500">المستهدفون</div><div class="text-lg font-extrabold text-slate-800">${total}</div></div>
-                        <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2"><div class="text-[11px] text-emerald-700">✅ موافقون</div><div class="text-lg font-extrabold text-emerald-700">${approved.length}</div></div>
-                        <div class="rounded-xl bg-rose-50 border border-rose-200 p-2"><div class="text-[11px] text-rose-700">✋ معترضون</div><div class="text-lg font-extrabold text-rose-700">${objected.length}</div></div>
-                        <div class="rounded-xl bg-amber-50 border border-amber-200 p-2"><div class="text-[11px] text-amber-700">⏳ لم يردّوا</div><div class="text-lg font-extrabold text-amber-700">${pending.length}</div></div>
+            openModal({
+                title: 'تقرير الموافقات والاعتراضات',
+                size: 'lg',
+                body: `<div class="space-y-4">
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
+                        <div class="font-extrabold text-slate-900">${esc(a.title || '')}</div>
+                        <div class="text-xs text-slate-500 mt-1">الفئة المستهدفة: <b>${esc(annAudienceLabel(a))}</b> · النسخة #${Number(a.revision) || 1}</div>
+                        <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                            <div class="rounded-xl bg-white border border-slate-200 p-2"><div class="text-[11px] text-slate-500">المستهدفون</div><div class="text-lg font-extrabold text-slate-800">${total}</div></div>
+                            <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2"><div class="text-[11px] text-emerald-700">✅ موافقون</div><div class="text-lg font-extrabold text-emerald-700">${approved.length}</div></div>
+                            <div class="rounded-xl bg-rose-50 border border-rose-200 p-2"><div class="text-[11px] text-rose-700">✋ معترضون</div><div class="text-lg font-extrabold text-rose-700">${objected.length}</div></div>
+                            <div class="rounded-xl bg-amber-50 border border-amber-200 p-2"><div class="text-[11px] text-amber-700">⏳ لم يردّوا</div><div class="text-lg font-extrabold text-amber-700">${pending.length}</div></div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="flex justify-between text-[11px] font-bold text-slate-600 mb-1"><span>نسبة الاستجابة</span><span>${pct}% (${done}/${total})</span></div>
+                            <div class="h-2 rounded-full bg-slate-200 overflow-hidden"><div class="h-full bg-brand-600 rounded-full" style="width:${pct}%"></div></div>
+                        </div>
                     </div>
-                    <div class="mt-3">
-                        <div class="flex justify-between text-[11px] font-bold text-slate-600 mb-1"><span>نسبة الاستجابة</span><span>${pct}% (${done}/${total})</span></div>
-                        <div class="h-2 rounded-full bg-slate-200 overflow-hidden"><div class="h-full bg-brand-600 rounded-full" style="width:${pct}%"></div></div>
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="flex flex-wrap gap-1.5">
+                            ${tabBtn('all', `الكل (${total})`)}
+                            ${tabBtn('objected', `المعترضون (${objected.length})`)}
+                            ${tabBtn('pending', `لم يردّوا (${pending.length})`)}
+                            ${tabBtn('approved', `الموافقون (${approved.length})`)}
+                        </div>
+                        <button type="button" onclick="printAnnouncementReport()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-print"></i> طباعة التقرير A4</button>
                     </div>
-                </div>
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div class="flex flex-wrap gap-1.5">
-                        ${tabBtn('all', `الكل (${total})`)}
-                        ${tabBtn('objected', `المعترضون (${objected.length})`)}
-                        ${tabBtn('pending', `لم يردّوا (${pending.length})`)}
-                        ${tabBtn('approved', `الموافقون (${approved.length})`)}
+                    <div class="space-y-2 max-h-[42vh] overflow-y-auto pr-1">${rowsHtml}</div>
+                    <div class="flex justify-start pt-2 border-t border-slate-100">
+                        <button type="button" onclick="openAnnouncementsManager()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-arrow-right"></i> رجوع لقائمة البيانات</button>
                     </div>
-                    <button type="button" onclick="printAnnouncementReport()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-print"></i> طباعة التقرير A4</button>
-                </div>
-                <div class="space-y-2 max-h-[45vh] overflow-y-auto pr-1">${rowsHtml}</div>
-                <div class="flex justify-end pt-2 border-t border-slate-200">
-                    <button type="button" onclick="openAnnouncementsManager()" class="${BTN_SECONDARY}">رجوع لقائمة البيانات</button>
-                </div>
-            </div>`, 'max-w-3xl');
+                </div>`
+            });
         }
 
         function printAnnouncementReport() {
@@ -15948,5 +15998,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fbdb29ef171498',t:'MTc5NTU1OTQwNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fbdb29ef171498',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fbf09e19f56e79',t:'MTc5NTU2MDI4Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fbf09e19f56e79',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
