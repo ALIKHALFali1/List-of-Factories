@@ -774,6 +774,11 @@
             { title: 'الشحن والنقل', items: [
                 ['shipping.view', 'عرض جدول الشحن وشاشة العرض'],
                 ['shipping.manage', 'تعديل جدول الشحن ومواعيده']
+            ] },
+            { title: 'المديونيات والتحصيل', items: [
+                ['debts.view', 'عرض قسم المديونيات وسجل الإجراءات والتعليقات والطباعة'],
+                ['debts.manage', 'إضافة وتعديل المديونيات وتسجيل الدفعات واتخاذ الإجراءات والتصعيد'],
+                ['debts.delete', 'حذف ملفات المديونيات']
             ] }
         ];
         const ALL_PERMS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i[0]));
@@ -787,6 +792,7 @@
             checks: { title: 'الشيكات', icon: 'fa-money-check-dollar', perm: 'checks.view' },
             orders: { title: 'الطلبيات', icon: 'fa-truck-ramp-box', perm: 'orders.view' },
             customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
+            debts: { title: 'المديونيات والتحصيل', icon: 'fa-scale-balanced', perm: 'debts.view' },
             chat: { title: 'المحادثات', icon: 'fa-comments', perm: 'chat.use' },
             complaints: { title: 'الشكاوي والتقييم', icon: 'fa-clipboard-check', perm: 'complaints.file' },
             expenses: { title: 'المصروفات وأذونات الصرف', icon: 'fa-money-bill-wave', perm: 'expenses.request' },
@@ -795,7 +801,7 @@
             shipping: { title: 'الشحن والنقل', icon: 'fa-truck', perm: 'shipping.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'chat', 'complaints', 'expenses', 'shipping', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'debts', 'chat', 'complaints', 'expenses', 'shipping', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -1713,7 +1719,7 @@
         // One entry is written for every saved change (and every PDF change), by the user who made it.
         // Everyone else who is signed in sees it in the bell. The activity log (logs) stays limited to logs.view.
         const NOTIF_LIMIT = 50;
-        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب', shipping: 'شحنة' };
+        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب', shipping: 'شحنة', debts: 'مديونية', debtComments: 'تعليق مديونية' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
         let notifs = [];                 // newest first, merged from personal inbox + permitted section feeds
         let notifUnsubs = [];
@@ -1728,6 +1734,7 @@
             { key: 'orders',    check: () => can('orders.view') },
             { key: 'customers', check: () => canCust('view') && (isSystemAdmin() || !currentRepId()) },
             { key: 'shipping',  check: () => can('shipping.view') },
+            { key: 'debts',     check: () => can('debts.view') || can('debts.manage') || can('debts.delete') },
             { key: 'users',     check: () => can('users.manage') },
             { key: 'settings',  check: () => can('settings.manage') }
         ];
@@ -1740,6 +1747,7 @@
             if (col.startsWith('order')) return 'orders';
             if (col === 'custOrders' || col === 'custReps' || col === 'custComments') return 'customers';
             if (col === 'shipping' || col === 'shippingConfig') return 'shipping';
+            if (col === 'debts' || col === 'debtComments') return 'debts';
             if (col === 'users' || col === 'roles') return 'users';
             if (col === 'settings') return 'settings';
             return null;
@@ -2037,6 +2045,7 @@
             if (t.col === 'settings') return () => navigate('settings');
             if (t.col === 'custReps') return () => { if (!notifGuard('customers')) return; navigate('customers'); setTimeout(() => { if (canCust('manage')) openCustRepsModal(); }, 350); };
             if (t.col === 'shipping') return () => { if (notifGuard('shipping')) navigate('shipping'); };
+            if (t.col === 'debts' || t.col === 'debtComments') return () => { if (!notifGuard('debts')) return; navigate('debts'); if (t.id) setTimeout(() => { if (t.col === 'debtComments') openDebtComments(t.id); else openDebtDetail(t.id); }, 350); };
             // إشعارات قديمة من غير هدف محفوظ: نستنتج الوجهة من النوع والتفاصيل
             const kind = n.kind || '', detail = n.detail || '';
             const num = (detail.match(/\d+/) || [])[0];
@@ -2252,6 +2261,7 @@
             startNotifSync();
             chatStop(); chatStart();
             expStop(); expStart();
+            debtStop(); debtStart();
         }
 
         function stopSync() {
@@ -2281,6 +2291,7 @@
             chatStop();
             cmpStop();
             expStop();
+            debtStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -4120,6 +4131,7 @@
             if (name === 'chat') return chatCan();
             if (name === 'complaints') return can('complaints.file') || can('complaints.manage');
             if (name === 'expenses') return can('expenses.request') || can('expenses.approve') || isSystemAdmin();
+            if (name === 'debts') return can('debts.view') || can('debts.manage') || can('debts.delete');
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -10229,9 +10241,1090 @@
             return false;
         }
 
+
+        // ============ قسم المديونيات والتحصيل (العملاء المتأخرين والمتهربين) ============
+        const DEBT_STAGES = [
+            ['followup',     'متابعة ودّية',       'sky',     'fa-phone',                  '#0284c7'],
+            ['warning',      'إنذار أول',           'amber',   'fa-triangle-exclamation',   '#d97706'],
+            ['final_notice', 'إنذار نهائي حاد',     'orange',  'fa-bullhorn',               '#ea580c'],
+            ['suspended',    'إيقاف التعامل',       'rose',    'fa-ban',                    '#e11d48'],
+            ['legal',        'إجراء قانوني',        'purple',  'fa-gavel',                  '#7c3aed'],
+            ['settled',      'تم السداد بالكامل',   'emerald', 'fa-circle-check',           '#059669']
+        ];
+        const DEBT_STAGE_CLS = {
+            sky:     'bg-sky-50 border-sky-300 text-sky-800',
+            amber:   'bg-amber-50 border-amber-300 text-amber-800',
+            orange:  'bg-orange-50 border-orange-300 text-orange-800',
+            rose:    'bg-rose-50 border-rose-300 text-rose-800',
+            purple:  'bg-purple-50 border-purple-300 text-purple-800',
+            emerald: 'bg-emerald-50 border-emerald-300 text-emerald-800'
+        };
+        const DEBT_PRINT_BG = { sky: '#e0f2fe', amber: '#fef3c7', orange: '#ffedd5', rose: '#ffe4e6', purple: '#f3e8ff', emerald: '#d1fae5' };
+        const DEBT_SOURCES = [
+            ['old_balance',      'رصيد قديم متأخر'],
+            ['unpaid_invoice',   'متبقي فواتير سابقة'],
+            ['goods_no_invoice', 'بضاعة بدون فاتورة / آجل'],
+            ['bounced_check',    'شيك مرتد / بدون رصيد'],
+            ['trust_receipt',    'إيصال أمانة / كمبيالة'],
+            ['other',            'مديونية أخرى']
+        ];
+        const DEBT_ACTION_TYPES = [
+            ['call_answered',   '📞 مكالمة — تم الرد',              'sky',     null],
+            ['call_no_answer',  '📵 مكالمة — لا يرد / تهرب',        'rose',    null],
+            ['call_blocked',    '🚫 أغلق الهاتف / حظر الرقم',       'rose',    null],
+            ['promise',         '🤝 وعد بالسداد في موعد محدد',      'amber',   null],
+            ['broken_promise',  '❌ أخلّ بوعد السداد (مماطلة)',     'orange',  'warning'],
+            ['visit',           '🚗 زيارة ميدانية / تحصيل',         'sky',     null],
+            ['warning_sent',    '⚠️ توجيه إنذار رسمي',              'amber',   'warning'],
+            ['final_warning',   '🚨 إنذار نهائي حاد قبل القانوني',  'orange',  'final_notice'],
+            ['suspend',         '🛑 إيقاف التعامل ومنع أي بضاعة',   'rose',    'suspended'],
+            ['legal_prep',      '📁 تجهيز ملف الشؤون القانونية',    'purple',  'legal'],
+            ['legal_filed',     '⚖️ تحرير محضر / رفع قضية رسمياً',  'purple',  'legal'],
+            ['whatsapp',        '💬 رسالة واتساب حادة',             'orange',  null],
+            ['payment',         '💵 دفعة سداد',                     'emerald', null],
+            ['other',           '📝 إجراء / متابعة أخرى',           'sky',     null]
+        ];
+
+        let debtList = [];
+        let debtCommentsMap = {}; // { [debtId]: [comment, ...] }
+        let debtUnsub = null, debtCmtUnsub = null;
+        let debtStarted = false;
+        let debtFilterQ = '', debtFilterStage = 'active', debtFilterSource = '', debtFilterEvading = false, debtSort = 'remaining';
+        let debtLogCustomer = '', debtLogStage = '', debtLogType = '', debtLogEvading = false, debtLogQ = '';
+
+        const debtCanView   = () => can('debts.view') || can('debts.manage') || can('debts.delete');
+        const debtCanManage = () => can('debts.manage');
+        const debtCanDelete = () => can('debts.delete');
+        const debtStageInfo = k => DEBT_STAGES.find(s => s[0] === k) || DEBT_STAGES[0];
+        const debtSourceLabel = k => (DEBT_SOURCES.find(s => s[0] === k) || ['', 'مديونية'])[1];
+        const debtRemaining = d => Math.max(0, r2(numOr0(d?.totalAmount) - numOr0(d?.paidAmount)));
+        const debtArrayify = v => Array.isArray(v) ? v.filter(Boolean) : (v && typeof v === 'object' ? Object.values(v).filter(Boolean) : []);
+        const debtDaysOverdue = d => {
+            if (!d || d.stage === 'settled' || debtRemaining(d) <= 0) return 0;
+            const refDate = d.dueDate || d.originDate || String(d.createdAt || '').slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(refDate)) return 0;
+            const ms = Date.now() - new Date(refDate + 'T00:00:00').getTime();
+            return Math.max(0, Math.floor(ms / 86400000));
+        };
+        const debtFmtDateTime = iso => {
+            if (!iso) return '';
+            const d = new Date(iso);
+            if (isNaN(d)) return '';
+            return fmtWaDate(toISODate(d)) + ' · ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        };
+
+        function debtStart() {
+            if (debtStarted || !rtdb || !fbUser || !debtCanView()) return;
+            debtStarted = true;
+            const dRef = rtdb.ref('debts');
+            const dCb = snap => {
+                const val = snap.val() || {};
+                debtList = Object.entries(val).map(([id, v]) => {
+                    const obj = (v && typeof v === 'object') ? v : {};
+                    return {
+                        ...obj,
+                        id,
+                        totalAmount: numOr0(obj.totalAmount),
+                        paidAmount: numOr0(obj.paidAmount),
+                        stage: DEBT_STAGES.some(s => s[0] === obj.stage) ? obj.stage : 'followup',
+                        evading: obj.evading === true,
+                        payments: debtArrayify(obj.payments).sort((a, b) => String(b.date || b.at || '').localeCompare(String(a.date || a.at || ''))),
+                        events: debtArrayify(obj.events).sort((a, b) => String(a.t || '').localeCompare(String(b.t || '')))
+                    };
+                });
+                const r = parseRoute();
+                if (r.name === 'debts') {
+                    if (r.param === 'log') renderDebtLog();
+                    else render();
+                }
+            };
+            dRef.on('value', dCb, err => console.warn('debts listener', err && err.code));
+            debtUnsub = () => { try { dRef.off('value', dCb); } catch (e) { /* noop */ } };
+
+            const cRef = rtdb.ref('debtComments');
+            const cCb = snap => {
+                const val = snap.val() || {};
+                const next = {};
+                Object.entries(val).forEach(([did, bucket]) => {
+                    if (bucket && typeof bucket === 'object') {
+                        next[did] = Object.entries(bucket)
+                            .map(([cid, cv]) => ({ id: cid, debtId: did, ...(cv || {}) }))
+                            .sort((a, b) => String(a.t || '').localeCompare(String(b.t || '')));
+                    }
+                });
+                debtCommentsMap = next;
+                const cmtHost = document.getElementById('debtCommentsList');
+                if (cmtHost && cmtHost.dataset.debtId) renderDebtCommentsModalBody(cmtHost.dataset.debtId);
+                const r = parseRoute();
+                if (r.name === 'debts') {
+                    if (r.param === 'log') renderDebtLog();
+                    else if (!cmtHost) render();
+                }
+            };
+            cRef.on('value', cCb, err => console.warn('debtComments listener', err && err.code));
+            debtCmtUnsub = () => { try { cRef.off('value', cCb); } catch (e) { /* noop */ } };
+        }
+
+        function debtStop() {
+            if (debtUnsub) { try { debtUnsub(); } catch (e) { /* noop */ } debtUnsub = null; }
+            if (debtCmtUnsub) { try { debtCmtUnsub(); } catch (e) { /* noop */ } debtCmtUnsub = null; }
+            debtStarted = false;
+            debtList = [];
+            debtCommentsMap = {};
+        }
+
+        function debtSaveFailed(err) {
+            console.error('debt save failed', err);
+            const denied = err && (err.code === 'permission-denied' || /permission_denied/i.test(String(err.message || err)));
+            toast(denied ? 'السيرفر رفض العملية: تأكد من تحديث قواعد database.rules.json وصلاحيات المديونيات' : 'تعذر حفظ التعديل على السيرفر', 'error', null, 7000);
+        }
+
+        function debtStageBadge(stageKey) {
+            const [, label, col, icon] = debtStageInfo(stageKey);
+            return `<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold border whitespace-nowrap ${DEBT_STAGE_CLS[col]}"><i class="fa-solid ${icon} text-[10px]"></i>${esc(label)}</span>`;
+        }
+
+        function debtStageSteps(stageKey) {
+            const idx = Math.max(0, DEBT_STAGES.findIndex(s => s[0] === stageKey));
+            return `<div class="flex items-center gap-1 mt-2" aria-hidden="true">${DEBT_STAGES.map(([k, label, , , hex], i) => `${i ? `<span class="w-5 h-0.5 rounded ${i <= idx ? (stageKey === 'settled' ? 'bg-emerald-400' : 'bg-rose-400') : 'bg-slate-200'}"></span>` : ''}<span class="w-2.5 h-2.5 rounded-full border-2 shrink-0" style="border-color:${hex};${i <= idx ? `background:${hex}` : 'background:#fff'}" title="${label}"></span>`).join('')}</div>`;
+        }
+
+        function debtEventColor(ev) {
+            if (!ev) return '#64748b';
+            if (ev.type === 'payment') return '#059669';
+            if (ev.type === 'legal_prep' || ev.type === 'legal_filed' || ev.stage === 'legal') return '#7c3aed';
+            if (ev.type === 'suspend' || ev.type === 'call_no_answer' || ev.type === 'call_blocked' || ev.stage === 'suspended') return '#e11d48';
+            if (ev.type === 'whatsapp' || ev.type === 'final_warning' || ev.type === 'broken_promise' || ev.stage === 'final_notice') return '#ea580c';
+            if (ev.type === 'warning_sent' || ev.type === 'promise' || ev.stage === 'warning') return '#d97706';
+            return '#0284c7';
+        }
+
+        function filteredDebts() {
+            const q = debtFilterQ.trim().toLowerCase();
+            return debtList.filter(d => {
+                if (debtFilterStage === 'active' && d.stage === 'settled') return false;
+                else if (debtFilterStage && debtFilterStage !== 'active' && d.stage !== debtFilterStage) return false;
+                if (debtFilterSource && d.sourceType !== debtFilterSource) return false;
+                if (debtFilterEvading && !d.evading) return false;
+                if (q) {
+                    const hay = `${d.customer || ''} ${d.phone || ''} ${d.altPhone || ''} ${d.address || ''} ${d.repName || ''} ${d.reason || ''} ${d.refNo || ''} ${d.notes || ''}`.toLowerCase();
+                    if (!hay.includes(q)) return false;
+                }
+                return true;
+            }).sort((a, b) => {
+                if (debtSort === 'overdue') return debtDaysOverdue(b) - debtDaysOverdue(a) || debtRemaining(b) - debtRemaining(a);
+                if (debtSort === 'recent') return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+                return debtRemaining(b) - debtRemaining(a) || debtDaysOverdue(b) - debtDaysOverdue(a);
+            });
+        }
+
+        function viewDebts() {
+            debtStart();
+            const rows = filteredDebts();
+            const activeRows = debtList.filter(d => d.stage !== 'settled' && debtRemaining(d) > 0);
+            const sumTotal = r2(debtList.reduce((a, d) => a + numOr0(d.totalAmount), 0));
+            const sumPaid  = r2(debtList.reduce((a, d) => a + numOr0(d.paidAmount), 0));
+            const sumRem   = r2(debtList.reduce((a, d) => a + debtRemaining(d), 0));
+            const evadingCount = activeRows.filter(d => d.evading).length;
+            const escalatedCount = activeRows.filter(d => d.stage === 'suspended' || d.stage === 'legal').length;
+
+            const kpi = (label, val, sub, cls, borderCls) => `<div class="bg-white rounded-2xl border-2 ${borderCls} shadow-sm p-3.5">
+                <p class="text-xs font-bold text-slate-500">${label}</p>
+                <p class="text-lg font-black ${cls} mt-0.5 whitespace-nowrap">${val}</p>
+                ${sub ? `<p class="text-[11px] font-semibold text-slate-400 mt-0.5">${sub}</p>` : ''}
+            </div>`;
+
+            const kpis = `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                ${kpi('إجمالي المديونيات', fmtMoney(sumTotal), debtList.length + ' ملف مسجّل', 'text-slate-800', 'border-slate-200')}
+                ${kpi('إجمالي المحصّل', fmtMoney(sumPaid), 'من أصل المديونيات', 'text-emerald-700', 'border-emerald-200')}
+                ${kpi('المتبقي الفعلي', fmtMoney(sumRem), activeRows.length + ' عميل نشط', 'text-rose-700', 'border-rose-300')}
+                ${kpi('عملاء متهربون 🚨', evadingCount, 'مماطلة / تهرب من السداد', 'text-rose-600', 'border-rose-300')}
+                ${kpi('إيقاف / قانوني ⚖️', escalatedCount, 'إجراءات مشددة', 'text-purple-700', 'border-purple-300')}
+            </div>`;
+
+            const stageOpts = [
+                ['active', 'المديونيات النشطة (غير مسددة)'],
+                ['', 'كل الحالات (شامل المسدد)'],
+                ...DEBT_STAGES.map(([k, l]) => [k, l])
+            ].map(([v, l]) => `<option value="${v}" ${debtFilterStage === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+
+            const srcOpts = [['', 'كل مصادر المديونية'], ...DEBT_SOURCES]
+                .map(([v, l]) => `<option value="${v}" ${debtFilterSource === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+
+            const sortOpts = [
+                ['remaining', 'الأعلى متبقي'],
+                ['overdue',   'الأقدم تأخيراً'],
+                ['recent',    'الأحدث تحديثاً']
+            ].map(([v, l]) => `<option value="${v}" ${debtSort === v ? 'selected' : ''}>ترتيب: ${esc(l)}</option>`).join('');
+
+            const toolbar = `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-3.5 mb-4 space-y-3">
+                <div class="flex flex-wrap items-center gap-2">
+                    ${debtCanManage() ? btn('openDebtModal()', 'إضافة مديونية عميل', 'fa-plus', BTN_PRIMARY + ' !bg-rose-600 hover:!bg-rose-700') : ''}
+                    ${btn("navigate('debts/log')", 'سجل متابعة وإجراءات المديونيات', 'fa-route', BTN_SECONDARY + ' !bg-slate-800 !text-white hover:!bg-slate-900')}
+                    ${btn('printDebtList()', 'طباعة الكشف', 'fa-print', BTN_SECONDARY)}
+                    ${btn('exportDebtList()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+                    <div class="relative">
+                        <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                        <input type="search" value="${esc(debtFilterQ)}" oninput="debtFilterQ=this.value; render()" placeholder="بحث بالعميل، التليفون، السبب..." class="${INPUT_CLS} pr-9">
+                    </div>
+                    <select onchange="debtFilterStage=this.value; render()" class="${INPUT_CLS}">${stageOpts}</select>
+                    <select onchange="debtFilterSource=this.value; render()" class="${INPUT_CLS}">${srcOpts}</select>
+                    <select onchange="debtSort=this.value; render()" class="${INPUT_CLS}">${sortOpts}</select>
+                    <label class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm font-bold ${debtFilterEvading ? 'bg-rose-50 border-rose-400 text-rose-700' : 'bg-slate-50 border-slate-200 text-slate-600'}">
+                        <input type="checkbox" ${debtFilterEvading ? 'checked' : ''} onchange="debtFilterEvading=this.checked; render()" class="w-4 h-4 accent-rose-600">
+                        <span>المتهربون فقط 🚨</span>
+                    </label>
+                </div>
+            </div>`;
+
+            const rowActions = d => {
+                const id = esc(d.id);
+                const cmtCount = (debtCommentsMap[d.id] || []).length;
+                return `<div class="flex items-center justify-center gap-1 flex-wrap">
+                    <button type="button" onclick="openDebtDetail('${id}')" title="عرض الملف والسجل" class="${BTN_ICON} text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
+                    ${debtCanManage() ? `<button type="button" onclick="openDebtActionModal('${id}')" title="تسجيل إجراء / تصعيد ضد العميل" class="${BTN_ICON} text-orange-600 hover:text-orange-700 hover:bg-orange-50"><i class="fa-solid fa-bolt"></i></button>` : ''}
+                    ${debtCanManage() && debtRemaining(d) > 0 ? `<button type="button" onclick="openDebtPaymentModal('${id}')" title="تسجيل دفعة سداد" class="${BTN_ICON} text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"><i class="fa-solid fa-money-bill-wave"></i></button>` : ''}
+                    <button type="button" onclick="openDebtComments('${id}')" title="التعليقات والملاحظات" class="${BTN_ICON} relative text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-comments"></i>${cmtCount ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-brand-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${cmtCount}</span>` : ''}</button>
+                    ${d.phone ? `<button type="button" onclick="openDebtWhatsAppModal('${id}')" title="إرسال إنذار واتساب حاد" class="${BTN_ICON} text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
+                    ${debtCanManage() ? `<button type="button" onclick="openDebtModal('${id}')" title="تعديل البيانات" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                    ${debtCanDelete() ? `<button type="button" onclick="deleteDebt('${id}')" title="حذف الملف" class="${BTN_ICON} text-slate-400 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                </div>`;
+            };
+
+            let bodyHtml = '';
+            if (!rows.length) {
+                bodyHtml = `<div class="bg-white rounded-2xl border-2 border-slate-200 p-10 text-center text-slate-500 font-bold">
+                    <i class="fa-solid fa-scale-balanced text-3xl text-slate-300 mb-2 block"></i>
+                    مفيش مديونيات مطابقة للبحث الحالي
+                </div>`;
+            } else {
+                const tableHtml = `<div class="hidden md:block bg-white rounded-2xl border-2 border-slate-200 shadow-sm overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-200">
+                            <tr>
+                                <th class="py-3 px-3 text-start">العميل</th>
+                                <th class="py-3 px-3 text-start">المصدر والسبب</th>
+                                <th class="py-3 px-3 text-start">التواريخ والتأخير</th>
+                                <th class="py-3 px-3 text-start">الإجمالي</th>
+                                <th class="py-3 px-3 text-start">المدفوع</th>
+                                <th class="py-3 px-3 text-start">المتبقي</th>
+                                <th class="py-3 px-3 text-start">المرحلة / التصعيد</th>
+                                <th class="py-3 px-3 text-start">آخر إجراء</th>
+                                <th class="py-3 px-3 text-center">إجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200">
+                            ${rows.map(d => {
+                                const rem = debtRemaining(d);
+                                const days = debtDaysOverdue(d);
+                                const lastEv = d.events.length ? d.events[d.events.length - 1] : null;
+                                return `<tr class="hover:bg-slate-50 ${d.evading && rem > 0 ? 'bg-rose-50/30' : ''}">
+                                    <td class="py-3 px-3">
+                                        <div class="font-black text-slate-800 flex items-center gap-1.5 flex-wrap">
+                                            <span>${esc(d.customer)}</span>
+                                            ${d.evading && rem > 0 ? '<span class="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black">🚨 متهرب</span>' : ''}
+                                        </div>
+                                        ${d.phone ? `<div class="text-xs text-slate-500 font-mono" dir="ltr">${esc(d.phone)}${d.altPhone ? ' · ' + esc(d.altPhone) : ''}</div>` : ''}
+                                        ${d.repName ? `<div class="text-[11px] text-slate-400">المندوب: ${esc(d.repName)}</div>` : ''}
+                                    </td>
+                                    <td class="py-3 px-3">
+                                        <div class="text-xs font-bold text-slate-700">${esc(debtSourceLabel(d.sourceType))}</div>
+                                        <div class="text-xs text-slate-500 line-clamp-2">${esc(d.reason || '—')}</div>
+                                        ${d.refNo ? `<div class="text-[11px] font-mono text-slate-400">مستند: ${esc(d.refNo)}</div>` : ''}
+                                    </td>
+                                    <td class="py-3 px-3 whitespace-nowrap text-xs">
+                                        ${d.originDate ? `<div class="text-slate-600">بداية: ${esc(fmtWaDate(d.originDate))}</div>` : ''}
+                                        ${d.dueDate ? `<div class="text-slate-600">استحقاق: ${esc(fmtWaDate(d.dueDate))}</div>` : ''}
+                                        ${days > 0 ? `<span class="inline-block mt-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-black text-[11px]">متأخر ${days} يوم</span>` : (rem === 0 ? '<span class="inline-block mt-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-[11px]">مسدد</span>' : '')}
+                                    </td>
+                                    <td class="py-3 px-3 font-mono font-bold text-slate-700 whitespace-nowrap">${fmtMoney(d.totalAmount)}</td>
+                                    <td class="py-3 px-3 font-mono font-bold text-emerald-700 whitespace-nowrap">${fmtMoney(d.paidAmount)}</td>
+                                    <td class="py-3 px-3 font-mono font-black ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'} whitespace-nowrap">${fmtMoney(rem)}</td>
+                                    <td class="py-3 px-3">
+                                        ${debtStageBadge(d.stage)}
+                                        ${debtStageSteps(d.stage)}
+                                    </td>
+                                    <td class="py-3 px-3 text-xs max-w-[13rem]">
+                                        ${lastEv ? `<div class="font-bold text-slate-700 truncate">${esc(lastEv.actionLabel || 'متابعة')}</div><div class="text-slate-500 truncate">${esc(lastEv.detail || '')}</div><div class="text-[10px] text-slate-400">${esc(debtFmtDateTime(lastEv.t))}</div>` : '<span class="text-slate-400">لا توجد إجراءات بعد</span>'}
+                                    </td>
+                                    <td class="py-3 px-3">${rowActions(d)}</td>
+                                </tr>`;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+
+                const cardsHtml = `<div class="md:hidden space-y-3">
+                    ${rows.map(d => {
+                        const rem = debtRemaining(d);
+                        const days = debtDaysOverdue(d);
+                        const lastEv = d.events.length ? d.events[d.events.length - 1] : null;
+                        return `<article class="bg-white rounded-2xl border-2 ${d.evading && rem > 0 ? 'border-rose-300' : 'border-slate-200'} shadow-sm p-3.5 space-y-2.5">
+                            <div class="flex items-start justify-between gap-2">
+                                <div>
+                                    <div class="font-black text-slate-800 flex items-center gap-1.5 flex-wrap">
+                                        <span>${esc(d.customer)}</span>
+                                        ${d.evading && rem > 0 ? '<span class="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black">🚨 متهرب</span>' : ''}
+                                    </div>
+                                    ${d.phone ? `<div class="text-xs font-mono text-slate-500" dir="ltr">${esc(d.phone)}</div>` : ''}
+                                </div>
+                                ${debtStageBadge(d.stage)}
+                            </div>
+                            <div class="text-xs text-slate-600">${esc(debtSourceLabel(d.sourceType))}${d.reason ? ' — ' + esc(d.reason) : ''}</div>
+                            <div class="grid grid-cols-3 gap-2 bg-slate-50 rounded-xl p-2 text-center text-xs">
+                                <div><span class="text-slate-400 block">الإجمالي</span><b class="font-mono text-slate-800">${fmtMoney(d.totalAmount)}</b></div>
+                                <div><span class="text-slate-400 block">المدفوع</span><b class="font-mono text-emerald-700">${fmtMoney(d.paidAmount)}</b></div>
+                                <div><span class="text-slate-400 block">المتبقي</span><b class="font-mono text-rose-700">${fmtMoney(rem)}</b></div>
+                            </div>
+                            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <span>${d.originDate ? 'بداية: ' + esc(fmtWaDate(d.originDate)) : ''}</span>
+                                ${days > 0 ? `<span class="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-black">متأخر ${days} يوم</span>` : ''}
+                            </div>
+                            ${lastEv ? `<div class="text-xs bg-slate-50 rounded-lg p-2 border-r-2 border-orange-400"><b>${esc(lastEv.actionLabel || 'متابعة')}:</b> ${esc(lastEv.detail || '')} <span class="text-slate-400">(${esc(debtFmtDateTime(lastEv.t))})</span></div>` : ''}
+                            <div class="pt-2 border-t border-slate-100">${rowActions(d)}</div>
+                        </article>`;
+                    }).join('')}
+                </div>`;
+                bodyHtml = tableHtml + cardsHtml;
+            }
+
+            return {
+                title: 'المديونيات والتحصيل',
+                actions: '',
+                html: `<div>${kpis}${toolbar}${bodyHtml}</div>`
+            };
+        }
+
+        function openDebtModal(editId) {
+            if (!debtCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const d = editId ? debtList.find(x => x.id === editId) : null;
+            const repOptions = ['<option value="">— بدون مندوب —</option>', ...(appData.custReps || []).map(r => `<option value="${esc(r.name)}" ${d && d.repName === r.name ? 'selected' : ''}>${esc(r.name)}</option>`)].join('');
+            openModal({
+                title: d ? `تعديل مديونية: ${esc(d.customer)}` : 'إضافة ملف مديونية عميل جديد',
+                submitText: d ? 'حفظ التعديلات' : 'حفظ المديونية',
+                size: 'lg',
+                body: `
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('اسم العميل *', `<input name="customer" required value="${esc(d ? d.customer : '')}" class="${INPUT_CLS}" placeholder="الاسم الكامل للعميل">`)}
+                        ${field('رقم التليفون / الواتساب *', `<input name="phone" required dir="ltr" value="${esc(d ? d.phone : '')}" class="${INPUT_CLS}" placeholder="010xxxxxxxx">`)}
+                        ${field('رقم بديل أو رقم الضامن', `<input name="altPhone" dir="ltr" value="${esc(d ? d.altPhone : '')}" class="${INPUT_CLS}" placeholder="اختياري">`)}
+                        ${field('العنوان / المنطقة', `<input name="address" value="${esc(d ? d.address : '')}" class="${INPUT_CLS}" placeholder="المحافظة / العنوان">`)}
+                        ${field('مصدر المديونية', `<select name="sourceType" class="${INPUT_CLS}">${DEBT_SOURCES.map(([v, l]) => `<option value="${v}" ${(d ? d.sourceType : 'old_balance') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
+                        ${field('رقم مستند / إيصال أمانة / شيك', `<input name="refNo" value="${esc(d ? d.refNo : '')}" class="${INPUT_CLS}" placeholder="اختياري">`)}
+                        ${field('إجمالي المديونية (ج.م) *', `<input name="totalAmount" type="number" step="0.01" min="0" required dir="ltr" value="${d ? d.totalAmount : ''}" class="${INPUT_CLS}">`)}
+                        ${field('المدفوع حتى الآن (ج.م)', `<input name="paidAmount" type="number" step="0.01" min="0" dir="ltr" value="${d ? d.paidAmount : 0}" class="${INPUT_CLS}">`)}
+                        ${field('تاريخ بداية المديونية', `<input name="originDate" type="date" value="${esc(d ? d.originDate : todayISO())}" class="${INPUT_CLS}">`)}
+                        ${field('تاريخ الاستحقاق / آخر مهلة', `<input name="dueDate" type="date" value="${esc(d ? d.dueDate : '')}" class="${INPUT_CLS}">`)}
+                        ${field('مرحلة التصعيد الحالية', `<select name="stage" class="${INPUT_CLS}">${DEBT_STAGES.map(([v, l]) => `<option value="${v}" ${(d ? d.stage : 'followup') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
+                        ${field('المندوب المسؤول (اختياري)', `<select name="repName" class="${INPUT_CLS}">${repOptions}</select>`)}
+                    </div>
+                    ${field('سبب وتفاصيل المديونية *', `<input name="reason" required value="${esc(d ? d.reason : '')}" class="${INPUT_CLS}" placeholder="مثال: رصيد قديم من سنة 2025 / بضاعة آجل بدون فاتورة">`)}
+                    ${field('ملاحظات داخلية', `<textarea name="notes" rows="2" class="${INPUT_CLS}" placeholder="تفاصيل الضمانات أو تاريخ التعامل أو سلوك العميل...">${esc(d ? d.notes : '')}</textarea>`)}
+                    <label class="flex items-center gap-2.5 p-3 rounded-xl bg-rose-50 border border-rose-200 cursor-pointer">
+                        <input type="checkbox" name="evading" ${d && d.evading ? 'checked' : ''} class="w-4 h-4 accent-rose-600">
+                        <span class="text-sm font-bold text-rose-800">🚨 تصنيف العميل كـ «متهرب / مماطل في السداد»</span>
+                    </label>
+                `,
+                onSubmit: async fd => {
+                    const customer = String(fd.get('customer') || '').trim();
+                    const phone = String(fd.get('phone') || '').trim();
+                    const totalAmount = r2(Number(fd.get('totalAmount')) || 0);
+                    const paidAmount = r2(Number(fd.get('paidAmount')) || 0);
+                    const reason = String(fd.get('reason') || '').trim();
+                    if (!customer) return toast('اكتب اسم العميل', 'error'), false;
+                    if (!phone) return toast('اكتب رقم تليفون العميل', 'error'), false;
+                    if (totalAmount < 0 || paidAmount < 0) return toast('المبالغ لازم تكون أكبر من أو تساوي صفر', 'error'), false;
+                    if (!reason) return toast('اكتب سبب المديونية', 'error'), false;
+
+                    const me = currentUser();
+                    const now = new Date().toISOString();
+                    const id = d ? d.id : uid('DBT-');
+                    let stage = String(fd.get('stage') || 'followup');
+                    if (totalAmount > 0 && paidAmount >= totalAmount) stage = 'settled';
+                    const evading = fd.get('evading') === 'on';
+                    const events = d ? [...d.events] : [];
+                    if (!d) {
+                        events.push({
+                            id: uid('DE-'), t: now, type: 'create', stage,
+                            actionLabel: 'فتح ملف مديونية',
+                            detail: `مديونية بمبلغ ${fmtMoney(totalAmount)} (مدفوع ${fmtMoney(paidAmount)} · متبقي ${fmtMoney(Math.max(0, r2(totalAmount - paidAmount)))}) — ${reason}` + (evading ? ' [مصنّف متهرب 🚨]' : ''),
+                            by: me ? me.name : '', byId: fbUser.uid
+                        });
+                    } else {
+                        const changes = [];
+                        if (d.stage !== stage) changes.push(`تغيير المرحلة إلى "${debtStageInfo(stage)[1]}"`);
+                        if (d.totalAmount !== totalAmount) changes.push(`الإجمالي ${fmtMoney(d.totalAmount)} ← ${fmtMoney(totalAmount)}`);
+                        if (d.paidAmount !== paidAmount) changes.push(`المدفوع ${fmtMoney(d.paidAmount)} ← ${fmtMoney(paidAmount)}`);
+                        if (d.evading !== evading) changes.push(evading ? 'تصنيف كمتهرب 🚨' : 'إزالة صفة التهرب');
+                        events.push({
+                            id: uid('DE-'), t: now, type: 'edit', stage,
+                            actionLabel: 'تحديث بيانات الملف',
+                            detail: changes.length ? changes.join(' · ') : 'تحديث بيانات العميل والملاحظات',
+                            by: me ? me.name : '', byId: fbUser.uid
+                        });
+                    }
+                    const payload = {
+                        id, customer, phone,
+                        altPhone: String(fd.get('altPhone') || '').trim(),
+                        address: String(fd.get('address') || '').trim(),
+                        sourceType: String(fd.get('sourceType') || 'old_balance'),
+                        refNo: String(fd.get('refNo') || '').trim(),
+                        repName: String(fd.get('repName') || '').trim(),
+                        reason,
+                        notes: String(fd.get('notes') || '').trim(),
+                        originDate: String(fd.get('originDate') || '').trim(),
+                        dueDate: String(fd.get('dueDate') || '').trim(),
+                        totalAmount, paidAmount, stage, evading,
+                        nextActionDate: d ? (d.nextActionDate || '') : '',
+                        payments: d ? d.payments : [],
+                        events,
+                        createdBy: d ? (d.createdBy || '') : (me ? me.name : ''),
+                        createdById: d ? (d.createdById || fbUser.uid) : fbUser.uid,
+                        createdAt: d ? (d.createdAt || now) : now,
+                        updatedBy: me ? me.name : '',
+                        updatedAt: now
+                    };
+                    try {
+                        await rtdb.ref('debts/' + id).set(dbClean(payload));
+                        log(d ? 'تعديل مديونية' : 'إضافة مديونية', `${customer} — متبقي ${fmtMoney(Math.max(0, r2(totalAmount - paidAmount)))}`);
+                        notifyDirect(d ? 'عدّل' : 'أضاف', 'مديونية', `${customer} (متبقي ${fmtMoney(Math.max(0, r2(totalAmount - paidAmount)))})`, { col: 'debts', id });
+                        toast(d ? 'تم تحديث ملف المديونية' : 'تمت إضافة ملف المديونية بنجاح', 'success');
+                    } catch (err) {
+                        debtSaveFailed(err);
+                        return false;
+                    }
+                }
+            });
+        }
+
+        function openDebtActionModal(id) {
+            if (!debtCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const d = debtList.find(x => x.id === id);
+            if (!d) return;
+            openModal({
+                title: `تسجيل إجراء / تصعيد — ${esc(d.customer)}`,
+                submitText: 'تسجيل الإجراء في السجل',
+                danger: true,
+                body: `
+                    <div class="bg-slate-50 rounded-xl p-3 text-xs flex flex-wrap items-center justify-between gap-2 border border-slate-200">
+                        <div><b>المتبقي:</b> <span class="font-mono font-black text-rose-700">${fmtMoney(debtRemaining(d))}</span></div>
+                        <div><b>المرحلة الحالية:</b> ${debtStageBadge(d.stage)}</div>
+                    </div>
+                    ${field('نوع الإجراء *', `<select name="actionType" onchange="const s=this.form.elements.newStage; const rec=DEBT_ACTION_TYPES.find(x=>x[0]===this.value); if(rec&&rec[3]) s.value=rec[3];" class="${INPUT_CLS}">${DEBT_ACTION_TYPES.filter(x => x[0] !== 'payment').map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}</select>`)}
+                    ${field('المرحلة بعد الإجراء', `<select name="newStage" class="${INPUT_CLS}">${DEBT_STAGES.map(([v, l]) => `<option value="${v}" ${d.stage === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
+                    ${field('تفاصيل ما حدث / الإجراء المتخذ *', `<textarea name="detail" required rows="3" class="${INPUT_CLS}" placeholder="مثال: تم الاتصال 3 مرات ولم يرد / تم إيقاف صرف أي بضاعة / تم تسليم الملف للمحامي لتحرير محضر..."></textarea>`)}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('موعد المتابعة / المهلة القادمة', `<input name="nextDate" type="date" value="${esc(d.nextActionDate || '')}" class="${INPUT_CLS}">`)}
+                        <label class="flex items-center gap-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 cursor-pointer self-end">
+                            <input type="checkbox" name="evading" ${d.evading ? 'checked' : ''} class="w-4 h-4 accent-rose-600">
+                            <span class="text-xs font-bold text-rose-800">🚨 تصنيف كمتهرب</span>
+                        </label>
+                    </div>
+                `,
+                onSubmit: async fd => {
+                    const type = String(fd.get('actionType') || 'other');
+                    const newStage = String(fd.get('newStage') || d.stage);
+                    const detail = String(fd.get('detail') || '').trim();
+                    if (!detail) return toast('اكتب تفاصيل الإجراء', 'error'), false;
+                    const actDef = DEBT_ACTION_TYPES.find(x => x[0] === type);
+                    const actionLabel = actDef ? actDef[1] : 'إجراء متابعة';
+                    const nextActionDate = String(fd.get('nextDate') || '').trim();
+                    const evading = fd.get('evading') === 'on';
+                    const me = currentUser();
+                    const now = new Date().toISOString();
+                    const ev = {
+                        id: uid('DE-'), t: now, type, stage: newStage, actionLabel,
+                        detail: detail + (nextActionDate ? ` (موعد المتابعة: ${fmtWaDate(nextActionDate)})` : ''),
+                        by: me ? me.name : '', byId: fbUser.uid
+                    };
+                    const nextEvents = [...d.events, ev];
+                    try {
+                        await rtdb.ref('debts/' + d.id).update(dbClean({
+                            stage: newStage, evading, nextActionDate, events: nextEvents,
+                            updatedBy: me ? me.name : '', updatedAt: now
+                        }));
+                        log('إجراء مديونية', `${d.customer}: ${actionLabel} — ${detail}`);
+                        notifyDirect('سجّل', 'إجراء مديونية', `${d.customer}: ${actionLabel}`, { col: 'debts', id: d.id });
+                        toast('تم تسجيل الإجراء في سجل العميل', 'success');
+                    } catch (err) {
+                        debtSaveFailed(err);
+                        return false;
+                    }
+                }
+            });
+        }
+
+        function openDebtPaymentModal(id) {
+            if (!debtCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const d = debtList.find(x => x.id === id);
+            if (!d) return;
+            const rem = debtRemaining(d);
+            openModal({
+                title: `تسجيل دفعة سداد — ${esc(d.customer)}`,
+                submitText: 'تسجيل الدفعة',
+                body: `
+                    <div class="bg-emerald-50 rounded-xl p-3 text-xs border border-emerald-200 flex flex-wrap justify-between gap-2">
+                        <span>الإجمالي: <b class="font-mono">${fmtMoney(d.totalAmount)}</b></span>
+                        <span>المدفوع سابقاً: <b class="font-mono text-emerald-700">${fmtMoney(d.paidAmount)}</b></span>
+                        <span>المتبقي الآن: <b class="font-mono text-rose-700">${fmtMoney(rem)}</b></span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('قيمة الدفعة (ج.م) *', `<input name="amount" type="number" step="0.01" min="0.01" required dir="ltr" value="${rem}" class="${INPUT_CLS}">`)}
+                        ${field('تاريخ السداد *', `<input name="date" type="date" required value="${todayISO()}" class="${INPUT_CLS}">`)}
+                    </div>
+                    ${field('طريقة الدفع', `<select name="method" class="${INPUT_CLS}"><option value="تحويل بنكي">تحويل بنكي</option><option value="نقدي">نقدي</option><option value="شيك">شيك</option><option value="إنستاباي / محفظة">إنستاباي / محفظة</option><option value="مقاصة / مرتجع">مقاصة / مرتجع</option></select>`)}
+                    ${field('ملاحظة / رقم إيصال التحويل', `<input name="note" class="${INPUT_CLS}" placeholder="اختياري — رقم التحويل أو المستلم">`)}
+                `,
+                onSubmit: async fd => {
+                    const amount = r2(Number(fd.get('amount')) || 0);
+                    const date = String(fd.get('date') || todayISO());
+                    const method = String(fd.get('method') || 'نقدي');
+                    const note = String(fd.get('note') || '').trim();
+                    if (!(amount > 0)) return toast('اكتب مبلغ صحيح أكبر من صفر', 'error'), false;
+                    const me = currentUser();
+                    const now = new Date().toISOString();
+                    const newPaid = r2(numOr0(d.paidAmount) + amount);
+                    const newRem = Math.max(0, r2(numOr0(d.totalAmount) - newPaid));
+                    const newStage = newRem <= 0 ? 'settled' : d.stage;
+                    const newEvading = newRem <= 0 ? false : d.evading;
+                    const pay = { id: uid('DP-'), amount, date, method, note, by: me ? me.name : '', byId: fbUser.uid, at: now };
+                    const ev = {
+                        id: uid('DE-'), t: now, type: 'payment', stage: newStage,
+                        actionLabel: '💵 دفعة سداد',
+                        detail: `تم تحصيل ${fmtMoney(amount)} (${method}) بتاريخ ${fmtWaDate(date)}${note ? ' — ' + note : ''} · المتبقي الآن: ${fmtMoney(newRem)}`,
+                        by: me ? me.name : '', byId: fbUser.uid
+                    };
+                    try {
+                        await rtdb.ref('debts/' + d.id).update(dbClean({
+                            paidAmount: newPaid,
+                            stage: newStage,
+                            evading: newEvading,
+                            payments: [...d.payments, pay],
+                            events: [...d.events, ev],
+                            updatedBy: me ? me.name : '',
+                            updatedAt: now
+                        }));
+                        log('سداد مديونية', `${d.customer}: ${fmtMoney(amount)} (${method}) — متبقي ${fmtMoney(newRem)}`);
+                        notifyDirect('سجّل', 'دفعة مديونية', `${d.customer}: ${fmtMoney(amount)}`, { col: 'debts', id: d.id });
+                        toast(newRem <= 0 ? 'تم السداد بالكامل وإغلاق المديونية ✅' : 'تم تسجيل الدفعة بنجاح', 'success');
+                    } catch (err) {
+                        debtSaveFailed(err);
+                        return false;
+                    }
+                }
+            });
+        }
+
+        function debtBuildWhatsAppText(d, level, deadlineText) {
+            const rem = debtRemaining(d);
+            const days = debtDaysOverdue(d);
+            const sysName = appData.settings.systemName || 'الرحمة';
+            const header = [
+                'السيد / ' + (d.customer || ''),
+                '',
+                '🧾 *ملف المديونية:* ' + (d.reason || debtSourceLabel(d.sourceType)),
+                ...(d.refNo ? ['📄 *مرجع / مستند:* ' + d.refNo] : []),
+                ...(d.originDate ? ['📅 *تاريخ بداية المديونية:* ' + fmtWaDate(d.originDate)] : []),
+                ...(d.dueDate ? ['⏰ *تاريخ الاستحقاق:* ' + fmtWaDate(d.dueDate)] : []),
+                ...(days > 0 ? ['⚠️ *مدة التأخير:* متأخر ' + days + ' يوم'] : []),
+                '',
+                '💰 *إجمالي المديونية:* ' + fmtMoney(d.totalAmount),
+                '✅ *المدفوع:* ' + fmtMoney(d.paidAmount),
+                '🚨 *المبلغ المتبقي المستحق فوراً:* ' + fmtMoney(rem)
+            ];
+            let body = [];
+            if (level === 'firm') {
+                body = [
+                    '',
+                    '📌 *إخطار مطالبة رسمية بالسداد:*',
+                    'نحيطكم علماً بأن المبلغ المذكور أعلاه متأخر عن موعد سداده، ونرجو سرعة السداد خلال *' + deadlineText + '* كحد أقصى حفاظاً على استمرار التعامل بيننا.'
+                ];
+            } else if (level === 'strict') {
+                body = [
+                    '',
+                    '🚨 *إنذار شديد اللهجة — تجاوز مهلة السداد والمماطلة:*',
+                    'رغم تواصلنا المتكرر معكم ومنحكم أكثر من مهلة، لوحظ استمرار المماطلة والتهرب من سداد المديونية المستحقة عليكم منذ ' + (d.originDate ? fmtWaDate(d.originDate) : 'فترة طويلة') + '.',
+                    '• تقرر *إيقاف التعامل معكم فوراً* ومنع صرف أي بضاعة لحين تسوية كامل المبلغ.',
+                    '• أمامكم مهلة أخيرة وحاسمة مدتها *' + deadlineText + '* فقط لسداد كامل المبلغ المستحق وإرسال إيصال التحويل.',
+                    '• في حال عدم السداد خلال هذه المهلة، سيتم تصعيد الملف فوراً للشؤون القانونية دون أي إنذار آخر.'
+                ];
+            } else {
+                body = [
+                    '',
+                    '⚖️ *إنذار نهائي أخير قبل اتخاذ الإجراءات القانونية:*',
+                    'بناءً على امتناعكم وتهربكم المتكرر عن سداد المديونية المستحقة عليكم والبالغ قدرها *' + fmtMoney(rem) + '* رغم جميع الإخطارات السابقة، نفيدكم بأنه تم *إعداد ملفكم وكافة المستندات وإثباتات المديونية* تمهيداً لتحويله مباشرة إلى *الشؤون القانونية* لاتخاذ كافة الإجراءات القضائية والمطالبة بكامل أصل المديونية وما يترتب عليها من مصروفات وأتعاب قانونية.',
+                    '• هذه *الفرصة الأخيرة تماماً*: في حال عدم التحويل وإرسال الإيصال خلال *' + deadlineText + '*، ستبدأ الإجراءات القانونية فوراً وبشكل نهائي دون الرجوع إليكم مرة أخرى.'
+                ];
+            }
+            return [
+                ...header,
+                ...body,
+                '',
+                CUST_BANK_INFO_TEXT,
+                '',
+                'يرجى إرسال صورة إيصال التحويل فور السداد لتحديث حسابكم.',
+                '— إدارة التحصيل والمتابعة | ' + sysName
+            ].join('\n');
+        }
+
+        function openDebtWhatsAppModal(id) {
+            const d = debtList.find(x => x.id === id);
+            if (!d) return;
+            const phone = custWaPhone(d.phone);
+            if (!phone) return toast('رقم تليفون العميل غير صالح', 'error');
+            const defaultLevel = (d.stage === 'legal' || d.stage === 'suspended') ? 'legal' : (d.evading || d.stage === 'final_notice' ? 'strict' : 'firm');
+            const defaultDeadline = defaultLevel === 'legal' ? '24 ساعة' : (defaultLevel === 'strict' ? '48 ساعة' : '3 أيام');
+            const initialMsg = debtBuildWhatsAppText(d, defaultLevel, defaultDeadline);
+            openModal({
+                title: `📱 إرسال إنذار واتساب حاد — ${esc(d.customer)}`,
+                submitText: 'فتح واتساب وتسجيل الإنذار في السجل',
+                danger: true,
+                size: 'lg',
+                body: `
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('درجة حدة الرسالة', `<select name="level" id="debtWaLevel" onchange="debtWaRefresh('${esc(d.id)}')" class="${INPUT_CLS}">
+                            <option value="firm" ${defaultLevel === 'firm' ? 'selected' : ''}>⚠️ مستوى 1 — مطالبة رسمية جادة</option>
+                            <option value="strict" ${defaultLevel === 'strict' ? 'selected' : ''}>🚨 مستوى 2 — إنذار شديد اللهجة (للعميل المتهرب)</option>
+                            <option value="legal" ${defaultLevel === 'legal' ? 'selected' : ''}>⚖️ مستوى 3 — إنذار نهائي قبل الإجراءات القانونية (الأشد حدة)</option>
+                        </select>`)}
+                        ${field('المهلة المحددة في الرسالة', `<input name="deadline" id="debtWaDeadline" value="${esc(defaultDeadline)}" oninput="debtWaRefresh('${esc(d.id)}')" class="${INPUT_CLS}" placeholder="مثال: 24 ساعة أو 48 ساعة">`)}
+                    </div>
+                    ${field('معاينة الرسالة (يمكنك تعديلها قبل الإرسال)', `<textarea name="msg" id="debtWaMsg" rows="12" class="${INPUT_CLS} leading-relaxed">${esc(initialMsg)}</textarea>`)}
+                    ${debtCanManage() ? `<label class="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer"><input type="checkbox" name="logAction" checked class="w-4 h-4 accent-rose-600"> تسجيل إرسال هذا الإنذار تلقائياً في سجل إجراءات العميل</label>` : ''}
+                `,
+                onSubmit: async fd => {
+                    const msg = String(fd.get('msg') || '').trim();
+                    if (!msg) return toast('الرسالة فاضية', 'error'), false;
+                    const level = String(fd.get('level') || 'strict');
+                    const levelLabel = level === 'legal' ? '⚖️ إنذار واتساب نهائي قبل القانوني' : (level === 'strict' ? '🚨 إنذار واتساب شديد اللهجة (متهرب)' : '⚠️ مطالبة واتساب رسمية');
+                    window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(msg), '_blank');
+                    if (debtCanManage() && fd.get('logAction') === 'on') {
+                        const me = currentUser();
+                        const now = new Date().toISOString();
+                        let nextStage = d.stage;
+                        if (level === 'strict' && (d.stage === 'followup' || d.stage === 'warning')) nextStage = 'final_notice';
+                        if (level === 'legal' && d.stage !== 'legal' && d.stage !== 'settled') nextStage = 'final_notice';
+                        const ev = {
+                            id: uid('DE-'), t: now, type: 'whatsapp', stage: nextStage,
+                            actionLabel: levelLabel,
+                            detail: `تم إرسال ${levelLabel} على الرقم ${d.phone} — مهلة: ${String(fd.get('deadline') || '').trim() || 'فورية'} (المتبقي ${fmtMoney(debtRemaining(d))})`,
+                            by: me ? me.name : '', byId: fbUser.uid
+                        };
+                        try {
+                            await rtdb.ref('debts/' + d.id).update(dbClean({
+                                stage: nextStage,
+                                events: [...d.events, ev],
+                                updatedBy: me ? me.name : '',
+                                updatedAt: now
+                            }));
+                            log('إنذار واتساب مديونية', `${d.customer}: ${levelLabel}`);
+                        } catch (err) { console.warn('wa log failed', err); }
+                    }
+                    toast('تم فتح واتساب بالرسالة الحادة', 'success');
+                }
+            });
+        }
+
+        function debtWaRefresh(id) {
+            const d = debtList.find(x => x.id === id);
+            if (!d) return;
+            const lv = el('debtWaLevel')?.value || 'strict';
+            const dl = (el('debtWaDeadline')?.value || '').trim() || (lv === 'legal' ? '24 ساعة' : '48 ساعة');
+            const box = el('debtWaMsg');
+            if (box) box.value = debtBuildWhatsAppText(d, lv, dl);
+        }
+
+        function openDebtDetail(id) {
+            const d = debtList.find(x => x.id === id);
+            if (!d) return toast('الملف مش موجود', 'error');
+            const rem = debtRemaining(d);
+            const days = debtDaysOverdue(d);
+            const cid = esc(d.id);
+            const cmts = debtCommentsMap[d.id] || [];
+            const evsHtml = d.events.length
+                ? `<ul class="space-y-2 border-r-2 border-slate-200 pr-3">${[...d.events].reverse().map(ev => `<li class="text-xs">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full shrink-0" style="background:${debtEventColor(ev)}"></span>
+                        <b class="text-slate-800">${esc(ev.actionLabel || 'متابعة')}</b>
+                        <span class="text-slate-400 font-mono text-[11px]" dir="ltr">${esc(debtFmtDateTime(ev.t))}</span>
+                        ${ev.by ? `<span class="text-slate-400">· ${esc(ev.by)}</span>` : ''}
+                    </div>
+                    <p class="text-slate-600 mt-0.5 pr-3.5">${esc(ev.detail || '')}</p>
+                </li>`).join('')}</ul>`
+                : '<p class="text-xs text-slate-400">لا توجد إجراءات مسجلة حتى الآن</p>';
+
+            const paysHtml = d.payments.length
+                ? `<div class="overflow-x-auto"><table class="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
+                    <thead class="bg-slate-50 font-bold text-slate-600"><tr><th class="p-2 text-start">التاريخ</th><th class="p-2 text-start">المبلغ</th><th class="p-2 text-start">الطريقة</th><th class="p-2 text-start">ملاحظة</th><th class="p-2 text-start">بواسطة</th></tr></thead>
+                    <tbody class="divide-y divide-slate-100">${d.payments.map(p => `<tr><td class="p-2 whitespace-nowrap">${esc(fmtWaDate(p.date))}</td><td class="p-2 font-mono font-bold text-emerald-700">${fmtMoney(p.amount)}</td><td class="p-2">${esc(p.method || '')}</td><td class="p-2">${esc(p.note || '—')}</td><td class="p-2 text-slate-500">${esc(p.by || '')}</td></tr>`).join('')}</tbody>
+                </table></div>`
+                : '<p class="text-xs text-slate-400">لم تُسجَّل أي دفعات سداد بعد</p>';
+
+            openModal({
+                title: `ملف مديونية: ${esc(d.customer)} ${d.evading && rem > 0 ? '🚨' : ''}`,
+                size: 'lg',
+                body: `
+                    <div class="flex flex-wrap items-center gap-2">
+                        ${debtStageBadge(d.stage)}
+                        ${d.evading && rem > 0 ? '<span class="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-black">🚨 متهرب من السداد</span>' : ''}
+                        ${days > 0 ? `<span class="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 text-xs font-black">متأخر ${days} يوم</span>` : ''}
+                    </div>
+                    ${debtStageSteps(d.stage)}
+                    <div class="grid grid-cols-3 gap-2 bg-slate-50 rounded-xl p-3 text-center">
+                        <div><span class="text-xs text-slate-500 block">إجمالي المديونية</span><b class="text-base font-mono text-slate-800">${fmtMoney(d.totalAmount)}</b></div>
+                        <div><span class="text-xs text-slate-500 block">المدفوع</span><b class="text-base font-mono text-emerald-700">${fmtMoney(d.paidAmount)}</b></div>
+                        <div><span class="text-xs text-slate-500 block">المتبقي</span><b class="text-base font-mono text-rose-700">${fmtMoney(rem)}</b></div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-white border border-slate-200 rounded-xl p-3">
+                        <div><span class="text-slate-400">التليفون:</span> <b class="font-mono" dir="ltr">${esc(d.phone || '—')}</b>${d.altPhone ? ` / <span class="font-mono" dir="ltr">${esc(d.altPhone)}</span>` : ''}</div>
+                        <div><span class="text-slate-400">المندوب:</span> <b>${esc(d.repName || '—')}</b></div>
+                        <div><span class="text-slate-400">المصدر:</span> <b>${esc(debtSourceLabel(d.sourceType))}</b></div>
+                        <div><span class="text-slate-400">المستند:</span> <b class="font-mono">${esc(d.refNo || '—')}</b></div>
+                        <div><span class="text-slate-400">بداية المديونية:</span> <b>${esc(d.originDate ? fmtWaDate(d.originDate) : '—')}</b></div>
+                        <div><span class="text-slate-400">تاريخ الاستحقاق:</span> <b>${esc(d.dueDate ? fmtWaDate(d.dueDate) : '—')}</b></div>
+                        <div class="sm:col-span-2"><span class="text-slate-400">العنوان:</span> <b>${esc(d.address || '—')}</b></div>
+                        <div class="sm:col-span-2"><span class="text-slate-400">السبب:</span> <b>${esc(d.reason || '—')}</b></div>
+                        ${d.notes ? `<div class="sm:col-span-2"><span class="text-slate-400">ملاحظات:</span> <span class="whitespace-pre-wrap">${esc(d.notes)}</span></div>` : ''}
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        ${debtCanManage() ? `<button type="button" onclick="openDebtActionModal('${cid}')" class="${BTN_PRIMARY} !bg-orange-600 hover:!bg-orange-700"><i class="fa-solid fa-bolt"></i> تسجيل إجراء / تصعيد</button>` : ''}
+                        ${debtCanManage() && rem > 0 ? `<button type="button" onclick="openDebtPaymentModal('${cid}')" class="${BTN_PRIMARY} !bg-emerald-600 hover:!bg-emerald-700"><i class="fa-solid fa-money-bill-wave"></i> تسجيل دفعة</button>` : ''}
+                        ${d.phone ? `<button type="button" onclick="openDebtWhatsAppModal('${cid}')" class="${BTN_SECONDARY} !text-emerald-700 !border-emerald-300"><i class="fa-brands fa-whatsapp"></i> واتساب حاد</button>` : ''}
+                        <button type="button" onclick="openDebtComments('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-comments"></i> التعليقات (${cmts.length})</button>
+                        ${debtCanManage() ? `<button type="button" onclick="openDebtModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
+                    </div>
+                    <div class="space-y-2">
+                        <h4 class="text-xs font-black text-slate-700">💵 سجل الدفعات (${d.payments.length})</h4>
+                        ${paysHtml}
+                    </div>
+                    <div class="space-y-2">
+                        <h4 class="text-xs font-black text-slate-700">📋 سجل المتابعة والإجراءات (${d.events.length})</h4>
+                        <div class="max-h-60 overflow-y-auto pr-1">${evsHtml}</div>
+                    </div>
+                `
+            });
+        }
+
+        // ---- التعليقات الخاصة بكل عميل مديونية ----
+        function renderDebtCommentsModalBody(debtId) {
+            const host = document.getElementById('debtCommentsList');
+            if (!host) return;
+            const list = debtCommentsMap[debtId] || [];
+            if (!list.length) {
+                host.innerHTML = '<div class="text-center text-xs text-slate-400 py-6">لا توجد تعليقات على هذا العميل حتى الآن</div>';
+                return;
+            }
+            const myUid = fbUser ? fbUser.uid : '';
+            host.innerHTML = list.map(c => {
+                const canEdit = debtCanManage() || c.byId === myUid;
+                return `<div class="bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-1">
+                    <div class="flex items-center justify-between gap-2 text-xs">
+                        <div class="font-bold text-slate-800">${esc(c.by || 'مستخدم')} <span class="text-slate-400 font-normal font-mono text-[11px]" dir="ltr">${esc(debtFmtDateTime(c.t))}</span>${c.editedAt ? ' <span class="text-[10px] text-slate-400">(معدّل)</span>' : ''}</div>
+                        ${canEdit ? `<div class="flex items-center gap-1">
+                            <button type="button" onclick="editDebtComment('${esc(debtId)}','${esc(c.id)}')" class="text-slate-400 hover:text-brand-600 px-1" title="تعديل"><i class="fa-solid fa-pen text-[11px]"></i></button>
+                            <button type="button" onclick="deleteDebtComment('${esc(debtId)}','${esc(c.id)}')" class="text-slate-400 hover:text-rose-600 px-1" title="حذف"><i class="fa-solid fa-trash text-[11px]"></i></button>
+                        </div>` : ''}
+                    </div>
+                    <p class="text-sm text-slate-700 whitespace-pre-wrap">${esc(c.text || '')}</p>
+                </div>`;
+            }).join('');
+            host.scrollTop = host.scrollHeight;
+        }
+
+        function openDebtComments(debtId) {
+            if (!debtCanView()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const d = debtList.find(x => x.id === debtId);
+            if (!d) return;
+            openModal({
+                title: `💬 تعليقات وملاحظات — ${esc(d.customer)}`,
+                size: 'lg',
+                body: `
+                    <div class="text-xs bg-slate-50 rounded-xl p-2.5 border border-slate-200 flex flex-wrap justify-between gap-2">
+                        <span>المتبقي: <b class="font-mono text-rose-700">${fmtMoney(debtRemaining(d))}</b></span>
+                        <span>${debtStageBadge(d.stage)}</span>
+                    </div>
+                    <div id="debtCommentsList" data-debt-id="${esc(debtId)}" class="space-y-2 max-h-72 overflow-y-auto pr-1"></div>
+                    <div class="flex gap-2 pt-2 border-t border-slate-100">
+                        <textarea id="debtCmtInput" rows="2" class="${INPUT_CLS}" placeholder="اكتب تعليق أو معلومة جديدة عن العميل (مثال: قابلته في السوق / وعد يوم الخميس / عنوان جديد...)"></textarea>
+                        <button type="button" onclick="addDebtComment('${esc(debtId)}')" class="${BTN_PRIMARY} shrink-0 self-end"><i class="fa-solid fa-paper-plane"></i> إرسال</button>
+                    </div>
+                `,
+                onOpen: () => renderDebtCommentsModalBody(debtId)
+            });
+        }
+
+        async function addDebtComment(debtId) {
+            if (!debtCanView()) return;
+            const inp = el('debtCmtInput');
+            const text = String(inp ? inp.value : '').trim();
+            if (!text) return toast('اكتب التعليق أولاً', 'error');
+            const d = debtList.find(x => x.id === debtId);
+            const me = currentUser();
+            const cid = uid('DC-');
+            const now = new Date().toISOString();
+            try {
+                await rtdb.ref('debtComments/' + debtId + '/' + cid).set({
+                    id: cid, debtId, text, by: me ? me.name : '', byId: fbUser.uid, t: now
+                });
+                if (inp) inp.value = '';
+                notifyDirect('علّق على', 'مديونية', `${d ? d.customer : debtId}: ${text.slice(0, 60)}`, { col: 'debtComments', id: debtId });
+                toast('تمت إضافة التعليق', 'success');
+            } catch (err) { debtSaveFailed(err); }
+        }
+
+        async function editDebtComment(debtId, cid) {
+            const list = debtCommentsMap[debtId] || [];
+            const c = list.find(x => x.id === cid);
+            if (!c) return;
+            const next = prompt('تعديل التعليق:', c.text || '');
+            if (next === null) return;
+            const text = String(next).trim();
+            if (!text) return toast('التعليق لا يمكن أن يكون فارغاً', 'error');
+            try {
+                await rtdb.ref('debtComments/' + debtId + '/' + cid).update({ text, editedAt: new Date().toISOString() });
+                toast('تم تعديل التعليق', 'success');
+            } catch (err) { debtSaveFailed(err); }
+        }
+
+        async function deleteDebtComment(debtId, cid) {
+            if (!confirm('حذف هذا التعليق نهائياً؟')) return;
+            try {
+                await rtdb.ref('debtComments/' + debtId + '/' + cid).remove();
+                toast('تم حذف التعليق', 'success');
+            } catch (err) { debtSaveFailed(err); }
+        }
+
+        async function deleteDebt(id) {
+            if (!debtCanDelete()) return toast('ليس لديك صلاحية حذف المديونيات', 'error');
+            const d = debtList.find(x => x.id === id);
+            if (!d) return;
+            if (!confirm(`هل أنت متأكد من حذف ملف مديونية "${d.customer}" بالكامل؟`)) return;
+            try {
+                await rtdb.ref('debts/' + id).remove();
+                try { await rtdb.ref('debtComments/' + id).remove(); } catch (e) { /* noop */ }
+                log('حذف مديونية', d.customer);
+                notifyDirect('حذف', 'مديونية', d.customer, { col: 'debts', id });
+                toast('تم حذف ملف المديونية', 'success');
+            } catch (err) { debtSaveFailed(err); }
+        }
+
+        // ---- سجل متابعة وإجراءات المديونيات (بنفس أسلوب سجل رحلات العربيات) ----
+        function viewDebtLog() {
+            debtStart();
+            const custOpts = [['', 'كل العملاء'], ...debtList.map(d => [d.id, d.customer + (d.evading ? ' 🚨' : '')])]
+                .map(([v, l]) => `<option value="${esc(v)}" ${debtLogCustomer === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+            const stageOpts = [['', 'كل المراحل'], ...DEBT_STAGES.map(([k, l]) => [k, l])]
+                .map(([v, l]) => `<option value="${v}" ${debtLogStage === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+            const typeOpts = [
+                ['', 'كل أنواع الإجراءات'],
+                ['call', 'المكالمات فقط'],
+                ['whatsapp', 'إنذارات الواتساب'],
+                ['payment', 'الدفعات والتحصيل'],
+                ['legal', 'الإجراءات القانونية والإيقاف']
+            ].map(([v, l]) => `<option value="${v}" ${debtLogType === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+
+            const actions = `<div class="flex flex-wrap items-center gap-2 mb-4">
+                <select onchange="debtLogCustomer=this.value; renderDebtLog()" class="${INPUT_CLS} max-w-[13rem]">${custOpts}</select>
+                <select onchange="debtLogStage=this.value; renderDebtLog()" class="${INPUT_CLS} max-w-[11rem]">${stageOpts}</select>
+                <select onchange="debtLogType=this.value; renderDebtLog()" class="${INPUT_CLS} max-w-[12rem]">${typeOpts}</select>
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                    <input type="search" value="${esc(debtLogQ)}" oninput="debtLogQ=this.value; renderDebtLog()" placeholder="بحث بالعميل أو الإجراء أو الموظف..." class="${INPUT_CLS} pr-9 max-w-[16rem]">
+                </div>
+                <label class="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-bold cursor-pointer ${debtLogEvading ? 'bg-rose-50 border-rose-400 text-rose-700' : 'bg-white border-slate-200 text-slate-600'}">
+                    <input type="checkbox" ${debtLogEvading ? 'checked' : ''} onchange="debtLogEvading=this.checked; renderDebtLog()" class="w-4 h-4 accent-rose-600">
+                    <span>المتهربون 🚨</span>
+                </label>
+                ${btn('printDebtLog()', 'طباعة السجل', 'fa-print', BTN_SECONDARY)}
+                ${btn('exportDebtLog()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY)}
+                ${btn("navigate('debts')", 'رجوع للمديونيات', 'fa-table-columns', BTN_SECONDARY)}
+            </div>`;
+            return {
+                title: 'سجل متابعة وإجراءات المديونيات',
+                actions: '',
+                html: `<div>${actions}<div id="debtLogBody"></div></div>`,
+                after: renderDebtLog
+            };
+        }
+
+        function debtLogFilteredModel() {
+            const q = debtLogQ.trim().toLowerCase();
+            const matchType = ev => {
+                if (!debtLogType) return true;
+                if (debtLogType === 'call') return String(ev.type || '').startsWith('call') || ev.type === 'promise' || ev.type === 'broken_promise';
+                if (debtLogType === 'whatsapp') return ev.type === 'whatsapp';
+                if (debtLogType === 'payment') return ev.type === 'payment';
+                if (debtLogType === 'legal') return ev.type === 'legal_prep' || ev.type === 'legal_filed' || ev.type === 'suspend' || ev.type === 'final_warning';
+                return true;
+            };
+            const cards = [];
+            for (const d of [...debtList].sort((a, b) => debtRemaining(b) - debtRemaining(a))) {
+                if (debtLogCustomer && d.id !== debtLogCustomer) continue;
+                if (debtLogStage && d.stage !== debtLogStage) continue;
+                if (debtLogEvading && !d.evading) continue;
+                let evs = d.events.filter(matchType);
+                let cmts = debtCommentsMap[d.id] || [];
+                if (q) {
+                    const custHit = `${d.customer || ''} ${d.phone || ''} ${d.reason || ''} ${d.repName || ''}`.toLowerCase().includes(q);
+                    if (!custHit) {
+                        evs = evs.filter(e => `${e.actionLabel || ''} ${e.detail || ''} ${e.by || ''}`.toLowerCase().includes(q));
+                        cmts = cmts.filter(c => `${c.text || ''} ${c.by || ''}`.toLowerCase().includes(q));
+                        if (!evs.length && !cmts.length) continue;
+                    }
+                }
+                if (debtLogType && !evs.length) continue;
+                cards.push({ d, evs, cmts });
+            }
+            return cards;
+        }
+
+        function renderDebtLog() {
+            const host = document.getElementById('debtLogBody');
+            if (!host) return;
+            const counts = Object.fromEntries(DEBT_STAGES.map(([k]) => [k, 0]));
+            debtList.forEach(d => { if (counts[d.stage] !== undefined) counts[d.stage]++; });
+            const totalRem = r2(debtList.reduce((a, d) => a + debtRemaining(d), 0));
+            const summary = `<div class="flex flex-wrap items-center gap-2 mb-4">
+                <span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-slate-800 border-slate-800 text-white">إجمالي الملفات: ${debtList.length}</span>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-rose-600 border-rose-600 text-white">المتبقي: ${fmtMoney(totalRem)}</span>
+                ${DEBT_STAGES.map(([k, label, col]) => `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border ${DEBT_STAGE_CLS[col]}">${label}: ${counts[k]}</span>`).join('')}
+            </div>`;
+
+            const cards = debtLogFilteredModel();
+            const evLi = e => `<li class="flex items-start gap-2 text-xs">
+                <span class="font-mono text-slate-400 whitespace-nowrap" dir="ltr">${esc(debtFmtDateTime(e.t))}</span>
+                <span class="w-2 h-2 rounded-full mt-1.5 shrink-0" style="background:${debtEventColor(e)}"></span>
+                <div class="text-slate-700"><b class="text-slate-900">${esc(e.actionLabel || 'متابعة')}:</b> ${esc(e.detail || '')}${e.by ? ` <span class="text-slate-400 whitespace-nowrap">· ${esc(e.by)}</span>` : ''}</div>
+            </li>`;
+
+            const cardHtml = ({ d, evs, cmts }) => {
+                const rem = debtRemaining(d);
+                const days = debtDaysOverdue(d);
+                const [, , , icon, hex] = debtStageInfo(d.stage);
+                const id = esc(d.id);
+                return `<section class="bg-white rounded-2xl border ${d.evading && rem > 0 ? 'border-rose-300' : 'border-slate-200'} shadow-sm overflow-hidden mb-4">
+                    <header class="flex flex-wrap items-center gap-3 px-4 py-3 bg-slate-50 border-b border-slate-200">
+                        <div class="w-10 h-10 rounded-xl text-white flex items-center justify-center font-black text-base shrink-0" style="background:${hex}"><i class="fa-solid ${icon}"></i></div>
+                        <div>
+                            <div class="font-black text-slate-800 flex items-center gap-2 flex-wrap">
+                                <span>${esc(d.customer)}</span>
+                                ${d.evading && rem > 0 ? '<span class="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black">🚨 متهرب</span>' : ''}
+                                ${debtStageBadge(d.stage)}
+                            </div>
+                            <div class="text-xs text-slate-500 mt-0.5">
+                                ${d.phone ? `<span class="font-mono" dir="ltr">${esc(d.phone)}</span>` : ''}
+                                ${d.repName ? ` · المندوب: ${esc(d.repName)}` : ''}
+                                ${d.reason ? ` · ${esc(d.reason)}` : ''}
+                            </div>
+                        </div>
+                        <div class="ms-auto flex flex-wrap items-center gap-2">
+                            <span class="text-xs font-black px-2.5 py-1 rounded-lg border ${rem > 0 ? 'bg-rose-50 border-rose-300 text-rose-700' : 'bg-emerald-50 border-emerald-300 text-emerald-700'}">متبقي ${fmtMoney(rem)}</span>
+                            ${days > 0 ? `<span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-amber-50 border-amber-300 text-amber-800">متأخر ${days} يوم</span>` : ''}
+                            <span class="text-xs font-bold px-2.5 py-1 rounded-lg border bg-white border-slate-300 text-slate-700">${evs.length} إجراء</span>
+                            ${debtCanManage() ? `<button type="button" onclick="openDebtActionModal('${id}')" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 text-white"><i class="fa-solid fa-bolt me-1"></i>إجراء</button>` : ''}
+                            ${d.phone ? `<button type="button" onclick="openDebtWhatsAppModal('${id}')" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white"><i class="fa-brands fa-whatsapp me-1"></i>واتساب</button>` : ''}
+                            <button type="button" onclick="openDebtComments('${id}')" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800"><i class="fa-solid fa-comments me-1"></i>${cmts.length}</button>
+                        </div>
+                    </header>
+                    <div class="px-4 py-3 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div class="text-xs text-slate-500">الإجمالي: <b class="font-mono text-slate-800">${fmtMoney(d.totalAmount)}</b> · المدفوع: <b class="font-mono text-emerald-700">${fmtMoney(d.paidAmount)}</b>${d.originDate ? ` · بداية المديونية: <b>${esc(fmtWaDate(d.originDate))}</b>` : ''}${d.dueDate ? ` · الاستحقاق: <b>${esc(fmtWaDate(d.dueDate))}</b>` : ''}</div>
+                            ${debtStageSteps(d.stage)}
+                        </div>
+                        ${evs.length ? `<ul class="space-y-1.5 border-r-2 border-slate-200 pr-2.5">${evs.map(evLi).join('')}</ul>` : '<p class="text-xs text-slate-400">لا توجد حركات مسجلة مطابقة للفلتر</p>'}
+                        ${cmts.length ? `<div class="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+                            <div class="text-[11px] font-black text-slate-500 mb-1.5"><i class="fa-solid fa-comments me-1"></i>التعليقات والملاحظات (${cmts.length})</div>
+                            <ul class="space-y-1">${cmts.map(c => `<li class="text-xs text-slate-700"><span class="font-bold text-slate-800">${esc(c.by || '')}:</span> ${esc(c.text || '')} <span class="text-[10px] text-slate-400 font-mono" dir="ltr">${esc(debtFmtDateTime(c.t))}</span></li>`).join('')}</ul>
+                        </div>` : ''}
+                    </div>
+                </section>`;
+            };
+
+            host.innerHTML = summary + (cards.length ? cards.map(cardHtml).join('') : '<div class="bg-white rounded-2xl border border-slate-200 p-10 text-center text-slate-400 font-bold">مفيش سجلات مديونيات مطابقة للبحث الحالي</div>');
+        }
+
+        function printDebtList() {
+            if (!debtCanView()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const rows = filteredDebts();
+            const tot = r2(rows.reduce((a, d) => a + numOr0(d.totalAmount), 0));
+            const paid = r2(rows.reduce((a, d) => a + numOr0(d.paidAmount), 0));
+            const rem = r2(rows.reduce((a, d) => a + debtRemaining(d), 0));
+            const trs = rows.map((d, i) => {
+                const [, label, col, , hex] = debtStageInfo(d.stage);
+                return `<tr>
+                    <td>${i + 1}</td>
+                    <td class="cust">${esc(d.customer)}${d.evading && debtRemaining(d) > 0 ? ' [متهرب]' : ''}</td>
+                    <td class="num">${esc(d.phone || '')}</td>
+                    <td>${esc(debtSourceLabel(d.sourceType))}${d.reason ? ' — ' + esc(d.reason) : ''}</td>
+                    <td>${esc(d.originDate ? fmtWaDate(d.originDate) : '—')}</td>
+                    <td class="num">${debtDaysOverdue(d) ? debtDaysOverdue(d) + ' يوم' : '—'}</td>
+                    <td class="num">${fmtMoney(d.totalAmount)}</td>
+                    <td class="num">${fmtMoney(d.paidAmount)}</td>
+                    <td class="num"><b>${fmtMoney(debtRemaining(d))}</b></td>
+                    <td><span class="chip" style="background:${DEBT_PRINT_BG[col]};border:1px solid ${hex}">${esc(label)}</span></td>
+                </tr>`;
+            }).join('');
+            const body = `<table><thead><tr><th>#</th><th>العميل</th><th>التليفون</th><th>المصدر والسبب</th><th>البداية</th><th>التأخير</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>المرحلة</th></tr></thead><tbody>${trs || '<tr><td colspan="10">لا توجد بيانات</td></tr>'}</tbody></table>
+                <div class="foot">الإجمالي: <b>${fmtMoney(tot)}</b> · المحصّل: <b>${fmtMoney(paid)}</b> · المتبقي الفعلي: <b>${fmtMoney(rem)}</b></div>`;
+            printHtml(shipPrintDoc('كشف المديونيات والتحصيل', `تاريخ الطباعة: ${fmtWaDate(todayISO())} — العدد: ${rows.length}`, body, true));
+        }
+
+        function printDebtLog() {
+            if (!debtCanView()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const cards = debtLogFilteredModel();
+            const sections = cards.map(({ d, evs, cmts }) => {
+                const [, label] = debtStageInfo(d.stage);
+                const evRows = evs.map(e => `<tr><td class="num">${esc(debtFmtDateTime(e.t))}</td><td><b>${esc(e.actionLabel || '')}</b></td><td>${esc(e.detail || '')}</td><td>${esc(e.by || '')}</td></tr>`).join('');
+                const cmRows = cmts.map(c => `<tr><td class="num">${esc(debtFmtDateTime(c.t))}</td><td>${esc(c.by || '')}</td><td colspan="2">${esc(c.text || '')}</td></tr>`).join('');
+                return `<h2>${esc(d.customer)}${d.evading ? ' [متهرب]' : ''} — ${esc(label)} | متبقي: ${fmtMoney(debtRemaining(d))}</h2>
+                    <div class="meta">التليفون: ${esc(d.phone || '—')} · السبب: ${esc(d.reason || '—')} · الإجمالي: ${fmtMoney(d.totalAmount)} · المدفوع: ${fmtMoney(d.paidAmount)}</div>
+                    ${evRows ? `<table><thead><tr><th>الوقت</th><th>الإجراء</th><th>التفاصيل</th><th>بواسطة</th></tr></thead><tbody>${evRows}</tbody></table>` : ''}
+                    ${cmRows ? `<table><thead><tr><th>الوقت</th><th>المعلّق</th><th colspan="2">التعليق</th></tr></thead><tbody>${cmRows}</tbody></table>` : ''}`;
+            }).join('');
+            printHtml(shipPrintDoc('سجل متابعة وإجراءات المديونيات', `تاريخ الطباعة: ${fmtWaDate(todayISO())} — العدد: ${cards.length} عميل`, sections || '<p>لا توجد سجلات</p>', false));
+        }
+
+        function exportDebtList() {
+            if (!debtCanView()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (typeof XLSX === 'undefined') return toast('مكتبة الإكسيل غير متاحة. تأكد من الإنترنت', 'error', null, 5000);
+            const rows = [['العميل', 'التليفون', 'رقم بديل', 'المندوب', 'المصدر', 'السبب', 'المستند', 'بداية المديونية', 'الاستحقاق', 'أيام التأخير', 'الإجمالي', 'المدفوع', 'المتبقي', 'المرحلة', 'متهرب', 'ملاحظات']];
+            filteredDebts().forEach(d => rows.push([
+                d.customer, d.phone, d.altPhone || '', d.repName || '', debtSourceLabel(d.sourceType), d.reason || '', d.refNo || '',
+                d.originDate || '', d.dueDate || '', debtDaysOverdue(d), d.totalAmount, d.paidAmount, debtRemaining(d),
+                debtStageInfo(d.stage)[1], d.evading ? 'نعم' : 'لا', d.notes || ''
+            ]));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'المديونيات');
+            XLSX.writeFile(wb, `المديونيات-${todayISO()}.xlsx`);
+            toast('تم تصدير كشف المديونيات بنجاح', 'success');
+        }
+
+        function exportDebtLog() {
+            if (!debtCanView()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (typeof XLSX === 'undefined') return toast('مكتبة الإكسيل غير متاحة. تأكد من الإنترنت', 'error', null, 5000);
+            const cards = debtLogFilteredModel();
+            const sumRows = [['العميل', 'التليفون', 'متهرب', 'المرحلة', 'الإجمالي', 'المدفوع', 'المتبقي', 'أيام التأخير', 'عدد الإجراءات', 'عدد التعليقات']];
+            const evRows = [['العميل', 'الوقت', 'نوع الإجراء', 'التفاصيل', 'بواسطة']];
+            const cmRows = [['العميل', 'الوقت', 'المعلّق', 'التعليق']];
+            cards.forEach(({ d, evs, cmts }) => {
+                sumRows.push([d.customer, d.phone, d.evading ? 'نعم' : 'لا', debtStageInfo(d.stage)[1], d.totalAmount, d.paidAmount, debtRemaining(d), debtDaysOverdue(d), evs.length, cmts.length]);
+                evs.forEach(e => evRows.push([d.customer, debtFmtDateTime(e.t), e.actionLabel || '', e.detail || '', e.by || '']));
+                cmts.forEach(c => cmRows.push([d.customer, debtFmtDateTime(c.t), c.by || '', c.text || '']));
+            });
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sumRows), 'ملخص العملاء');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(evRows), 'سجل الإجراءات');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cmRows), 'التعليقات');
+            XLSX.writeFile(wb, `سجل-المديونيات-${todayISO()}.xlsx`);
+            toast('تم تصدير سجل المديونيات بنجاح', 'success');
+        }
+
         const VIEWS = {
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
+            debts: param => param === 'log' ? viewDebtLog() : viewDebts(param),
             chat: param => viewChat(param),
             complaints: () => viewComplaints(),
             expenses: () => viewExpenses(),
@@ -10284,6 +11377,7 @@
             checks: 'الشيكات ومواعيد استحقاقها',
             orders: 'طلبيات التوريد والتسليم',
             customers: 'طلبيات العملاء والجدولة والتقارير',
+            debts: 'متابعة العملاء المتأخرين والمتهربين وسجل الإجراءات والإنذارات',
             users: 'المستخدمين والأدوار والمندوبين',
             logs: 'سجل كل الأنشطة',
             shipping: 'جدول العربيات والمواعيد وشاشة حركة النقل',
@@ -12905,6 +13999,7 @@
                 ['lists', 'اللستات', 'cash'],
                 ['orders', 'الطلبيات', 'chime'],
                 ['custorders', 'طلبيات العملاء والتعليقات', 'pop'],
+                ['debts', 'المديونيات والتحصيل', 'bell'],
                 ['chat', 'المحادثات', 'pop'],
                 ['expenses', 'المصروفات وأذونات الصرف', 'bell'],
                 ['checks', 'الشيكات والمستفيدين', 'bell'],
@@ -12940,7 +14035,7 @@
                 return next;
             },
             sectionOf(n) {
-                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', chat: 'chat', complaints: 'users', expenses: 'expenses', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
+                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', debts: 'debts', debtComments: 'debts', chat: 'chat', complaints: 'users', expenses: 'expenses', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
                 if (n && n.target && byCol[n.target.col]) return byCol[n.target.col];
                 const k = (n && n.kind) || '';
                 if (k.includes('شحن')) return 'shipping';
@@ -13193,6 +14288,9 @@
                 if (can('orders.view')) (appData.orders || []).forEach(o => {
                     if (hit(orderNoLabel(o)) || hit(o.customerName) || hit(o.factoryName)) out.push({ group: 'الطلبيات', icon: 'fa-truck-ramp-box', title: 'طلبية ' + orderNoLabel(o), sub: orderPartyText(o), go: () => navigate('orders/' + o.id) });
                 });
+                if (debtCanView()) (debtList || []).forEach(d => {
+                    if (hit(d.customer) || hit(d.phone) || hit(d.reason) || hit(d.refNo)) out.push({ group: 'المديونيات', icon: 'fa-scale-balanced', title: d.customer, sub: 'متبقي ' + fmtMoney(debtRemaining(d)) + (d.evading ? ' · 🚨 متهرب' : ''), go: () => { navigate('debts'); setTimeout(() => openDebtDetail(d.id), 250); } });
+                });
                 if (can('checks.view')) (appData.checks || []).forEach(c => {
                     if (hit(c.number) || hit(c.payeeName) || hit(c.bank)) out.push({ group: 'الشيكات', icon: 'fa-money-check-dollar', title: 'شيك ' + (c.number || ''), sub: (c.payeeName || '') + ' · ' + fmtMoney(Number(c.amount) || 0), go: () => navigate('checks') });
                 });
@@ -13426,5 +14524,5 @@
         };
 
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fb23a5db19ed45',t:'MTc5NTU1MTg4OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fb23a5db19ed45',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
