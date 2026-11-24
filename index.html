@@ -8680,7 +8680,9 @@
             const lines = [
                 'أهلاً ' + (c.customer || '') + ' 🌟',
                 'فاتورة رقم ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' بتاريخ ' + fmtDateAr(c.date) : ''),
-                'الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' · المدفوع: ' + fmtMoney(numOr0(c.paid)) + ' · المتبقي: ' + fmtMoney(remaining),
+                'الإجمالي: ' + fmtMoney(numOr0(c.amount)),
+                'المدفوع: ' + fmtMoney(numOr0(c.paid)),
+                'المتبقي: ' + fmtMoney(remaining),
                 paymentText,
                 '— ' + (appData.settings.systemName || 'الرحمة')
             ];
@@ -8696,7 +8698,9 @@
             const lines = [
                 'كشف حساب — ' + customer,
                 ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))),
-                'الإجمالي: ' + fmtMoney(tot) + ' · المدفوع: ' + fmtMoney(paid) + ' · ' + (rem >= 0 ? 'المتبقي: ' + fmtMoney(rem) : 'رصيد لصالحكم عندنا: ' + fmtMoney(-rem)),
+                'الإجمالي: ' + fmtMoney(tot),
+                'المدفوع: ' + fmtMoney(paid),
+                (rem >= 0 ? 'المتبقي: ' + fmtMoney(rem) : 'رصيد لصالحكم عندنا: ' + fmtMoney(-rem)),
                 ...(rem > 0 ? ['', CUST_BANK_INFO_TEXT] : []),
                 '— ' + (appData.settings.systemName || 'الرحمة')
             ];
@@ -13406,5 +13410,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fa0f344f0d2ee9',t:'MTc5NTU0MDU2NQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fa0f344f0d2ee9',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fa16cbcc8be201',t:'MTc5NTU0MDg3Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fa16cbcc8be201',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
