@@ -1505,32 +1505,79 @@
             return v === undefined ? 'null' : JSON.stringify(v);
         }
 
+        // Minimal public colleague directory (NO email, NO repId, NO lastLoginAt)
+        let userDirectoryMap = new Map();
+
+        function buildDirectoryDoc(u, rolesObj = (appData && appData.roles) || {}) {
+            const r = rolesObj[u.roleId];
+            const perms = (r && r.permissions) || [];
+            const admin = u.roleId === 'admin' || !!(r && r.locked);
+            return {
+                name: u.name || '',
+                roleName: (r && r.name) || '',
+                active: u.active !== false,
+                isAdmin: admin,
+                isApprover: admin || perms.includes('expenses.approve'),
+                isComplaintMgr: admin || perms.includes('complaints.manage')
+            };
+        }
+
+        function directoryUsers({ includeInactive = false } = {}) {
+            let list = [...userDirectoryMap.values()];
+            if (!list.length && can('users.manage') && appData && appData.users && appData.users.length) {
+                list = appData.users.map(u => ({ id: u.id, ...buildDirectoryDoc(u, appData.roles) }));
+            }
+            return includeInactive ? list : list.filter(u => u.active !== false);
+        }
+
+        function directoryUserById(id) {
+            if (!id) return null;
+            if (userDirectoryMap.has(id)) return userDirectoryMap.get(id);
+            const u = (appData && appData.users || []).find(x => x.id === id);
+            if (u) return { id: u.id, ...buildDirectoryDoc(u, appData.roles) };
+            return null;
+        }
+
         // Documents that should exist on the server for the given state. Key = "collection/id".
-        // Lists are stored in their own collection (with companyId), so a single list can change without rewriting its company.
-        function desiredDocs(d) {
+        // Scoped by loaded/permitted collections so non-admin users never diff or overwrite restricted paths.
+        function desiredDocs(d, { all = false } = {}) {
             const out = new Map();
-            d.companies.forEach((c, ci) => {
-                const { lists, ...rest } = c;
-                out.set('companies/' + c.id, { ...rest, pos: ci });
-                lists.forEach((l, li) => out.set('lists/' + l.id, { ...l, companyId: c.id, pos: li }));
-            });
-            (d.partners || []).forEach(p => out.set('partners/' + p.id, { ...p }));
-            (d.checks || []).forEach(c => out.set('checks/' + c.id, { ...c }));
+            const canUsers = all || (!!fbLoaded.allUsers && !!fbLoaded.allRoles && can('users.manage'));
+            if (all || (fbLoaded.companies && fbLoaded.lists)) {
+                (d.companies || []).forEach((c, ci) => {
+                    const { lists, ...rest } = c;
+                    out.set('companies/' + c.id, { ...rest, pos: ci });
+                    (lists || []).forEach((l, li) => out.set('lists/' + l.id, { ...l, companyId: c.id, pos: li }));
+                });
+            }
+            if (all || (can('checks.view') && fbChecksUnsubs.length > 0)) {
+                (d.partners || []).forEach(p => out.set('partners/' + p.id, { ...p }));
+                (d.checks || []).forEach(c => out.set('checks/' + c.id, { ...c }));
+            }
             orderDocsFor(d.orders || [], out);
-            (d.custReps || []).forEach(x => out.set('custReps/' + x.id, { ...x }));
-            (d.custOrders || []).forEach(c => out.set('custOrders/' + c.id, { ...c }));
-            d.users.forEach(u => out.set('users/' + u.id, {
-                name: u.name, email: u.email, roleId: u.roleId, active: u.active,
-                createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, repId: u.repId || null
-            }));
-            Object.values(d.roles).forEach(r => out.set('roles/' + r.id, {
-                name: r.name, permissions: [...(r.permissions || [])].sort(), locked: !!r.locked,
-                ...(r.repRole ? { repRole: true } : {})
-            }));
-            out.set('settings/main', {
-                systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays,
-                permsVersion: d.settings.permsVersion
-            });
+            if (all || (canCust('view') && fbCustUnsubs.length > 0)) {
+                (d.custReps || []).forEach(x => out.set('custReps/' + x.id, { ...x }));
+                (d.custOrders || []).forEach(c => out.set('custOrders/' + c.id, { ...c }));
+            }
+            if (canUsers) {
+                (d.users || []).forEach(u => {
+                    out.set('users/' + u.id, {
+                        name: u.name, email: u.email, roleId: u.roleId, active: u.active,
+                        createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, repId: u.repId || null
+                    });
+                    out.set('userDirectory/' + u.id, buildDirectoryDoc(u, d.roles));
+                });
+                Object.values(d.roles || {}).forEach(r => out.set('roles/' + r.id, {
+                    name: r.name, permissions: [...(r.permissions || [])].sort(), locked: !!r.locked,
+                    ...(r.repRole ? { repRole: true } : {})
+                }));
+            }
+            if (all || can('settings.manage')) {
+                out.set('settings/main', {
+                    systemName: d.settings.systemName, logo: d.settings.logo, expiryDays: d.settings.expiryDays,
+                    permsVersion: d.settings.permsVersion
+                });
+            }
             return out;
         }
 
@@ -1625,8 +1672,8 @@
             fbBaseline.forEach((b, key) => { if (!desired.has(key)) ops.push({ key, del: true, prevData: b.data }); });
             if (!ops.length) { unsavedChanges = false; return Promise.resolve(true); }
             const sent = new Map([...pendingOrderCopies].map(([id, copy]) => [id, canon(copy)]));
-            const note = fbUser ? notificationFor(ops) : null;
-            const batchOps = note ? [...ops, { key: 'notifications/' + note.id, data: note }] : ops;
+            const noteOps = fbUser ? notificationsFor(ops) : [];
+            const batchOps = noteOps.length ? [...ops, ...noteOps] : ops;
             return commitChunks(batchOps).then(() => {
                 ops.forEach(op => { if (op.del) fbBaseline.delete(op.key); else fbBaseline.set(op.key, { data: op.data, sig: op.sig }); });
                 unsavedChanges = false;
@@ -1668,16 +1715,41 @@
         const NOTIF_LIMIT = 50;
         const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب', shipping: 'شحنة' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
-        let notifs = [];                 // newest first, as the database sends them (all users)
-        let notifUnsub = null;
+        let notifs = [];                 // newest first, merged from personal inbox + permitted section feeds
+        let notifUnsubs = [];
+        let notifBuckets = {};
         let notifOpen = false;
         let notifHighlightAfter = null;  // while the panel is open, items newer than this are shown as new
+
+        const NOTIF_SECTIONS = [
+            { key: 'companies', check: () => can('companies.view') },
+            { key: 'lists',     check: () => can('lists.view') },
+            { key: 'checks',    check: () => can('checks.view') },
+            { key: 'orders',    check: () => can('orders.view') },
+            { key: 'customers', check: () => canCust('view') && (isSystemAdmin() || !currentRepId()) },
+            { key: 'shipping',  check: () => can('shipping.view') },
+            { key: 'users',     check: () => can('users.manage') },
+            { key: 'settings',  check: () => can('settings.manage') }
+        ];
+
+        function notifSectionForKey(key) {
+            const col = String(key || '').split('/')[0];
+            if (col === 'companies') return 'companies';
+            if (col === 'lists' || col === 'pdfs') return 'lists';
+            if (col === 'partners' || col === 'checks') return 'checks';
+            if (col.startsWith('order')) return 'orders';
+            if (col === 'custOrders' || col === 'custReps' || col === 'custComments') return 'customers';
+            if (col === 'shipping' || col === 'shippingConfig') return 'shipping';
+            if (col === 'users' || col === 'roles') return 'users';
+            if (col === 'settings') return 'settings';
+            return null;
+        }
 
         // the login time stamp is not a change worth a notification
         const withoutLogin = d => ({ ...(d || {}), lastLoginAt: undefined });
 
         function describeChanges(ops) {
-            const real = ops.filter(o => !(o.key.startsWith('users/') && !o.del && o.prevData &&
+            const real = ops.filter(o => !o.key.startsWith('userDirectory/') && !(o.key.startsWith('users/') && !o.del && o.prevData &&
                 canon(withoutLogin(o.prevData)) === canon(withoutLogin(o.data))));
             if (!real.length) return null;
             const verbs = [...new Set(real.map(o => o.del ? 'del' : (o.isNew ? 'add' : 'edit')))];
@@ -1698,23 +1770,45 @@
 
         function newNotification(info) {
             return {
-                id: uid('NTF-'), t: new Date().toISOString(), uid: fbUser.uid,
-                user: currentUser()?.name || 'مستخدم', verb: info.verb, kind: info.kind, detail: info.detail,
+                id: info.id || uid('NTF-'), t: info.t || new Date().toISOString(), uid: fbUser.uid,
+                user: info.user || currentUser()?.name || 'مستخدم', verb: info.verb, kind: info.kind, detail: info.detail,
+                ...(info.to ? { to: info.to } : {}),
                 ...(info.target ? { target: info.target } : {})
             };
         }
 
-        // the notification of a batch of changes (written in the same atomic update as the changes)
-        function notificationFor(ops) {
-            const info = describeChanges(ops);
-            return info ? newNotification(info) : null;
+        // Batch notifications split by permission-gated section (written atomically with changes)
+        function notificationsFor(ops) {
+            const bySec = {};
+            ops.forEach(op => {
+                const sec = notifSectionForKey(op.key);
+                if (!sec) return;
+                (bySec[sec] = bySec[sec] || []).push(op);
+            });
+            const out = [];
+            Object.entries(bySec).forEach(([sec, secOps]) => {
+                const info = describeChanges(secOps);
+                if (!info) return;
+                const n = newNotification(info);
+                out.push({ key: 'sectionNotifications/' + sec + '/' + n.id, data: n });
+            });
+            return out;
         }
 
-        // a change that is written on its own (PDF upload or removal)
+        // Targeted personal notification (written ONLY to userNotifications/{toUid}/{id})
+        function notifyUser(toUid, info) {
+            if (!rtdb || !fbUser || !toUid || toUid === fbUser.uid) return;
+            const n = newNotification({ ...info, to: toUid });
+            rtdb.ref('userNotifications/' + toUid + '/' + n.id).set(n).catch(err => console.warn('user notification not saved:', err && err.code));
+        }
+
+        // Section-scoped direct notification (PDF upload/removal, shipping, customer comments, etc.)
         function notifyDirect(verb, kind, detail, target) {
-            if (!fbDb || !fbUser) return;
+            if (!rtdb || !fbUser) return;
+            const sec = notifSectionForKey(target && target.col ? target.col + '/' : '');
+            if (!sec) return;
             const n = newNotification({ verb, kind, detail, target });
-            fbDb.collection('notifications').doc(n.id).set(n).catch(err => console.warn('notification not saved:', err && err.code));
+            rtdb.ref('sectionNotifications/' + sec + '/' + n.id).set(n).catch(err => console.warn('section notification not saved:', err && err.code));
         }
 
         function listNameById(id) {
@@ -1739,18 +1833,40 @@
         }
         function startNotifSync() {
             stopNotifSync();
+            if (!rtdb || !fbUser) return;
             androidPushSession();
-            notifUnsub = fbDb.collection('notifications').orderBy('t', 'desc').limit(NOTIF_LIMIT).onSnapshot(snap => {
-                notifs = snap.docs.map(d => d.data());
+            notifBuckets = {};
+            const meUid = fbUser.uid;
+            const rebuild = () => {
+                const seen = new Map();
+                Object.values(notifBuckets).forEach(arr => {
+                    (arr || []).forEach(n => { if (n && n.id) seen.set(n.id, n); });
+                });
+                notifs = [...seen.values()].sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0)).slice(0, NOTIF_LIMIT);
                 renderNotifs();
                 if (window.App && App.Notifications) App.Notifications.observe();
-            }, err => console.error('notifications listener', err));
+            };
+            const subFeed = (bucketKey, ref) => {
+                const cb = snap => {
+                    const list = [];
+                    snap.forEach(ch => { const v = ch.val(); if (v && typeof v === 'object') list.push({ id: ch.key, ...v }); });
+                    notifBuckets[bucketKey] = list;
+                    rebuild();
+                };
+                ref.on('value', cb, err => console.warn('notif listener ' + bucketKey, err && err.code));
+                notifUnsubs.push(() => { try { ref.off('value', cb); } catch (e) { /* noop */ } });
+            };
+            subFeed('__mine__', rtdb.ref('userNotifications/' + meUid).orderByChild('t').limitToLast(30));
+            NOTIF_SECTIONS.forEach(sec => {
+                if (sec.check()) subFeed(sec.key, rtdb.ref('sectionNotifications/' + sec.key).orderByChild('t').limitToLast(20));
+            });
         }
 
         function stopNotifSync() {
             androidPushClear();
-            if (notifUnsub) { try { notifUnsub(); } catch (e) { /* already closed */ } }
-            notifUnsub = null;
+            notifUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            notifUnsubs = [];
+            notifBuckets = {};
             notifs = [];
             if (window.App && App.Notifications) App.Notifications.baseline = null;
             closeNotifPanel();
@@ -2006,7 +2122,16 @@
                 logs: c.logs || []
             });
             fbBaseline = new Map();
-            desiredDocs(appData).forEach((data, key) => fbBaseline.set(key, { data, sig: canon(data) }));
+            desiredDocs(appData).forEach((data, key) => {
+                if (key.startsWith('userDirectory/')) return;
+                fbBaseline.set(key, { data, sig: canon(data) });
+            });
+            if (fbLoaded.allUsers && fbLoaded.allRoles && can('users.manage') && c.userDirectory) {
+                Object.entries(c.userDirectory).forEach(([k, v]) => {
+                    const { id: _ignore, ...rest } = v || {};
+                    fbBaseline.set('userDirectory/' + k, { data: rest, sig: canon(rest) });
+                });
+            }
             applyPendingOrders();   // not in the baseline: they are still to be sent
             syncCustListener();     // customer-order listeners need the signed-in user (rep or not)
         }
@@ -2015,37 +2140,130 @@
             if (fbCache) buildFromCache();
         }
 
+        let fbMyRoleUnsub = null;
+        let fbScopedSig = null;
+        let fbScopedUnsubs = [];
+        let fbAutoDirSynced = false;
+
         function startSync(uid) {
             stopSync();
-            fbCache = { users: {}, roles: {}, companies: {}, lists: {}, partners: {}, checks: {}, ord: {}, settings: null, logs: [], custOrders: {}, custReps: {} };
+            fbCache = { users: {}, roles: {}, userDirectory: {}, companies: {}, lists: {}, partners: {}, checks: {}, ord: {}, settings: null, logs: [], custOrders: {}, custReps: {} };
             fbLoaded = {};
             fbSynced = false;
+            fbScopedSig = null;
+            fbAutoDirSynced = false;
             loadPendingLocal(uid);
-            const listen = (name, ref, apply) => {
-                fbUnsubs.push(ref.onSnapshot(snap => {
+
+            fbUnsubs.push(fbDb.collection('settings').doc('main').onSnapshot(s => {
+                if (!fbCache) return;
+                fbCache.settings = s.exists ? s.data() : null;
+                fbLoaded.settings = true;
+                onCacheChanged();
+            }, err => onListenError('settings', err)));
+
+            fbUnsubs.push(fbDb.collection('users').doc(uid).onSnapshot(s => {
+                if (!fbCache) return;
+                if (!s.exists) {
+                    delete fbCache.users[uid];
+                    fbLoaded.me = true;
+                    onCacheChanged();
+                    return;
+                }
+                const meDoc = { id: s.id, ...s.data() };
+                fbCache.users[meDoc.id] = meDoc;
+                fbLoaded.me = true;
+
+                if (meDoc.roleId && (!fbMyRoleUnsub || fbMyRoleUnsub._roleId !== meDoc.roleId)) {
+                    if (fbMyRoleUnsub) { try { fbMyRoleUnsub(); } catch (e) { /* noop */ } }
+                    const uRole = fbDb.collection('roles').doc(meDoc.roleId).onSnapshot(rs => {
+                        if (!fbCache) return;
+                        if (rs.exists) fbCache.roles[rs.id] = { id: rs.id, ...rs.data() };
+                        fbLoaded.myRole = true;
+                        onCacheChanged();
+                    }, err => onListenError('myRole', err));
+                    uRole._roleId = meDoc.roleId;
+                    fbMyRoleUnsub = uRole;
+                } else {
+                    onCacheChanged();
+                }
+            }, err => onListenError('me', err)));
+        }
+
+        function attachScopedListeners(myUid) {
+            if (!fbCache || !fbUser || !fbLoaded.me || !fbLoaded.myRole || !fbLoaded.settings) return;
+            const me = fbCache.users[myUid];
+            if (!me || !me.active) return;
+            const myRole = fbCache.roles[me.roleId];
+            const sig = [myUid, me.roleId, me.repId || '', (myRole && myRole.locked) ? '1' : '0', ((myRole && myRole.permissions) || []).join(','), (fbCache.settings && fbCache.settings.permsVersion) || 1].join('|');
+            if (fbScopedSig === sig) return;
+            fbScopedSig = sig;
+
+            fbScopedUnsubs.forEach(u => { try { u(); } catch (e) { /* noop */ } });
+            fbScopedUnsubs = [];
+
+            const listenScoped = (name, ref, apply) => {
+                fbScopedUnsubs.push(ref.onSnapshot(snap => {
                     if (!fbCache) return;
                     apply(snap);
                     fbLoaded[name] = true;
                     onCacheChanged();
                 }, err => onListenError(name, err)));
             };
-            listen('users', fbDb.collection('users'), s => { fbCache.users = mapDocs(s); });
-            listen('roles', fbDb.collection('roles'), s => { fbCache.roles = mapDocs(s); });
-            listen('companies', fbDb.collection('companies'), s => { fbCache.companies = mapDocs(s); });
-            listen('lists', fbDb.collection('lists'), s => { fbCache.lists = mapDocs(s); });
-            listen('settings', fbDb.collection('settings').doc('main'), s => { fbCache.settings = s.exists ? s.data() : null; });
+
+            if (can('users.manage')) {
+                listenScoped('allUsers', fbDb.collection('users'), s => { fbCache.users = mapDocs(s); });
+                listenScoped('allRoles', fbDb.collection('roles'), s => { fbCache.roles = mapDocs(s); });
+            } else {
+                fbLoaded.allUsers = false;
+                fbLoaded.allRoles = false;
+            }
+
+            if (chatCan() || can('complaints.file') || can('complaints.manage') || can('expenses.request') || can('expenses.approve') || can('users.manage')) {
+                const dirRef = rtdb.ref('userDirectory');
+                const dirCb = snap => {
+                    if (!fbCache) return;
+                    const val = snap.val() || {};
+                    fbCache.userDirectory = {};
+                    userDirectoryMap.clear();
+                    Object.entries(val).forEach(([k, v]) => {
+                        if (v && typeof v === 'object') {
+                            fbCache.userDirectory[k] = { id: k, ...v };
+                            userDirectoryMap.set(k, { id: k, ...v });
+                        }
+                    });
+                    fbLoaded.directory = true;
+                    onCacheChanged();
+                };
+                dirRef.on('value', dirCb, err => console.warn('userDirectory listener', err && err.code));
+                fbScopedUnsubs.push(() => { try { dirRef.off('value', dirCb); } catch (e) { /* noop */ } });
+            }
+
+            if (can('companies.view') || can('lists.view') || can('orders.view') || can('dashboard.view')) {
+                listenScoped('companies', fbDb.collection('companies'), s => { fbCache.companies = mapDocs(s); });
+                listenScoped('lists', fbDb.collection('lists'), s => { fbCache.lists = mapDocs(s); });
+            }
+
             startNotifSync();
-            chatStart();
-            expStart();
+            chatStop(); chatStart();
+            expStop(); expStart();
         }
 
         function stopSync() {
             fbUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbUnsubs = [];
+            if (fbMyRoleUnsub) { try { fbMyRoleUnsub(); } catch (e) { /* noop */ } fbMyRoleUnsub = null; }
+            fbScopedUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
+            fbScopedUnsubs = [];
+            fbScopedSig = null;
+            fbAutoDirSynced = false;
+            userDirectoryMap.clear();
             fbChecksUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbChecksUnsubs = [];
             fbCustUnsubs.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             fbCustUnsubs = [];
+            if (typeof custCmtUnsub === 'function') { try { custCmtUnsub(); } catch (e) { /* noop */ } custCmtUnsub = null; }
+            custCmtSubbed = false;
+            custComments = [];
             fbOrdLive.forEach(u => { try { u(); } catch (e) { /* already closed */ } });
             custRepView = '';
             fbOrdLive.clear();
@@ -2139,14 +2357,24 @@
 
         function onCacheChanged() {
             if (!fbUser || !fbCache) return;
-            if (!['users', 'roles', 'companies', 'lists', 'settings'].every(k => fbLoaded[k])) return;
-            const sigOf = () => canon([...desiredDocs(appData).entries(), appData.logs.map(l => l.id)]);
+            if (!fbLoaded.me || !fbLoaded.settings) return;
+            const rawMe = fbCache.users[fbUser.uid];
+            if (!rawMe) return handleAccessLost('حسابك غير مفعّل داخل النظام. تواصل مع مدير النظام');
+            if (!rawMe.active) return handleAccessLost('هذا الحساب موقوف. تواصل مع مدير النظام');
+            if (!fbLoaded.myRole) return;
+
+            sessionUserId = rawMe.id;
+            const sigOf = () => canon([...desiredDocs(appData).entries(), appData.logs.map(l => l.id), [...userDirectoryMap.entries()]]);
             const before = appData ? sigOf() : '';
             const previous = appData;
             buildFromCache();
-            // Realtime Database can report a value again with the same content. Then keep the same objects:
-            // an open dialog (company, list, user) holds references to them and would save into stale copies.
-            // Only the logs are taken from the new build.
+            attachScopedListeners(fbUser.uid);
+
+            const needUsers = can('users.manage');
+            const needCompanies = can('companies.view') || can('lists.view') || can('orders.view') || can('dashboard.view');
+            if (needUsers && (!fbLoaded.allUsers || !fbLoaded.allRoles)) return;
+            if (needCompanies && (!fbLoaded.companies || !fbLoaded.lists)) return;
+
             const contentOf = d => canon([...desiredDocs(d).entries()]);
             if (previous && contentOf(previous) === contentOf(appData)) {
                 previous.logs = appData.logs;
@@ -2157,6 +2385,19 @@
             if (!me) return handleAccessLost('حسابك غير مفعّل داخل النظام. تواصل مع مدير النظام');
             if (!me.active) return handleAccessLost('هذا الحساب موقوف. تواصل مع مدير النظام');
             sessionUserId = me.id;
+
+            if (!fbAutoDirSynced && needUsers && fbLoaded.directory && fbLoaded.allUsers && fbLoaded.allRoles) {
+                fbAutoDirSynced = true;
+                const dirUpdates = {};
+                appData.users.forEach(u => {
+                    const doc = buildDirectoryDoc(u, appData.roles);
+                    const cur = fbCache.userDirectory[u.id];
+                    const { id: _id, ...curClean } = cur || {};
+                    if (!cur || canon(curClean) !== canon(doc)) dirUpdates['userDirectory/' + u.id] = doc;
+                });
+                if (Object.keys(dirUpdates).length) rtdb.ref().update(dirUpdates).catch(() => {});
+            }
+
             if (pendingOrderCopies.size || unsavedChanges) saveState();
             syncLogsListener();
             setTimeout(syncChecksListener, 0);
@@ -2166,7 +2407,9 @@
                 appEntered = true;
                 if (pendingLoginLog) {
                     pendingLoginLog = false;
-                    me.lastLoginAt = new Date().toISOString();
+                    const nowIso = new Date().toISOString();
+                    me.lastLoginAt = nowIso;
+                    rtdb.ref('users/' + me.id + '/lastLoginAt').set(nowIso).catch(() => {});
                     log('تسجيل دخول');
                 }
                 enterApp();
@@ -3918,12 +4161,13 @@
 
                 const local = readLocalSeed();
                 const seed = local || normalizeData(defaultData());
-                const docs = [...desiredDocs(seed).entries()].map(([key, data]) => ({ key, data }));
+                const docs = [...desiredDocs(seed, { all: true }).entries()].map(([key, data]) => ({ key, data }));
 
-                // step 1: the marker, the admin profile, roles and settings (allowed only while bootstrapping)
+                // step 1: the marker, the admin profile, directory entry, roles and settings (allowed only while bootstrapping)
                 await commitChunks([
                     { key: 'system/init', data: { createdAt: now, createdBy: uid } },
                     { key: 'users/' + uid, data: { name, email, roleId: 'admin', active: true, createdAt: now, lastLoginAt: now } },
+                    { key: 'userDirectory/' + uid, data: { name, roleName: 'مدير النظام', active: true, isAdmin: true, isApprover: true, isComplaintMgr: true } },
                     ...docs.filter(o => o.key.startsWith('roles/') || o.key === 'settings/main')
                 ]);
                 initExists = true;
@@ -3937,7 +4181,7 @@
                         seed.companies.forEach(c => c.lists.forEach(l => { if (l.id === id) l.hasPdf = true; }));
                     } catch (err) { console.error('pdf upload', id, err); }
                 }
-                await commitChunks([...desiredDocs(seed).entries()]
+                await commitChunks([...desiredDocs(seed, { all: true }).entries()]
                     .filter(([key]) => key.startsWith('companies/') || key.startsWith('lists/'))
                     .map(([key, data]) => ({ key, data })));
 
@@ -5597,12 +5841,17 @@
         const custCmtPendingDeletes = new Set();
         let custCmtOpenId = '';
         let custCmtSubbed = false;
+        let custCmtUnsub = null;
         let custCmtEditId = '';
         const custCmtMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
         function custEnsureCommentSubs() {
             if (custCmtSubbed || !fbDb || !fbUser || !canCustComments()) return;
             custCmtSubbed = true;
-            fbDb.collection('custComments').orderBy('t', 'desc').limit(2000).onSnapshot(snap => {
+            const myRep = isSystemAdmin() ? '' : currentRepId();
+            const q = myRep
+                ? fbDb.collection('custComments').where('repId', '==', myRep)
+                : fbDb.collection('custComments').orderBy('t', 'desc').limit(2000);
+            custCmtUnsub = q.onSnapshot(snap => {
                 custComments = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => !custCmtPendingDeletes.has(x.id));
                 if (parseRoute().name === 'customers') updateCustBody();
             }, err => console.error('custComments listener', err));
@@ -5645,7 +5894,7 @@
             const anyOpen = list.some(x => !x.handled);
             const thread = list.length ? list.map(x => {
                 const mine = x.byId === me;
-                const isRepAuthor = !!(c.repId && appData.users.find(u => u.id === x.byId && u.repId === c.repId));
+                const isRepAuthor = !!(x.byIsRep || (c.repId && appData.users.find(u => u.id === x.byId && u.repId === c.repId)));
                 return `<div class="rounded-xl border ${x.handled ? 'border-slate-200 bg-slate-50' : 'border-amber-200 bg-amber-50/60'} p-3">
                     <div class="flex flex-wrap items-center gap-2 text-xs">
                         <span class="font-black text-slate-800">${esc(x.by || '')}</span>
@@ -5692,10 +5941,16 @@
                 log('تعديل تعليق فاتورة', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}`);
                 toast('تم تعديل التعليق', 'success');
             } else {
-                const cm = { id: uid('CMT-'), orderId: id, no: custNoLabel(c), repId: c.repId || '', byId: custCmtMe(), by: (currentUser() && currentUser().name) || 'مستخدم', text, t: now, editedAt: '', handled: false };
+                const cm = { id: uid('CMT-'), orderId: id, no: custNoLabel(c), repId: c.repId || (currentRepId() && !isSystemAdmin() ? currentRepId() : ''), byId: custCmtMe(), by: (currentUser() && currentUser().name) || 'مستخدم', byIsRep: !!(currentRepId() && !isSystemAdmin()), text, t: now, editedAt: '', handled: false };
                 custComments.unshift(cm);
                 custCmtWrite(cm);
-                notifyDirect('علّق', 'تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}: ${text.slice(0, 60)}`, { col: 'custOrders', id: c.id, comments: true });
+                const cmtDetail = `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}: ${text.slice(0, 60)}`;
+                const cmtTarget = { col: 'custOrders', id: c.id, comments: true };
+                notifyDirect('علّق', 'تعليق على فاتورة عميل', cmtDetail, cmtTarget);
+                const repRec = c.repId ? (appData.custReps || []).find(r => r.id === c.repId) : null;
+                if (repRec && repRec.uid && repRec.uid !== custCmtMe()) {
+                    notifyUser(repRec.uid, { verb: 'علّق', kind: 'تعليق على فاتورة عميل', detail: cmtDetail, target: cmtTarget });
+                }
                 log('تعليق على فاتورة عميل', `فاتورة رقم ${custNoLabel(c)} — ${c.customer || ''}`);
                 toast('تم إرسال التعليق', 'success');
             }
@@ -5754,7 +6009,7 @@
 
         const chatMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
         const chatIdFor = (a, b) => [a, b].sort().join('__');
-        const chatUserById = id => (appData.users || []).find(u => u.id === id) || null;
+        const chatUserById = id => directoryUserById(id);
         const chatNameOf = id => { const u = chatUserById(id); return u ? u.name : ''; };
         function chatIsOnline(id) { const p = chatPresence[id]; return !!(p && p.online && (Date.now() - new Date(p.at).getTime() < 90000)); }
         function chatPresenceText(id) {
@@ -5764,7 +6019,12 @@
         }
         const chatMetaFor = otherId => chatMetas.find(m => m.id === chatIdFor(chatMe(), otherId)) || null;
         const metaSansId = m => { const { id, ...rest } = m; return rest; };
-        function chatUnreadTotal() { const me = chatMe(); return chatMetas.reduce((n, m) => n + (((m.unread || {})[me]) || 0), 0); }
+        function chatUnreadOf(m) {
+            if (!m) return 0;
+            if (typeof m.unread === 'number') return m.unread;
+            return ((m.unread || {})[chatMe()]) || 0;
+        }
+        function chatUnreadTotal() { return chatMetas.reduce((n, m) => n + chatUnreadOf(m), 0); }
         function updateChatNavBadge() {
             const n = chatUnreadTotal();
             ['chatNavBadge', 'chatTopBadge'].forEach(id => {
@@ -5801,28 +6061,41 @@
                 snap.docs.forEach(d => { chatPresence[d.id] = d.data(); });
                 if (parseRoute().name === 'chat') { chatRenderList(); chatRenderHead(); }
             }, err => console.error('presence listener', err));
-            chatMetaUnsub = fbDb.collection('chatMeta').onSnapshot(snap => {
+            const inboxRef = rtdb.ref('userChats/' + chatMe());
+            const inboxCb = snap => {
                 const before = {};
                 chatMetas.forEach(m => { before[m.id] = m.lastAt || ''; });
                 const me = chatMe();
-                chatMetas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.p1 === me || m.p2 === me);
+                const val = snap.val() || {};
+                chatMetas = Object.entries(val).map(([id, v]) => ({ id, ...(v || {}) }));
                 updateChatNavBadge();
                 chatMetas.forEach(m => {
-                    if (m.p1 !== chatMe() && m.p2 !== chatMe()) return;
-                    const otherId = m.p1 === chatMe() ? m.p2 : m.p1;
-                    if (m.lastBy && m.lastBy !== chatMe() && m.lastAt && m.lastAt !== (before[m.id] || '') && chatAlertedAt[m.id] !== m.lastAt) {
+                    const otherId = m.peerId || (m.p1 === me ? m.p2 : m.p1);
+                    if (!otherId) return;
+                    if (m.lastBy && m.lastBy !== me && m.lastAt && m.lastAt !== (before[m.id] || '') && chatAlertedAt[m.id] !== m.lastAt) {
                         chatAlertedAt[m.id] = m.lastAt;
                         if (chatActiveWith !== otherId || document.hidden) chatAlertSound();
                     }
                 });
                 if (parseRoute().name === 'chat') chatRenderList();
-            }, err => console.error('chatMeta listener', err));
-            chatCallUnsub = fbDb.collection('calls').where('to', '==', chatMe()).limit(20).onSnapshot(snap => {
-                snap.docs.forEach(d => {
-                    const c = { id: d.id, ...d.data() };
-                    if (c.state === 'ringing' && !callState && (Date.now() - new Date(c.t).getTime() < 60000)) callIncoming(c);
+            };
+            inboxRef.on('value', inboxCb, err => console.error('userChats listener', err));
+            chatMetaUnsub = () => { try { inboxRef.off('value', inboxCb); } catch (e) { /* noop */ } };
+
+            const callInRef = rtdb.ref('userCalls/' + chatMe());
+            const callInCb = snap => {
+                const val = snap.val() || {};
+                Object.entries(val).forEach(([callId, sig]) => {
+                    if (!sig || sig.state !== 'ringing' || callState) return;
+                    if (Date.now() - new Date(sig.t).getTime() >= 60000) return;
+                    rtdb.ref('calls/' + callId).once('value').then(cSnap => {
+                        const c = cSnap.val();
+                        if (c && c.state === 'ringing' && !callState) callIncoming({ id: callId, ...c });
+                    }).catch(() => {});
                 });
-            }, err => console.error('calls listener', err));
+            };
+            callInRef.on('value', callInCb, err => console.error('userCalls listener', err));
+            chatCallUnsub = () => { try { callInRef.off('value', callInCb); } catch (e) { /* noop */ } };
         }
 
         function chatStop() {
@@ -5843,42 +6116,56 @@
             chatUnsubThread();
             chatThreadFor = cid;
             chatMsgsList = [];
-            chatThreadUnsub = fbDb.collection('chatMsgs').where('chatId', '==', cid).limit(400).onSnapshot(snap => {
-                chatMsgsList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+            const ref = rtdb.ref('chatThreads/' + cid + '/messages').orderByChild('t').limitToLast(400);
+            const cb = snap => {
+                const list = [];
+                snap.forEach(ch => { const v = ch.val(); if (v && typeof v === 'object') list.push({ id: ch.key, ...v }); });
+                chatMsgsList = list.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
                 if (parseRoute().name === 'chat') chatMarkSeen(cid);
                 if (parseRoute().name === 'chat' && chatActiveWith) { chatRenderThread(); chatRenderHead(); }
-            }, err => console.error('chatMsgs listener', err));
+            };
+            ref.on('value', cb, err => console.error('chatThreads listener', err));
+            chatThreadUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
         }
         function chatUnsubThread() { if (chatThreadUnsub) { try { chatThreadUnsub(); } catch (e) { /* noop */ } } chatThreadUnsub = null; chatThreadFor = null; }
         function chatMarkSeen(cid) {
             const me = chatMe();
+            const now = new Date().toISOString();
+            const updates = {};
+            let changed = false;
             chatMsgsList.forEach(m => {
                 if (m.by !== me && !m.seen && !m.deleted) {
-                    m.seen = true; m.seenAt = new Date().toISOString();
-                    fbDb.collection('chatMsgs').doc(m.id).update({ seen: true, seenAt: m.seenAt }).catch(() => {});
+                    m.seen = true; m.seenAt = now;
+                    updates[`chatThreads/${cid}/messages/${m.id}/seen`] = true;
+                    updates[`chatThreads/${cid}/messages/${m.id}/seenAt`] = now;
+                    changed = true;
                 }
             });
             const meta = chatMetas.find(x => x.id === cid);
-            if (meta && (((meta.unread || {})[me]) || 0) > 0) {
-                meta.unread = { ...(meta.unread || {}), [me]: 0 };
-                fbDb.collection('chatMeta').doc(cid).update({ unread: { ...meta.unread } }).catch(() => {});
+            if (meta && chatUnreadOf(meta) > 0) {
+                const parts = cid.split('__');
+                const otherId = parts[0] === me ? parts[1] : parts[0];
+                meta.unread = 0;
+                updates[`userChats/${me}/${cid}/unread`] = 0;
+                if (otherId) updates[`userChats/${otherId}/${cid}/peerReadAt`] = now;
+                changed = true;
                 updateChatNavBadge();
                 if (parseRoute().name === 'chat') chatRenderList();
             }
+            if (changed) rtdb.ref().update(updates).catch(() => {});
         }
 
         // ---------- views ----------
         function chatFlags(u, m) {
-            const me = chatMe();
             if (!m) return { unread: 0, awaiting: false, typing: false, score: 0 };
-            const unread = ((m.unread || {})[me]) || 0;
+            const unread = chatUnreadOf(m);
             const awaiting = !!m.lastBy && m.lastBy === u.id;            // his message is the last one — my reply is pending
             const typing = m.typingBy === u.id && (Date.now() - new Date(m.typingAt || 0).getTime() < 4500);
             const score = typing ? 4 : unread > 0 ? 3 : awaiting ? 2 : 1;
             return { unread, awaiting, typing, score };
         }
         function chatPeople() {
-            return (appData.users || []).filter(u => u.active && u.id !== chatMe())
+            return directoryUsers().filter(u => u.id !== chatMe())
                 .map(u => { const m = chatMetaFor(u.id); return { u, m, f: chatFlags(u, m) }; })
                 .sort((a, b) => {
                     if (a.f.score !== b.f.score) return b.f.score - a.f.score;
@@ -5892,7 +6179,7 @@
                 const mine = [...chatMsgsList].reverse().find(x => x.by === chatMe() && !x.deleted);
                 return !!(mine && mine.seen);
             }
-            return (((m.unread || {})[m.lastBy === m.p1 ? m.p2 : m.p1]) || 0) === 0 && !!m.lastAt;
+            return !!(m && m.peerReadAt && m.lastAt && m.peerReadAt >= m.lastAt);
         }
         function chatPreviewText(m, me) {
             let t = m.lastType === 'img' ? '📷 صورة' : m.lastType === 'audio' ? '🎤 رسالة صوتية' : (m.lastText || '');
@@ -5986,7 +6273,7 @@
                 return `<button type="button" onclick="navigate('chat/${u.id}')" class="w-full flex items-center gap-3 px-3 py-2.5 text-start transition-colors ${active ? 'bg-brand-50' : unread ? 'bg-rose-50/50 hover:bg-rose-50' : 'hover:bg-slate-50'}">
                     <span class="relative shrink-0">${avatarHtml(u.name)}<span class="absolute bottom-0 start-0 w-3 h-3 rounded-full border-2 border-white ${chatIsOnline(u.id) ? 'bg-emerald-500' : 'bg-slate-300'}"></span>${f.awaiting ? '<span class="chat-await-dot absolute -top-0.5 -end-0.5 flex w-3.5 h-3.5" title="بانتظار ردّك"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-60"></span><span class="relative inline-flex rounded-full w-3.5 h-3.5 bg-rose-600 border-2 border-white"></span></span>' : ''}</span>
                     <span class="flex-1 min-w-0">
-                        <span class="flex items-baseline gap-2"><b class="text-sm text-slate-800 truncate">${esc(u.name)}</b><span class="text-[10px] text-slate-400 shrink-0">${esc(roleName(u.roleId) || '')}</span>${f.awaiting ? '<span class="text-[10px] font-black text-rose-600 shrink-0">• بانتظار ردّك</span>' : ''}</span>
+                        <span class="flex items-baseline gap-2"><b class="text-sm text-slate-800 truncate">${esc(u.name)}</b><span class="text-[10px] text-slate-400 shrink-0">${esc(u.roleName || (u.roleId ? roleName(u.roleId) : '') || '')}</span>${f.awaiting ? '<span class="text-[10px] font-black text-rose-600 shrink-0">• بانتظار ردّك</span>' : ''}</span>
                         <span class="block text-xs ${unread ? 'text-slate-800 font-bold' : 'text-slate-500'} truncate">${m && m.lastBy === me && !f.typing ? `<span class="${myLastSeen ? 'text-sky-500' : 'text-slate-400'} font-black">✓✓</span> ` : ''}${preview}</span>
                     </span>
                     <span class="flex flex-col items-end gap-1 shrink-0">
@@ -6029,16 +6316,24 @@
         function chatPinMsg(id) {
             const m = chatMsgsList.find(x => x.id === id);
             const meta = chatMetaFor(chatActiveWith);
-            if (!m || !meta) return;
+            if (!m || !meta || !chatActiveWith) return;
+            const me = chatMe(), otherId = chatActiveWith, cid = meta.id;
             const pinned = { id: m.id, text: (m.type === 'text' ? m.text : (m.type === 'img' ? '📷 صورة' : m.type === 'audio' ? '🎤 رسالة صوتية' : m.text || '')).slice(0, 140), byName: m.byName || chatNameOf(m.by), at: new Date().toISOString() };
-            fbDb.collection('chatMeta').doc(meta.id).update({ pinned }).catch(err => chatWriteFailed(err));
+            const updates = {};
+            updates[`userChats/${me}/${cid}/pinned`] = pinned;
+            updates[`userChats/${otherId}/${cid}/pinned`] = pinned;
+            rtdb.ref().update(updates).catch(err => chatWriteFailed(err));
             meta.pinned = pinned;
             chatRenderPinBar();
             toast('اتثبتت الرسالة 📌', 'success');
         }
         function chatUnpin() {
-            const meta = chatMetaFor(chatActiveWith); if (!meta) return;
-            fbDb.collection('chatMeta').doc(meta.id).update({ pinned: null }).catch(() => {});
+            const meta = chatMetaFor(chatActiveWith); if (!meta || !chatActiveWith) return;
+            const me = chatMe(), otherId = chatActiveWith, cid = meta.id;
+            const updates = {};
+            updates[`userChats/${me}/${cid}/pinned`] = null;
+            updates[`userChats/${otherId}/${cid}/pinned`] = null;
+            rtdb.ref().update(updates).catch(() => {});
             meta.pinned = null;
             chatRenderPinBar();
         }
@@ -6094,8 +6389,9 @@
             const groups = {};
             Object.entries(m.reacts || {}).forEach(([u, e]) => { (groups[e] = groups[e] || []).push(u); });
             const reactChips = Object.entries(groups).map(([e, us]) => `<button type="button" onclick="chatReact('${m.id}', '${e}')" class="text-xs bg-white border ${us.includes(me) ? 'border-brand-400 bg-brand-50' : 'border-slate-200'} rounded-full px-1.5 py-0.5 shadow-sm">${e} ${us.length}</button>`).join(' ');
-            const media = m.type === 'img' && m.mediaId ? `<div class="mb-1"><img data-media="${esc(m.mediaId)}" alt="صورة مرسلة" class="rounded-xl max-w-[240px] w-full bg-slate-100 cursor-pointer" onclick="chatOpenMedia('${esc(m.mediaId)}')"></div>`
-                : m.type === 'audio' && m.mediaId ? `<audio data-media="${esc(m.mediaId)}" controls class="w-60 max-w-full h-9"></audio>` : '';
+            const mCid = m.chatId || (chatActiveWith ? chatIdFor(me, chatActiveWith) : '');
+            const media = m.type === 'img' && m.mediaId ? `<div class="mb-1"><img data-chat="${esc(mCid)}" data-media="${esc(m.mediaId)}" alt="صورة مرسلة" class="rounded-xl max-w-[240px] w-full bg-slate-100 cursor-pointer" onclick="chatOpenMedia('${esc(mCid)}', '${esc(m.mediaId)}')"></div>`
+                : m.type === 'audio' && m.mediaId ? `<audio data-chat="${esc(mCid)}" data-media="${esc(m.mediaId)}" controls class="w-60 max-w-full h-9"></audio>` : '';
             const quote = m.replyTo ? `<div class="mb-1 px-2 py-1 rounded-lg text-[11px] ${mine ? 'bg-white/15 border-s-2 border-white/60' : 'bg-slate-100 border-s-2 border-brand-400'}"><b>${esc(m.replyBy || '')}</b><br>${esc((m.replyText || '').slice(0, 90))}</div>` : '';
             return `<div id="cmsg-${m.id}" class="group flex ${mine ? 'justify-end' : 'justify-start'}">
                 <div class="max-w-[78%]">
@@ -6116,33 +6412,35 @@
             </div>`;
         }
 
-        // ---------- media ----------
-        async function chatLoadMedia(mediaId) {
-            if (chatMediaCache.has(mediaId)) return chatMediaCache.get(mediaId);
+        // ---------- media (scoped to chatMedia/{chatId}/{mediaId}) ----------
+        async function chatLoadMedia(cid, mediaId) {
+            const cacheKey = cid + '/' + mediaId;
+            if (chatMediaCache.has(cacheKey)) return chatMediaCache.get(cacheKey);
             try {
-                const snap = await rtdb.ref('chatMedia/' + mediaId).once('value');
+                const snap = await rtdb.ref('chatMedia/' + cid + '/' + mediaId).once('value');
                 const v = snap.val();
                 if (!v || !v.chunks) return null;
                 const url = 'data:' + (v.mime || 'application/octet-stream') + ';base64,' + v.chunks.join('');
-                chatMediaCache.set(mediaId, url);
+                chatMediaCache.set(cacheKey, url);
                 return url;
             } catch (e) { return null; }
         }
         function chatHydrateMedia(root) {
             (root || document).querySelectorAll('[data-media]').forEach(async elm => {
                 if (elm.getAttribute('src')) return;
-                const url = await chatLoadMedia(elm.getAttribute('data-media'));
+                const cid = elm.getAttribute('data-chat') || (chatActiveWith ? chatIdFor(chatMe(), chatActiveWith) : '');
+                const url = await chatLoadMedia(cid, elm.getAttribute('data-media'));
                 if (url) elm.setAttribute('src', url);
             });
         }
-        function chatOpenMedia(mediaId) { chatLoadMedia(mediaId).then(url => { if (url) window.open(url, '_blank'); }); }
-        function chatUploadMedia(dataUrl) {
+        function chatOpenMedia(cid, mediaId) { chatLoadMedia(cid, mediaId).then(url => { if (url) window.open(url, '_blank'); }); }
+        function chatUploadMedia(dataUrl, cid = (chatActiveWith ? chatIdFor(chatMe(), chatActiveWith) : '')) {
             const id = uid('MED-');
             const mime = (dataUrl.match(/^data:([^;]+)/) || [])[1] || 'application/octet-stream';
             const b64 = dataUrl.split(',')[1] || '';
             const chunks = [];
             for (let i = 0; i < b64.length; i += 60000) chunks.push(b64.slice(i, i + 60000));
-            return rtdb.ref('chatMedia/' + id).set({ mime, chunks, by: chatMe(), at: new Date().toISOString() }).then(() => id);
+            return rtdb.ref('chatMedia/' + cid + '/' + id).set({ mime, chunks, by: chatMe(), at: new Date().toISOString() }).then(() => id);
         }
 
         // ---------- composer ----------
@@ -6151,30 +6449,47 @@
             const me = chatMe(), meUser = currentUser();
             const cid = chatIdFor(me, otherId);
             const now = new Date().toISOString();
-            const msg = { id: uid('MSG-'), chatId: cid, by: me, byName: meUser ? meUser.name : '', text, type, mediaId, t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: chatReplyTo ? chatReplyTo.id : '', replyText: chatReplyTo ? chatReplyTo.text : '', replyBy: chatReplyTo ? chatReplyTo.byName : '', reacts: {} };
-            fbDb.collection('chatMsgs').doc(msg.id).set(msg).catch(err => chatWriteFailed(err));
-            const prev = chatMetaFor(otherId);
-            const unread = { ...((prev && prev.unread) || {}) };
-            unread[otherId] = (unread[otherId] || 0) + 1; unread[me] = 0;
-            const parts = cid.split('__');
-            fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: type === 'text' ? text.slice(0, 120) : (type === 'img' ? '📷 صورة' : '🎤 رسالة صوتية'), lastType: type, lastAt: now, lastBy: me, unread, typingBy: '', typingAt: '' }).catch(err => chatWriteFailed(err));
+            const meName = meUser ? meUser.name : '';
+            const preview = type === 'text' ? text.slice(0, 120) : (type === 'img' ? '📷 صورة' : '🎤 رسالة صوتية');
+            const msg = { id: uid('MSG-'), chatId: cid, by: me, byName: meName, text, type, mediaId, t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: chatReplyTo ? chatReplyTo.id : '', replyText: chatReplyTo ? chatReplyTo.text : '', replyBy: chatReplyTo ? chatReplyTo.byName : '', reacts: {} };
+            const updates = {};
+            updates[`chatThreads/${cid}/messages/${msg.id}`] = msg;
+            updates[`userChats/${me}/${cid}/peerId`] = otherId;
+            updates[`userChats/${me}/${cid}/peerName`] = chatNameOf(otherId);
+            updates[`userChats/${me}/${cid}/lastText`] = preview;
+            updates[`userChats/${me}/${cid}/lastType`] = type;
+            updates[`userChats/${me}/${cid}/lastAt`] = now;
+            updates[`userChats/${me}/${cid}/lastBy`] = me;
+            updates[`userChats/${me}/${cid}/unread`] = 0;
+            updates[`userChats/${me}/${cid}/typingBy`] = '';
+            updates[`userChats/${me}/${cid}/typingAt`] = '';
+            updates[`userChats/${otherId}/${cid}/peerId`] = me;
+            updates[`userChats/${otherId}/${cid}/peerName`] = meName;
+            updates[`userChats/${otherId}/${cid}/lastText`] = preview;
+            updates[`userChats/${otherId}/${cid}/lastType`] = type;
+            updates[`userChats/${otherId}/${cid}/lastAt`] = now;
+            updates[`userChats/${otherId}/${cid}/lastBy`] = me;
+            updates[`userChats/${otherId}/${cid}/unread`] = firebase.database.ServerValue.increment(1);
+            updates[`userChats/${otherId}/${cid}/typingBy`] = '';
+            updates[`userChats/${otherId}/${cid}/typingAt`] = '';
+            rtdb.ref().update(updates).catch(err => chatWriteFailed(err));
             chatReplyTo = null;
             chatRenderReplyBar();
             chatNotifyPeer(otherId, msg);
         }
         function chatNotifyPeer(otherId, msg) {
-            if (!fbDb || !otherId || !msg) return;
+            if (!rtdb || !otherId || !msg) return;
             const meUser = currentUser();
             const detail = msg.type === 'img' ? (msg.text || '📷 صورة') : msg.type === 'audio' ? '🎤 رسالة صوتية' : String(msg.text || '').slice(0, 100);
-            const n = { id: 'chatNTF-' + msg.id, t: msg.t, uid: chatMe(), user: meUser ? meUser.name : '', verb: 'أرسل', kind: 'رسالة محادثة', detail, to: otherId, target: { col: 'chat', id: chatMe() } };
-            fbDb.collection('notifications').doc(n.id).set(n).catch(err => console.warn('chat notification not saved:', err && err.code));
+            notifyUser(otherId, { id: 'chatNTF-' + msg.id, t: msg.t, user: meUser ? meUser.name : '', verb: 'أرسل', kind: 'رسالة محادثة', detail, target: { col: 'chat', id: chatMe() } });
         }
         function chatSend() {
             const ta = el('chatInput'); if (!ta || !chatActiveWith) return;
             const text = ta.value.trim();
             if (chatEditId) {
                 const m = chatMsgsList.find(x => x.id === chatEditId);
-                if (m && text) { m.text = text; m.editedAt = new Date().toISOString(); fbDb.collection('chatMsgs').doc(m.id).update({ text, editedAt: m.editedAt }).catch(err => chatWriteFailed(err)); }
+                const cid = chatIdFor(chatMe(), chatActiveWith);
+                if (m && text) { m.text = text; m.editedAt = new Date().toISOString(); rtdb.ref(`chatThreads/${cid}/messages/${m.id}`).update({ text, editedAt: m.editedAt }).catch(err => chatWriteFailed(err)); }
                 chatEditId = null; ta.value = ''; chatInputGrow(ta); chatRenderThread();
                 return;
             }
@@ -6190,9 +6505,10 @@
         }
         function chatStartEdit(id) { const m = chatMsgsList.find(x => x.id === id); if (!m) return; chatEditId = id; const ta = el('chatInput'); if (ta) { ta.value = m.text || ''; chatInputGrow(ta); ta.focus(); } }
         function chatDeleteMsg(id) {
-            const m = chatMsgsList.find(x => x.id === id); if (!m) return;
+            const m = chatMsgsList.find(x => x.id === id); if (!m || !chatActiveWith) return;
+            const cid = chatIdFor(chatMe(), chatActiveWith);
             m.deleted = true; m.text = ''; m.mediaId = '';
-            fbDb.collection('chatMsgs').doc(id).update({ deleted: true, text: '', mediaId: '' }).catch(err => chatWriteFailed(err));
+            rtdb.ref(`chatThreads/${cid}/messages/${id}`).update({ deleted: true, text: '', mediaId: '' }).catch(err => chatWriteFailed(err));
             chatRenderThread();
         }
         function chatReactMenu(e, id) {
@@ -6210,12 +6526,12 @@
         function chatCloseReactPop() { const p = el('chatReactPop'); if (p) p.remove(); }
         function chatReact(id, emoji) {
             chatCloseReactPop();
-            const m = chatMsgsList.find(x => x.id === id); if (!m) return;
-            const me = chatMe();
+            const m = chatMsgsList.find(x => x.id === id); if (!m || !chatActiveWith) return;
+            const me = chatMe(), cid = chatIdFor(me, chatActiveWith);
             const reacts = { ...(m.reacts || {}) };
             if (reacts[me] === emoji) delete reacts[me]; else reacts[me] = emoji;
             m.reacts = reacts;
-            fbDb.collection('chatMsgs').doc(id).update({ reacts }).catch(err => chatWriteFailed(err));
+            rtdb.ref(`chatThreads/${cid}/messages/${id}/reacts`).set(reacts).catch(err => chatWriteFailed(err));
             chatRenderThread();
         }
         function chatInsertEmoji(e) { const ta = el('chatInput'); if (!ta) return; const st = ta.selectionStart || ta.value.length; ta.value = ta.value.slice(0, st) + e + ta.value.slice(ta.selectionEnd || st); ta.focus(); chatInputGrow(ta); }
@@ -6225,8 +6541,8 @@
             const now = Date.now();
             if (!chatActiveWith || now - chatLastTypePing < 2500) return;
             chatLastTypePing = now;
-            const meta = chatMetaFor(chatActiveWith); if (!meta) return;
-            fbDb.collection('chatMeta').doc(meta.id).update({ typingBy: chatMe(), typingAt: new Date().toISOString() }).catch(() => {});
+            const otherId = chatActiveWith, cid = chatIdFor(chatMe(), otherId);
+            rtdb.ref(`userChats/${otherId}/${cid}`).update({ typingBy: chatMe(), typingAt: new Date().toISOString() }).catch(() => {});
         }
         function chatSendImage(input) {
             const file = input.files && input.files[0];
@@ -6366,24 +6682,25 @@
                 callState.remoteStream = stream;
                 callAttachRemote();
             };
-            pc.onicecandidate = e => { if (e.candidate && callState) fbDb.collection('callIce').doc(uid('ICE-')).set({ callId: callState.id, by: chatMe(), cand: JSON.stringify(e.candidate.toJSON()) }).catch(() => {}); };
+            pc.onicecandidate = e => { if (e.candidate && callState) rtdb.ref(`calls/${callState.id}/ice/${uid('ICE-')}`).set({ by: chatMe(), cand: JSON.stringify(e.candidate.toJSON()), t: new Date().toISOString() }).catch(() => {}); };
             pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' && callState) { toast('فشل الاتصال — الشبكة ضعيفة', 'error'); callEnd(true); } };
             return pc;
         }
         function callSubIce() {
-            callState.iceUnsub = fbDb.collection('callIce').where('callId', '==', callState.id).limit(100).onSnapshot(snap => {
-                snap.docs.forEach(d => {
-                    if (!callState || callState.iceSeen.has(d.id)) return;
-                    callState.iceSeen.add(d.id);
-                    const v = d.data();
-                    if (!v || v.by === chatMe()) return;
-                    let cand = null;
-                    try { cand = JSON.parse(v.cand || 'null'); } catch (e) { /* noop */ }
-                    if (!cand) return;
-                    if (callState.pc && callState.pc.remoteDescription) callState.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-                    else callState.pendingIce.push(cand);
-                });
-            }, () => {});
+            const iceRef = rtdb.ref(`calls/${callState.id}/ice`);
+            const cb = snap => {
+                if (!callState || callState.iceSeen.has(snap.key)) return;
+                callState.iceSeen.add(snap.key);
+                const v = snap.val();
+                if (!v || v.by === chatMe()) return;
+                let cand = null;
+                try { cand = JSON.parse(v.cand || 'null'); } catch (e) { /* noop */ }
+                if (!cand) return;
+                if (callState.pc && callState.pc.remoteDescription) callState.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+                else callState.pendingIce.push(cand);
+            };
+            iceRef.on('child_added', cb);
+            callState.iceUnsub = () => { try { iceRef.off('child_added', cb); } catch (e) { /* noop */ } };
         }
         function callFlushIce() { if (!callState || !callState.pc) return; const pc = callState.pc; callState.pendingIce.splice(0).forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})); }
         function callNewState(id, otherId, kind, role) {
@@ -6403,8 +6720,11 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             const meUser = currentUser();
-            fbDb.collection('calls').doc(callState.id).set({ from: chatMe(), fromName: meUser ? meUser.name : '', to: otherId, kind, state: 'ringing', offer: JSON.stringify(offer), answer: '', t: new Date().toISOString() })
-                .catch(err => { chatWriteFailed(err); callEnd(false); });
+            const now = new Date().toISOString();
+            const callUpdates = {};
+            callUpdates['calls/' + callState.id] = { from: chatMe(), fromName: meUser ? meUser.name : '', to: otherId, kind, state: 'ringing', offer: JSON.stringify(offer), answer: '', t: now };
+            callUpdates['userCalls/' + otherId + '/' + callState.id] = { callId: callState.id, from: chatMe(), fromName: meUser ? meUser.name : '', kind, state: 'ringing', t: now };
+            rtdb.ref().update(callUpdates).catch(err => { chatWriteFailed(err); callEnd(false); });
             callState.docUnsub = fbDb.collection('calls').doc(callState.id).onSnapshot(async snap => {
                 if (!snap.exists || !callState) return;
                 const c = snap.data();
@@ -6456,7 +6776,11 @@
             await pc.setLocalDescription(answer);
             callState.state = 'live';
             callState.startedAt = Date.now();
-            fbDb.collection('calls').doc(callState.id).update({ answer: JSON.stringify(answer), state: 'accepted' }).catch(err => chatWriteFailed(err));
+            const acceptUpdates = {};
+            acceptUpdates[`calls/${callState.id}/answer`] = JSON.stringify(answer);
+            acceptUpdates[`calls/${callState.id}/state`] = 'accepted';
+            acceptUpdates[`userCalls/${chatMe()}/${callState.id}`] = null;
+            rtdb.ref().update(acceptUpdates).catch(err => chatWriteFailed(err));
             if (callState.docUnsub) { try { callState.docUnsub(); } catch (e) { /* noop */ } }
             callState.docUnsub = fbDb.collection('calls').doc(callState.id).onSnapshot(snap => {
                 if (snap.exists && callState && snap.data().state === 'ended') callEnd(false);
@@ -6468,36 +6792,65 @@
             const me = chatMe(); if (!me || !c || !c.from) return;
             const cid = chatIdFor(me, c.from);
             const now = new Date().toISOString();
-            const msg = { id: 'CALLLOG-' + c.id, chatId: cid, by: me, byName: '', text: (c.kind === 'video' ? '📹' : '📞') + ' مكالمة فائتة من ' + (c.fromName || chatNameOf(c.from) || ''), type: 'call', mediaId: '', t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: '', replyText: '', replyBy: '', reacts: {} };
-            fbDb.collection('chatMsgs').doc(msg.id).set(msg).catch(() => {});
-            const parts = cid.split('__');
-            const prev = chatMetas.find(x => x.id === cid);
-            const unread = { ...((prev && prev.unread) || {}) };
-            unread[me] = (unread[me] || 0) + 1;
-            fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: msg.text.slice(0, 120), lastType: 'call', lastAt: now, lastBy: c.from, unread, typingBy: '', typingAt: '' }).catch(() => {});
+            const txt = (c.kind === 'video' ? '📹' : '📞') + ' مكالمة فائتة من ' + (c.fromName || chatNameOf(c.from) || '');
+            const msg = { id: 'CALLLOG-' + c.id, chatId: cid, by: me, byName: '', text: txt, type: 'call', mediaId: '', t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: '', replyText: '', replyBy: '', reacts: {} };
+            const updates = {};
+            updates[`chatThreads/${cid}/messages/${msg.id}`] = msg;
+            updates[`userChats/${me}/${cid}/peerId`] = c.from;
+            updates[`userChats/${me}/${cid}/peerName`] = c.fromName || chatNameOf(c.from);
+            updates[`userChats/${me}/${cid}/lastText`] = txt.slice(0, 120);
+            updates[`userChats/${me}/${cid}/lastType`] = 'call';
+            updates[`userChats/${me}/${cid}/lastAt`] = now;
+            updates[`userChats/${me}/${cid}/lastBy`] = c.from;
+            updates[`userChats/${me}/${cid}/unread`] = firebase.database.ServerValue.increment(1);
+            updates[`userCalls/${me}/${c.id}`] = null;
+            rtdb.ref().update(updates).catch(() => {});
         }
-        function callReject() { if (!callState) return; fbDb.collection('calls').doc(callState.id).update({ state: 'rejected' }).catch(() => {}); callEnd(false); }
+        function callReject() {
+            if (!callState) return;
+            const updates = {};
+            updates[`calls/${callState.id}/state`] = 'rejected';
+            updates[`userCalls/${chatMe()}/${callState.id}`] = null;
+            rtdb.ref().update(updates).catch(() => {});
+            callEnd(false);
+        }
         function callLogDone() {
-            if (!callState || !callState.startedAt || !fbDb) return;
+            if (!callState || !callState.startedAt || !rtdb) return;
             const secs = Math.max(1, Math.round((Date.now() - callState.startedAt) / 1000));
             const dur = Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
             const me = chatMe(), otherId = callState.otherId;
             if (!me || !otherId) return;
-            const callerId = callState.role === 'caller' ? me : otherId;
             const cid = chatIdFor(me, otherId);
             const now = new Date().toISOString();
             const txt = (callState.kind === 'video' ? '📹 مكالمة فيديو' : '📞 مكالمة صوتية') + ' · ' + dur;
-            const msg = { id: 'CALLLOG-' + callState.id, chatId: cid, by: callerId, byName: '', text: txt, type: 'call', mediaId: '', t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: '', replyText: '', replyBy: '', reacts: {} };
-            fbDb.collection('chatMsgs').doc(msg.id).set(msg).catch(() => {});
-            const prev = chatMetas.find(x => x.id === cid);
-            const parts = cid.split('__');
-            fbDb.collection('chatMeta').doc(cid).set({ p1: parts[0], p2: parts[1], n1: chatNameOf(parts[0]), n2: chatNameOf(parts[1]), lastText: txt, lastType: 'call', lastAt: now, lastBy: '', unread: { ...((prev && prev.unread) || {}) }, typingBy: '', typingAt: '' }).catch(() => {});
+            const msg = { id: 'CALLLOG-' + callState.id, chatId: cid, by: me, byName: '', text: txt, type: 'call', mediaId: '', t: now, seen: false, seenAt: '', editedAt: '', deleted: false, replyTo: '', replyText: '', replyBy: '', reacts: {} };
+            const updates = {};
+            updates[`chatThreads/${cid}/messages/${msg.id}`] = msg;
+            updates[`userChats/${me}/${cid}/peerId`] = otherId;
+            updates[`userChats/${me}/${cid}/peerName`] = chatNameOf(otherId);
+            updates[`userChats/${me}/${cid}/lastText`] = txt;
+            updates[`userChats/${me}/${cid}/lastType`] = 'call';
+            updates[`userChats/${me}/${cid}/lastAt`] = now;
+            updates[`userChats/${me}/${cid}/lastBy`] = '';
+            updates[`userChats/${otherId}/${cid}/peerId`] = me;
+            updates[`userChats/${otherId}/${cid}/peerName`] = (currentUser() && currentUser().name) || '';
+            updates[`userChats/${otherId}/${cid}/lastText`] = txt;
+            updates[`userChats/${otherId}/${cid}/lastType`] = 'call';
+            updates[`userChats/${otherId}/${cid}/lastAt`] = now;
+            updates[`userChats/${otherId}/${cid}/lastBy`] = '';
+            rtdb.ref().update(updates).catch(() => {});
         }
         function callEnd(updateDoc = true) {
             if (!callState) { callHide(); return; }
             if (callState.state === 'live') callLogDone();
             const cs = callState;
-            if (updateDoc && cs.id) fbDb.collection('calls').doc(cs.id).update({ state: 'ended' }).catch(() => {});
+            if (updateDoc && cs.id) {
+                const calleeUid = cs.role === 'caller' ? cs.otherId : chatMe();
+                const updates = {};
+                updates[`calls/${cs.id}/state`] = 'ended';
+                if (calleeUid) updates[`userCalls/${calleeUid}/${cs.id}`] = null;
+                rtdb.ref().update(updates).catch(() => {});
+            }
             callCleanup();
         }
         function callCleanup() {
@@ -6524,19 +6877,47 @@
         const cmpCanEditEval = e => !!e && (e.by === cmpMe() || isSystemAdmin());
         const cmpMe = () => (currentUser() && currentUser().id) || sessionUserId || '';
 
+        let cmpMyFiled = [], cmpAboutMeList = [];
         function cmpStart() {
             if (cmpStarted || !fbDb || !fbUser) return;
             cmpStarted = true;
-            cmpUnsubs.push(fbDb.collection('complaints').onSnapshot(snap => {
-                cmpList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
-                if (parseRoute().name === 'complaints') cmpRenderLists();
-            }, err => console.error('complaints listener', err)));
-            cmpUnsubs.push(fbDb.collection('evaluations').onSnapshot(snap => {
-                cmpEvals = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
-                if (parseRoute().name === 'complaints') cmpRenderLists();
-            }, err => console.error('evaluations listener', err)));
+            const me = cmpMe();
+            if (cmpCanManage()) {
+                cmpUnsubs.push(fbDb.collection('complaints').onSnapshot(snap => {
+                    cmpList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
+                    if (parseRoute().name === 'complaints') cmpRenderLists();
+                }, err => console.error('complaints listener', err)));
+                cmpUnsubs.push(fbDb.collection('evaluations').onSnapshot(snap => {
+                    cmpEvals = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
+                    if (parseRoute().name === 'complaints') cmpRenderLists();
+                }, err => console.error('evaluations listener', err)));
+            } else {
+                const mergeMine = () => {
+                    const m = new Map();
+                    cmpAboutMeList.forEach(c => m.set(c.id, c));
+                    cmpMyFiled.forEach(c => m.set(c.id, c));
+                    cmpList = [...m.values()].sort((a, b) => (a.t < b.t ? 1 : -1));
+                    if (parseRoute().name === 'complaints') cmpRenderLists();
+                };
+                cmpUnsubs.push(fbDb.collection('complaints').where('by', '==', me).onSnapshot(snap => {
+                    cmpMyFiled = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    mergeMine();
+                }, err => console.error('my complaints listener', err)));
+                const aboutRef = rtdb.ref('complaintsAbout/' + me);
+                const aboutCb = snap => {
+                    const val = snap.val() || {};
+                    cmpAboutMeList = Object.entries(val).map(([id, v]) => ({ id, ...(v || {}) }));
+                    mergeMine();
+                };
+                aboutRef.on('value', aboutCb, err => console.error('complaintsAbout listener', err));
+                cmpUnsubs.push(() => { try { aboutRef.off('value', aboutCb); } catch (e) { /* noop */ } });
+                cmpUnsubs.push(fbDb.collection('evaluations').where('userId', '==', me).onSnapshot(snap => {
+                    cmpEvals = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
+                    if (parseRoute().name === 'complaints') cmpRenderLists();
+                }, err => console.error('my evaluations listener', err)));
+            }
         }
-        function cmpStop() { cmpUnsubs.forEach(u => { try { u(); } catch (e) { /* noop */ } }); cmpUnsubs = []; cmpStarted = false; cmpList = []; cmpEvals = []; }
+        function cmpStop() { cmpUnsubs.forEach(u => { try { u(); } catch (e) { /* noop */ } }); cmpUnsubs = []; cmpStarted = false; cmpList = []; cmpEvals = []; cmpMyFiled = []; cmpAboutMeList = []; }
         function empScore(userId) {
             const evs = cmpEvals.filter(e => e.userId === userId);
             const avg = evs.length ? evs.reduce((a, e) => a + (Number(e.stars) || 0), 0) / evs.length : 0;
@@ -6574,13 +6955,13 @@
             return cmpMineHtml();
         }
         function cmpMineHtml() {
-            const people = (appData.users || []).filter(u => u.active && u.id !== cmpMe());
+            const people = directoryUsers().filter(u => u.id !== cmpMe());
             return `<section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                     <h3 class="font-black text-slate-800 mb-1"><i class="fa-solid fa-pen-to-square text-brand-600"></i> تقديم شكوى جديدة</h3>
                     <p class="text-xs text-slate-500 mb-4">شكواك بتوصل للإدارة بس. اسمك بيبان للإدارة دايمًا، وتقدر تخفيه عن الموظف المشكو في حقه.</p>
                     <div class="grid sm:grid-cols-2 gap-3">
                         <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الشكوى بخصوص (اختياري)</span>
-                            <select id="cmpAbout" class="${INPUT_CLS}"><option value="">— شكوى عامة / مش عن شخص —</option>${people.map(u => `<option value="${u.id}">${esc(u.name)} (${esc(roleName(u.roleId) || '')})</option>`).join('')}</select></label>
+                            <select id="cmpAbout" class="${INPUT_CLS}"><option value="">— شكوى عامة / مش عن شخص —</option>${people.map(u => `<option value="${u.id}">${esc(u.name)} (${esc(u.roleName || '')})</option>`).join('')}</select></label>
                         <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">نوع الشكوى</span>
                             <select id="cmpCat" class="${INPUT_CLS}">${CMP_CATS.map(c => `<option>${c}</option>`).join('')}</select></label>
                     </div>
@@ -6691,11 +7072,11 @@
             }
             const emp = el('cmpEmpTable');
             if (emp) {
-                const rows = (appData.users || []).filter(u => u.active).map(u => ({ u, sc: empScore(u.id) })).sort((a, b) => (b.sc.score ?? -1) - (a.sc.score ?? -1));
+                const rows = directoryUsers().map(u => ({ u, sc: empScore(u.id) })).sort((a, b) => (b.sc.score ?? -1) - (a.sc.score ?? -1));
                 emp.innerHTML = `<div class="overflow-x-auto"><table class="w-full text-sm min-w-[560px]">
                     <thead><tr class="text-slate-400 text-xs border-b border-slate-100"><th class="text-start py-2">الموظف</th><th>التقييم</th><th>شكاوى عليه</th><th>مثبتة</th><th>مؤشر الأداء</th><th></th></tr></thead>
                     <tbody>${rows.map(({ u, sc }) => `<tr class="border-b border-slate-50">
-                        <td class="py-2 font-bold text-slate-700">${esc(u.name)}<span class="block text-[10px] text-slate-400 font-normal">${esc(roleName(u.roleId) || '')}</span></td>
+                        <td class="py-2 font-bold text-slate-700">${esc(u.name)}<span class="block text-[10px] text-slate-400 font-normal">${esc(u.roleName || '')}</span></td>
                         <td class="text-center">${sc.count ? cmpStarsHtml(sc.avg) + ` <b>${sc.avg.toFixed(1)}</b>` : '<span class="text-slate-300">—</span>'}</td>
                         <td class="text-center">${sc.against || '—'}</td>
                         <td class="text-center ${sc.proven ? 'text-rose-600 font-black' : ''}">${sc.proven || '—'}</td>
@@ -6728,25 +7109,37 @@
             if (!text) return toast('اكتب تفاصيل الشكوى الأول', 'error');
             const aboutId = el('cmpAbout').value || '';
             const meUser = currentUser();
-            const c = { id: uid('CMP-'), by: cmpMe(), byName: meUser ? meUser.name : '', aboutId, aboutName: aboutId ? chatNameOf(aboutId) : '', category: el('cmpCat').value, text, anon: !!el('cmpAnon').checked, t: new Date().toISOString(), status: 'جديدة', reply: '', replyBy: '', replyAt: '' };
-            fbDb.collection('complaints').doc(c.id).set(c).then(() => {
+            const anon = !!el('cmpAnon').checked;
+            const c = { id: uid('CMP-'), by: cmpMe(), byName: meUser ? meUser.name : '', aboutId, aboutName: aboutId ? chatNameOf(aboutId) : '', category: el('cmpCat').value, text, anon, t: new Date().toISOString(), status: 'جديدة', reply: '', replyBy: '', replyAt: '' };
+            const updates = {};
+            updates['complaints/' + c.id] = c;
+            if (aboutId) {
+                updates[`complaintsAbout/${aboutId}/${c.id}`] = {
+                    id: c.id, aboutId, aboutName: c.aboutName, category: c.category, text: c.text,
+                    anon, byName: anon ? 'مجهول' : c.byName, t: c.t, status: c.status, reply: '', replyBy: '', replyAt: ''
+                };
+            }
+            rtdb.ref().update(updates).then(() => {
                 toast('وصلت شكواك للإدارة ✅', 'success');
                 el('cmpText').value = '';
                 cmpNotifyManagers(c);
             }).catch(err => { console.error(err); toast('حصلت مشكلة في إرسال الشكوى', 'error'); });
         }
         function cmpManagers() {
-            return (appData.users || []).filter(u => u.active && u.id !== cmpMe() && (u.roleId === 'admin' || ((appData.roles[u.roleId] || {}).permissions || []).includes('complaints.manage')));
+            return directoryUsers().filter(u => u.id !== cmpMe() && (u.isAdmin || u.isComplaintMgr));
         }
         function cmpNotifyManagers(c) {
-            if (!fbDb) return;
+            if (!rtdb) return;
             cmpManagers().forEach(m => {
-                const n = { id: 'cmpNTF-' + c.id + '-' + m.id, t: c.t, uid: cmpMe(), user: 'شكوى جديدة', verb: 'وصلت', kind: 'شكوى موظف', detail: (c.aboutName ? 'بخصوص ' + c.aboutName + ' — ' : '') + String(c.text || '').slice(0, 90), to: m.id, target: { col: 'complaints', id: c.id } };
-                fbDb.collection('notifications').doc(n.id).set(n).catch(() => {});
+                notifyUser(m.id, { id: 'cmpNTF-' + c.id + '-' + m.id, t: c.t, user: 'شكوى جديدة', verb: 'وصلت', kind: 'شكوى موظف', detail: (c.aboutName ? 'بخصوص ' + c.aboutName + ' — ' : '') + String(c.text || '').slice(0, 90), target: { col: 'complaints', id: c.id } });
             });
         }
         function cmpSetStatus(id, status) {
-            fbDb.collection('complaints').doc(id).update({ status }).then(() => toast('اتحدثت حالة الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
+            const c = cmpList.find(x => x.id === id);
+            const updates = {};
+            updates[`complaints/${id}/status`] = status;
+            if (c && c.aboutId) updates[`complaintsAbout/${c.aboutId}/${id}/status`] = status;
+            rtdb.ref().update(updates).then(() => toast('اتحدثت حالة الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
         }
         function cmpReplyModal(id) {
             const c = cmpList.find(x => x.id === id); if (!c) return;
@@ -6759,14 +7152,30 @@
         function cmpReplySave(id) {
             const reply = el('cmpReplyText').value.trim();
             const meUser = currentUser();
-            fbDb.collection('complaints').doc(id).update({ reply, replyBy: meUser ? meUser.name : '', replyAt: new Date().toISOString() }).then(() => { closeModal(); toast('اتحفظ الرد', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
+            const c = cmpList.find(x => x.id === id);
+            const replyBy = meUser ? meUser.name : '';
+            const replyAt = new Date().toISOString();
+            const updates = {};
+            updates[`complaints/${id}/reply`] = reply;
+            updates[`complaints/${id}/replyBy`] = replyBy;
+            updates[`complaints/${id}/replyAt`] = replyAt;
+            if (c && c.aboutId) {
+                updates[`complaintsAbout/${c.aboutId}/${id}/reply`] = reply;
+                updates[`complaintsAbout/${c.aboutId}/${id}/replyBy`] = replyBy;
+                updates[`complaintsAbout/${c.aboutId}/${id}/replyAt`] = replyAt;
+            }
+            rtdb.ref().update(updates).then(() => { closeModal(); toast('اتحفظ الرد', 'success'); }).catch(() => toast('حصلت مشكلة', 'error'));
         }
         function cmpDelete(id) {
             if (!confirm('حذف الشكوى دي نهائيًا؟')) return;
-            fbDb.collection('complaints').doc(id).delete().then(() => toast('اتحذفت الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
+            const c = cmpList.find(x => x.id === id);
+            const updates = {};
+            updates[`complaints/${id}`] = null;
+            if (c && c.aboutId) updates[`complaintsAbout/${c.aboutId}/${id}`] = null;
+            rtdb.ref().update(updates).then(() => toast('اتحذفت الشكوى', 'success')).catch(() => toast('حصلت مشكلة', 'error'));
         }
         function cmpAddEval(preselect, evalId) {
-            const people = (appData.users || []).filter(u => u.active && u.id !== cmpMe());
+            const people = directoryUsers().filter(u => u.id !== cmpMe());
             if (!people.length) return toast('مفيش موظفين', 'error');
             const old = evalId ? cmpEvals.find(e => e.id === evalId) : null;
             if (evalId && !old) return toast('التقييم ده مش موجود', 'error');
@@ -6774,7 +7183,7 @@
             openModal({ title: old ? 'تعديل التقييم (تعديل كامل)' : 'تقييم موظف', body: `
                 <div class="space-y-3">
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الموظف</span>
-                        <select id="evUser" class="${INPUT_CLS}">${people.map(u => `<option value="${u.id}" ${preselect === u.id || (old && old.userId === u.id) ? 'selected' : ''}>${esc(u.name)} (${esc(roleName(u.roleId) || '')})</option>`).join('')}</select></label>
+                        <select id="evUser" class="${INPUT_CLS}">${people.map(u => `<option value="${u.id}" ${preselect === u.id || (old && old.userId === u.id) ? 'selected' : ''}>${esc(u.name)} (${esc(u.roleName || '')})</option>`).join('')}</select></label>
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">التقييم (من 5)</span>
                         <select id="evStars" class="${INPUT_CLS}">${[[5, '⭐⭐⭐⭐⭐ ممتاز (5)'], [4, '⭐⭐⭐⭐ جيد جدًا (4)'], [3, '⭐⭐⭐ جيد (3)'], [2, '⭐⭐ مقبول (2)'], [1, '⭐ ضعيف (1)']].map(([v, l]) => `<option value="${v}" ${(old ? Number(old.stars) : 3) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
                     <label class="block"><span class="block text-xs font-bold text-slate-600 mb-1">الفترة</span>
@@ -6823,9 +7232,11 @@
         const expIsPending = e => e && e.status === EXP_PENDING;
 
         function expStart() {
-            if (expStarted || !fbDb || !fbUser || !(canExpRequest() || canExpApprove())) return;
+            if (expStarted || !fbDb || !fbUser || !(canExpRequest() || canExpApprove() || canExpDelete())) return;
             expStarted = true;
-            expUnsub = fbDb.collection('expenses').onSnapshot(snap => {
+            const canSeeAll = canExpApprove() || canExpDelete() || isSystemAdmin();
+            const q = canSeeAll ? fbDb.collection('expenses') : fbDb.collection('expenses').where('by', '==', expMe());
+            expUnsub = q.onSnapshot(snap => {
                 expList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.t < b.t ? 1 : -1));
                 updateExpNavBadge();
                 if (parseRoute().name === 'expenses') expRenderBody();
@@ -6840,12 +7251,11 @@
             b.classList.toggle('hidden', !n);
         }
         function expApprovers() {
-            return (appData.users || []).filter(u => u.active && u.id !== expMe() && (u.roleId === 'admin' || ((appData.roles[u.roleId] || {}).permissions || []).includes('expenses.approve')));
+            return directoryUsers().filter(u => u.id !== expMe() && (u.isAdmin || u.isApprover));
         }
         function expNotify(toId, verb, kind, e) {
-            if (!fbDb || !toId || !e) return;
-            const n = { id: 'expNTF-' + e.id + '-' + toId + '-' + Date.now().toString(36), t: new Date().toISOString(), uid: expMe(), user: (currentUser() || {}).name || '', verb, kind, detail: 'إذن صرف رقم ' + e.no + ' — ' + (e.title || '') + ' · ' + fmtMoney(numOr0(e.amount)), to: toId, target: { col: 'expenses', id: e.id } };
-            fbDb.collection('notifications').doc(n.id).set(n).catch(() => {});
+            if (!rtdb || !toId || !e) return;
+            notifyUser(toId, { id: 'expNTF-' + e.id + '-' + toId + '-' + Date.now().toString(36), verb, kind, detail: 'إذن صرف رقم ' + e.no + ' — ' + (e.title || '') + ' · ' + fmtMoney(numOr0(e.amount)), target: { col: 'expenses', id: e.id } });
         }
         function expHist(e, st, note = '') { return [...(e.history || []), { st, by: expMe(), byName: (currentUser() || {}).name || '', t: new Date().toISOString(), note }]; }
 
@@ -6943,23 +7353,25 @@
             return fbDb.collection('expenses').doc(id).update(patch).then(() => { toast('اتعدل الطلب', 'success'); return true; }).catch(() => { toast('حصلت مشكلة', 'error'); return false; });
         }
 
-        // ---------- attachments (chunked images, same idea as chat media) ----------
+        // ---------- attachments (scoped to expMedia/{ownerUid}/{mediaId}) ----------
         function expUploadMedia(dataUrl) {
             const id = uid('EXPM-');
+            const owner = expMe();
             const mime = (dataUrl.match(/^data:([^;]+)/) || [])[1] || 'image/jpeg';
             const b64 = dataUrl.split(',')[1] || '';
             const chunks = [];
             for (let i = 0; i < b64.length; i += 60000) chunks.push(b64.slice(i, i + 60000));
-            return rtdb.ref('expMedia/' + id).set({ mime, chunks, by: expMe(), at: new Date().toISOString() }).then(() => id);
+            return rtdb.ref('expMedia/' + owner + '/' + id).set({ mime, chunks, by: owner, at: new Date().toISOString() }).then(() => id);
         }
-        async function expLoadMedia(mediaId) {
-            if (expMediaCache.has(mediaId)) return expMediaCache.get(mediaId);
+        async function expLoadMedia(ownerUid, mediaId) {
+            const cacheKey = ownerUid + '/' + mediaId;
+            if (expMediaCache.has(cacheKey)) return expMediaCache.get(cacheKey);
             try {
-                const snap = await rtdb.ref('expMedia/' + mediaId).once('value');
+                const snap = await rtdb.ref('expMedia/' + ownerUid + '/' + mediaId).once('value');
                 const v = snap.val();
                 if (!v || !v.chunks) return null;
                 const url = 'data:' + (v.mime || 'image/jpeg') + ';base64,' + v.chunks.join('');
-                expMediaCache.set(mediaId, url);
+                expMediaCache.set(cacheKey, url);
                 return url;
             } catch (e) { return null; }
         }
@@ -7109,7 +7521,7 @@
                 <h4 class="font-black text-slate-700 text-sm mt-4 mb-2"><i class="fa-solid fa-timeline text-brand-600"></i> سجل حركة الإذن</h4>
                 <div class="space-y-2">${(e.history || []).map(h => `<div class="flex gap-2 text-xs"><span class="w-2 h-2 rounded-full bg-brand-400 mt-1.5 shrink-0"></span><p class="text-slate-600"><b>${esc(h.st)}</b> — ${esc(h.byName || '')} · ${esc(timeAgo(h.t))}${h.note ? ' · ' + esc(h.note) : ''}</p></div>`).join('') || '<p class="text-xs text-slate-400">لا يوجد</p>'}</div>
                 <div class="flex justify-end gap-2 mt-4"><button type="button" onclick="closeModal()" class="${BTN_SECONDARY}">إغلاق</button></div>` });
-            if (e.mediaId) expLoadMedia(e.mediaId).then(url => { const box = el('expDetailMedia'); if (box && url) box.innerHTML = `<img src="${url}" alt="مرفق إذن الصرف" class="rounded-xl border border-slate-200 max-h-64 cursor-pointer" onclick="window.open('${url}', '_blank')">`; });
+            if (e.mediaId) expLoadMedia(e.by, e.mediaId).then(url => { const box = el('expDetailMedia'); if (box && url) box.innerHTML = `<img src="${url}" alt="مرفق إذن الصرف" class="rounded-xl border border-slate-200 max-h-64 cursor-pointer" onclick="window.open('${url}', '_blank')">`; });
         }
         function expModal(id) {
             const e = id ? expById(id) : null;
@@ -10669,6 +11081,7 @@
         }
 
         function openRepPinPrompt(repId) {
+            if (!can('users.manage')) return toast('التبديل بالرقم السري متاح لمدير المستخدمين فقط — يمكنك الفلترة باسم المندوب من القائمة مباشرة', 'info', null, 6000), false;
             const rep = appData.custReps.find(x => x.id === repId);
             const acc = rep ? appData.users.find(u => u.repId === repId) : null;
             if (!rep) return toast('المندوب ده مش موجود', 'error'), false;
@@ -10769,7 +11182,8 @@
                 const repId = existingRep ? existingRep.id : uid('REP-');
                 const roleId = uid('rep-');
                 const now = new Date().toISOString();
-                if (!existingRep) appData.custReps.push({ id: repId, name });
+                if (!existingRep) appData.custReps.push({ id: repId, name, uid: authUid });
+                else existingRep.uid = authUid;
                 appData.roles[roleId] = { id: roleId, name: 'مندوب: ' + name, locked: false, permissions: ['custorders.view', 'custorders.comments', 'home.personal'], repRole: true };
                 appData.users.push({ id: authUid, name, email, roleId, active: true, createdAt: now, lastLoginAt: null, repId });
                 log(existingRep ? 'ربط حساب دخول بمندوب موجود' : 'إضافة مندوب', name);
@@ -11047,6 +11461,7 @@
                         return toast('لازم يفضل مستخدم فعّال واحد على الأقل يقدر يدير المستخدمين', 'error'), false;
                     }
 
+                    let savedUid = user ? user.id : '';
                     if (user) {
                         Object.assign(user, { name, roleId, active, repId });
                         log('تعديل مستخدم', name);
@@ -11058,8 +11473,15 @@
                             console.error(err);
                             return toast(authErrorMessage(err), 'error', null, 5000), false;
                         }
+                        savedUid = uid;
                         appData.users.push({ id: uid, name, email, roleId, active, createdAt: new Date().toISOString(), lastLoginAt: null, repId });
                         log('إضافة مستخدم', `${name} (${roleName(roleId)})`);
+                    }
+                    if (savedUid && Array.isArray(appData.custReps)) {
+                        appData.custReps.forEach(r => {
+                            if (r.id === repId) r.uid = savedUid;
+                            else if (r.uid === savedUid) delete r.uid;
+                        });
                     }
                     saveState();
                     toast(user ? 'تم حفظ التعديلات' : 'تمت إضافة المستخدم', 'success');
@@ -12815,6 +13237,83 @@
             // now the mode is known: show login or setup unless a session has started
             if (!fbUser && !appEntered) showAuth(initExists === false ? 'setup' : 'login');
         });
+
+        // ================= أداة الترحيل الأمني لمرة واحدة (v6.1) =================
+        window.migrateSecurityV61 = async function migrateSecurityV61() {
+            if (!rtdb || !isSystemAdmin()) throw new Error('الترحيل متاح لمدير النظام فقط');
+            const updates = {};
+            const [uSnap, rSnap, cmpSnap, metaSnap, msgSnap, cMediaSnap, eMediaSnap, repsSnap] = await Promise.all([
+                rtdb.ref('users').once('value'),
+                rtdb.ref('roles').once('value'),
+                rtdb.ref('complaints').once('value').catch(() => null),
+                rtdb.ref('chatMeta').once('value').catch(() => null),
+                rtdb.ref('chatMsgs').once('value').catch(() => null),
+                rtdb.ref('chatMedia').once('value').catch(() => null),
+                rtdb.ref('expMedia').once('value').catch(() => null),
+                rtdb.ref('custReps').once('value').catch(() => null)
+            ]);
+            const usersObj = uSnap.val() || {};
+            const rolesObj = {};
+            Object.entries(rSnap.val() || {}).forEach(([id, r]) => {
+                rolesObj[id] = {
+                    id, ...r,
+                    permissions: Object.keys((r && r.permissions) || {}).filter(k => r.permissions[k] === true).map(k => k.replace(/_/g, '.'))
+                };
+            });
+            const repUidByRepId = {};
+            Object.entries(usersObj).forEach(([uId, u]) => {
+                if (!u || typeof u !== 'object') return;
+                updates['userDirectory/' + uId] = buildDirectoryDoc({ id: uId, ...u }, rolesObj);
+                if (u.repId) repUidByRepId[u.repId] = uId;
+            });
+            if (repsSnap && repsSnap.exists()) {
+                Object.entries(repsSnap.val() || {}).forEach(([rid, r]) => {
+                    if (r && repUidByRepId[rid] && r.uid !== repUidByRepId[rid]) updates[`custReps/${rid}/uid`] = repUidByRepId[rid];
+                });
+            }
+            if (cmpSnap && cmpSnap.exists()) {
+                Object.entries(cmpSnap.val() || {}).forEach(([id, c]) => {
+                    if (!c || !c.aboutId) return;
+                    updates[`complaintsAbout/${c.aboutId}/${id}`] = {
+                        id, aboutId: c.aboutId, aboutName: c.aboutName || '', category: c.category || '',
+                        text: c.text || '', anon: !!c.anon, byName: c.anon ? 'مجهول' : (c.byName || ''),
+                        t: c.t || '', status: c.status || 'جديدة', reply: c.reply || '', replyBy: c.replyBy || '', replyAt: c.replyAt || ''
+                    };
+                });
+            }
+            if (metaSnap && metaSnap.exists()) {
+                Object.entries(metaSnap.val() || {}).forEach(([cid, m]) => {
+                    if (!m || !m.p1 || !m.p2) return;
+                    const n1 = (usersObj[m.p1] && usersObj[m.p1].name) || m.n1 || '';
+                    const n2 = (usersObj[m.p2] && usersObj[m.p2].name) || m.n2 || '';
+                    updates[`userChats/${m.p1}/${cid}`] = { peerId: m.p2, peerName: n2, lastText: m.lastText || '', lastType: m.lastType || 'text', lastAt: m.lastAt || '', lastBy: m.lastBy || '', unread: (m.unread && m.unread[m.p1]) || 0, pinned: m.pinned || null, typingBy: '', typingAt: '' };
+                    updates[`userChats/${m.p2}/${cid}`] = { peerId: m.p1, peerName: n1, lastText: m.lastText || '', lastType: m.lastType || 'text', lastAt: m.lastAt || '', lastBy: m.lastBy || '', unread: (m.unread && m.unread[m.p2]) || 0, pinned: m.pinned || null, typingBy: '', typingAt: '' };
+                });
+            }
+            const mediaChatMap = {};
+            if (msgSnap && msgSnap.exists()) {
+                Object.entries(msgSnap.val() || {}).forEach(([mid, m]) => {
+                    if (!m || !m.chatId) return;
+                    updates[`chatThreads/${m.chatId}/messages/${mid}`] = { id: mid, ...m };
+                    if (m.mediaId) mediaChatMap[m.mediaId] = m.chatId;
+                });
+            }
+            if (cMediaSnap && cMediaSnap.exists()) {
+                Object.entries(cMediaSnap.val() || {}).forEach(([mid, v]) => {
+                    if (v && v.chunks && mediaChatMap[mid]) updates[`chatMedia/${mediaChatMap[mid]}/${mid}`] = v;
+                });
+            }
+            if (eMediaSnap && eMediaSnap.exists()) {
+                Object.entries(eMediaSnap.val() || {}).forEach(([mid, v]) => {
+                    if (v && v.chunks && v.by) updates[`expMedia/${v.by}/${mid}`] = v;
+                });
+            }
+            await rtdb.ref().update(updates);
+            console.info('✅ migrateSecurityV61 finished. Paths written:', Object.keys(updates).length);
+            toast('تم ترحيل البيانات بنجاح (' + Object.keys(updates).length + ' مسار) — يمكنك الآن نشر database.rules.json', 'success', null, 8000);
+            return Object.keys(updates).length;
+        };
+
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f8625d6f9aadf5',t:'MTc5NTUyMjk5OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f8625d6f9aadf5',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f9498f48a55ee7',t:'MTc5NTUzMjQ2OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f9498f48a55ee7',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
