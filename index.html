@@ -8654,6 +8654,12 @@
             else if (p.length === 10 && p.startsWith('1')) p = '20' + p;
             return p;
         }
+        const CUST_BANK_INFO_TEXT = [
+            'بيانات التحويل البنكي للسداد:',
+            'الاسم: فتحي طه عبد النبي',
+            'رقم الحساب: 1820001000007008',
+            'IBAN: EG69000201820001000007008'
+        ].join('\n');
         function custWhatsApp(id) {
             const c = appData.custOrders.find(x => x.id === id);
             if (!c) return;
@@ -8664,6 +8670,9 @@
             const paymentText = remaining > 0 ? [
                 'برجاء سداد المبلغ المتبقي في موعد أقصاه ' + (dueDate ? fmtDateAr(dueDate) : 'خلال 7 أيام من تاريخ حجز الفاتورة') + ' (7 أيام من تاريخ حجز الفاتورة' + (holdDate ? ' بتاريخ ' + fmtDateAr(holdDate) : '') + ').',
                 'وفي حال عدم السداد خلال المهلة، سيتم فك حجز البضاعة، وسيُرحَّل المبلغ المدفوع كرصيد لصالحكم في حسابكم لدينا.',
+                '',
+                CUST_BANK_INFO_TEXT,
+                '',
                 'شكرًا لتعاونكم 🙏'
             ].join('\n') : (remaining < 0 ? 'الحساب مسدد بالكامل، والمبلغ الزيادة ' + fmtMoney(-remaining) + ' اتسجل رصيد لصالحكم في حسابكم لدينا — شكرًا لتعاملكم معنا 🙏' : 'الحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏');
             const lines = [
@@ -8681,7 +8690,14 @@
             const rows = (appData.custOrders || []).filter(c => c.customer === customer && (!repId || c.repId === repId));
             if (!rows.length) return toast('مفيش فواتير للعميل ده', 'error');
             const tot = rows.reduce((a, c) => a + numOr0(c.amount), 0), paid = rows.reduce((a, c) => a + numOr0(c.paid), 0);
-            const lines = ['كشف حساب — ' + customer, ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))), 'الإجمالي: ' + fmtMoney(tot) + ' · المدفوع: ' + fmtMoney(paid) + ' · ' + (tot - paid >= 0 ? 'المتبقي: ' + fmtMoney(tot - paid) : 'رصيد لصالحكم عندنا: ' + fmtMoney(paid - tot)), '— ' + (appData.settings.systemName || 'الرحمة')];
+            const rem = r2(tot - paid);
+            const lines = [
+                'كشف حساب — ' + customer,
+                ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' (' + fmtDateAr(c.date) + ')' : '') + ': ' + fmtMoney(numOr0(c.amount)) + ' — متبقي ' + fmtMoney(custRemaining(c))),
+                'الإجمالي: ' + fmtMoney(tot) + ' · المدفوع: ' + fmtMoney(paid) + ' · ' + (rem >= 0 ? 'المتبقي: ' + fmtMoney(rem) : 'رصيد لصالحكم عندنا: ' + fmtMoney(-rem)),
+                ...(rem > 0 ? ['', CUST_BANK_INFO_TEXT] : []),
+                '— ' + (appData.settings.systemName || 'الرحمة')
+            ];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
         }
         function printCustOrder(id) {
@@ -13388,5 +13404,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f9e1c09c603108',t:'MTc5NTUzODcwMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f9e1c09c603108',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fa05456be51d81',t:'MTc5NTU0MDE1OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fa05456be51d81',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
