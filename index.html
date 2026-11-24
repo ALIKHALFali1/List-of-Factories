@@ -27,6 +27,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 
     <script>
         // Theme bootstrap: runs before paint to avoid a light/dark flash.
@@ -780,6 +781,9 @@
                 ['debts.manage', 'إضافة وتعديل المديونيات وتسجيل الدفعات واتخاذ الإجراءات والتصعيد'],
                 ['debts.delete', 'حذف ملفات المديونيات'],
                 ['debts.popup', 'عرض القائمة المنبثقة للمديونيات على الشاشة الرئيسية']
+            ] },
+            { title: 'البيانات والإعلانات العامة', items: [
+                ['announcements.manage', 'إضافة وتعديل البيانات والإعلانات العامة وتحديد الأدوار المستهدفة وعرض تقارير الموافقات والاعتراضات']
             ] }
         ];
         const ALL_PERMS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i[0]));
@@ -1720,7 +1724,7 @@
         // One entry is written for every saved change (and every PDF change), by the user who made it.
         // Everyone else who is signed in sees it in the bell. The activity log (logs) stays limited to logs.view.
         const NOTIF_LIMIT = 50;
-        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب', shipping: 'شحنة', debts: 'مديونية', debtComments: 'تعليق مديونية' };
+        const NOTIF_KIND = { companies: 'شركة', lists: 'لستة', partners: 'مستفيد', checks: 'شيك', orders: 'طلبية', users: 'مستخدم', roles: 'دور صلاحيات', settings: 'إعدادات النظام', custOrders: 'طلبية عميل', custReps: 'مندوب', shipping: 'شحنة', debts: 'مديونية', debtComments: 'تعليق مديونية', announcements: 'بيان وإعلان عام' };
         const NOTIF_VERB = { add: 'أضاف', edit: 'عدّل', del: 'حذف' };
         let notifs = [];                 // newest first, merged from personal inbox + permitted section feeds
         let notifUnsubs = [];
@@ -1736,6 +1740,7 @@
             { key: 'customers', check: () => canCust('view') && (isSystemAdmin() || !currentRepId()) },
             { key: 'shipping',  check: () => can('shipping.view') },
             { key: 'debts',     check: () => can('debts.view') || can('debts.manage') || can('debts.delete') },
+            { key: 'announcements', check: () => !!sessionUserId },
             { key: 'users',     check: () => can('users.manage') },
             { key: 'settings',  check: () => can('settings.manage') }
         ];
@@ -1749,6 +1754,7 @@
             if (col === 'custOrders' || col === 'custReps' || col === 'custComments') return 'customers';
             if (col === 'shipping' || col === 'shippingConfig') return 'shipping';
             if (col === 'debts' || col === 'debtComments') return 'debts';
+            if (col === 'announcements') return 'announcements';
             if (col === 'users' || col === 'roles') return 'users';
             if (col === 'settings') return 'settings';
             return null;
@@ -1804,6 +1810,26 @@
             return out;
         }
 
+        // Auto-prune old notifications so RTDB never bloats (throttled per path)
+        const _pruneAt = {};
+        function pruneNotifFeed(path, force) {
+            if (!rtdb || !fbUser) return;
+            if (!force && (!storageCfg || storageCfg.autoPruneNotifs === false)) return;
+            const now = Date.now();
+            if (!force && _pruneAt[path] && (now - _pruneAt[path]) < 120000) return;
+            _pruneAt[path] = now;
+            const keep = Math.max(20, Math.min(200, Number(storageCfg?.notifMaxKeep) || 60));
+            return rtdb.ref(path).orderByChild('t').once('value').then(snap => {
+                const keys = [];
+                snap.forEach(ch => { keys.push(ch.key); });
+                if (keys.length <= keep) return 0;
+                const drop = keys.slice(0, keys.length - keep);
+                const upd = {};
+                drop.forEach(k => { upd[path + '/' + k] = null; });
+                return rtdb.ref().update(upd).then(() => drop.length).catch(() => 0);
+            }).catch(() => 0);
+        }
+
         // Targeted personal notification (written ONLY to userNotifications/{toUid}/{id})
         function notifyUser(toUid, info) {
             if (!rtdb || !fbUser || !toUid || toUid === fbUser.uid) return;
@@ -1811,13 +1837,15 @@
             rtdb.ref('userNotifications/' + toUid + '/' + n.id).set(n).catch(err => console.warn('user notification not saved:', err && err.code));
         }
 
-        // Section-scoped direct notification (PDF upload/removal, shipping, customer comments, etc.)
+        // Section-scoped direct notification (PDF upload/removal, shipping, customer comments, announcements, etc.)
         function notifyDirect(verb, kind, detail, target) {
             if (!rtdb || !fbUser) return;
             const sec = notifSectionForKey(target && target.col ? target.col + '/' : '');
             if (!sec) return;
             const n = newNotification({ verb, kind, detail, target });
-            rtdb.ref('sectionNotifications/' + sec + '/' + n.id).set(n).catch(err => console.warn('section notification not saved:', err && err.code));
+            rtdb.ref('sectionNotifications/' + sec + '/' + n.id).set(n).then(() => {
+                if (isSystemAdmin() || can('settings.manage')) pruneNotifFeed('sectionNotifications/' + sec, false);
+            }).catch(err => console.warn('section notification not saved:', err && err.code));
         }
 
         function listNameById(id) {
@@ -1833,6 +1861,8 @@
             if (!window.AndroidBridge || !AndroidBridge.setPushSession) return;
             const u = fbAuth && fbAuth.currentUser;
             if (!u || !sessionUserId) return;
+            if (AndroidBridge.setSoundPrefs && window.App && App.Sounds) { try { AndroidBridge.setSoundPrefs(JSON.stringify(App.Sounds.prefs())); } catch (e) { /* noop */ } }
+            if (AndroidBridge.setNativeNotifs) { try { AndroidBridge.setNativeNotifs(localStorage.getItem('factoryNativeNotifs') !== '0'); } catch (e) { /* noop */ } }
             u.getIdToken().then(tok => { try { AndroidBridge.setPushSession(tok, u.refreshToken || '', (fbUser && fbUser.uid) || sessionUserId, FIREBASE_CONFIG.apiKey, FIREBASE_CONFIG.databaseURL); } catch (e) { /* noop */ } }).catch(() => {});
             if (!pushSessionTimer) pushSessionTimer = setInterval(androidPushSession, 30 * 60 * 1000);
         }
@@ -2227,12 +2257,15 @@
                     fbCache.users = docs;
                 });
                 listenScoped('allRoles', fbDb.collection('roles'), s => { fbCache.roles = mapDocs(s); });
+            } else if (can('announcements.manage') || can('settings.manage')) {
+                fbLoaded.allUsers = false;
+                listenScoped('allRoles', fbDb.collection('roles'), s => { fbCache.roles = mapDocs(s); });
             } else {
                 fbLoaded.allUsers = false;
                 fbLoaded.allRoles = false;
             }
 
-            if (chatCan() || can('complaints.file') || can('complaints.manage') || can('expenses.request') || can('expenses.approve') || can('users.manage')) {
+            if (chatCan() || can('complaints.file') || can('complaints.manage') || can('expenses.request') || can('expenses.approve') || can('users.manage') || can('announcements.manage') || can('settings.manage')) {
                 const dirRef = rtdb.ref('userDirectory');
                 const dirCb = snap => {
                     if (!fbCache) return;
@@ -2264,6 +2297,9 @@
             expStop(); expStart();
             debtStop(); debtStart();
             debtPopupCfgStop(); debtPopupCfgStart();
+            storageCfgStop(); storageCfgStart();
+            annStop(); annStart();
+            if (fbUser) setTimeout(() => pruneNotifFeed('userNotifications/' + fbUser.uid, false), 6000);
         }
 
         function stopSync() {
@@ -2295,6 +2331,8 @@
             expStop();
             debtStop();
             debtPopupCfgStop();
+            storageCfgStop();
+            annStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -2675,11 +2713,74 @@
         }
         // ===GS-COMPRESS-END===
 
-        // replaces the list's PDF in one write: the whole pdfs/{listId} node is set at once
+        // ---- Storage & Performance settings (synced at settings/storage) ----
+        const STORAGE_CFG_DEFAULT = { useCloudStorage: false, compressImages: true, autoPruneNotifs: true, notifMaxKeep: 60 };
+        let storageCfg = { ...STORAGE_CFG_DEFAULT };
+        let storageCfgStarted = false, storageCfgUnsub = null;
+        function storageCfgStart() {
+            if (storageCfgStarted || !rtdb || !fbUser) return;
+            storageCfgStarted = true;
+            const ref = rtdb.ref('settings/storage');
+            const cb = snap => {
+                const v = snap.val() || {};
+                storageCfg = {
+                    useCloudStorage: v.useCloudStorage === true,
+                    compressImages: v.compressImages !== false,
+                    autoPruneNotifs: v.autoPruneNotifs !== false,
+                    notifMaxKeep: Math.max(20, Math.min(200, Number(v.notifMaxKeep) || 60))
+                };
+            };
+            ref.on('value', cb, () => {});
+            storageCfgUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+        }
+        function storageCfgStop() {
+            if (storageCfgUnsub) { try { storageCfgUnsub(); } catch (e) { /* noop */ } storageCfgUnsub = null; }
+            storageCfgStarted = false;
+            storageCfg = { ...STORAGE_CFG_DEFAULT };
+        }
+        function fbStorageRef(path) {
+            if (typeof firebase === 'undefined' || typeof firebase.storage !== 'function') return null;
+            try { return firebase.storage().ref(path); } catch (e) { return null; }
+        }
+        async function cloudUploadBlob(path, blob, contentType) {
+            if (!storageCfg.useCloudStorage) return null;
+            const ref = fbStorageRef(path);
+            if (!ref) return null;
+            try {
+                const snap = await ref.put(blob, contentType ? { contentType } : undefined);
+                const url = await snap.ref.getDownloadURL();
+                return { url, storagePath: path };
+            } catch (e) {
+                console.warn('Cloud storage upload failed, falling back to RTDB:', e && e.code);
+                return null;
+            }
+        }
+        async function cloudDeletePath(path) {
+            if (!path) return;
+            const ref = fbStorageRef(path);
+            if (!ref) return;
+            try { await ref.delete(); } catch (e) { /* already removed or unavailable */ }
+        }
+        function dataUrlToBlob(dataUrl) {
+            const parts = String(dataUrl || '').split(',');
+            const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'application/octet-stream';
+            const bin = atob(parts[1] || '');
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Blob([bytes], { type: mime });
+        }
+
+        // replaces the list's PDF: uploads to Firebase Storage when enabled (with automatic RTDB fallback)
         async function pdfUpload(listId, file) {
             if (file.size > PDF_MAX_BYTES) throw new Error('pdf too large');
             const bytes = await readBytes(file);
             if (!bytes.length) throw new Error('pdf empty');
+            const cloud = await cloudUploadBlob('pdfs/' + listId + '.pdf', new Blob([bytes], { type: 'application/pdf' }), 'application/pdf');
+            if (cloud) {
+                await rtdb.ref('pdfs/' + listId).set({ url: cloud.url, storagePath: cloud.storagePath, size: bytes.length });
+                notifyDirect('أضاف', 'ملف PDF', listNameById(listId), { col: 'lists', id: listId });
+                return;
+            }
             const chunks = [];
             for (let i = 0; i < bytes.length; i += PDF_CHUNK_BYTES) {
                 chunks.push(bytesToBase64(bytes.subarray(i, i + PDF_CHUNK_BYTES)));
@@ -2690,15 +2791,23 @@
 
         async function pdfRemove(listId) {
             try {
+                const cur = (await rtdb.ref('pdfs/' + listId).once('value')).val();
+                if (cur && cur.storagePath) await cloudDeletePath(cur.storagePath);
                 await rtdb.ref('pdfs/' + listId).remove();
                 notifyDirect('حذف', 'ملف PDF', listNameById(listId), { col: 'lists', id: listId });
             } catch (err) { console.error(err); }
         }
 
-        // downloads the list's PDF (all parts) and joins them into one file
+        // downloads the list's PDF (supports both Cloud Storage URLs and classic RTDB chunks)
         async function pdfBlob(listId) {
             const v = (await rtdb.ref('pdfs/' + listId).once('value')).val();
-            if (!v || !v.chunks) throw new Error('pdf missing');
+            if (!v) throw new Error('pdf missing');
+            if (v.url && String(v.url).startsWith('https://')) {
+                const resp = await fetch(v.url);
+                if (!resp.ok) throw new Error('pdf download failed');
+                return await resp.blob();
+            }
+            if (!v.chunks) throw new Error('pdf missing');
             const parts = Array.isArray(v.chunks)
                 ? v.chunks
                 : Object.keys(v.chunks).sort((a, b) => a - b).map(k => v.chunks[k]);
@@ -2824,8 +2933,8 @@
         // shows (login screen, sidebar, tab icon, installed-app icon) unless an admin
         // saves a different one in Settings → هوية النظام, which then takes over
         const SYS_LOGO_DEFAULT = 'data:image/jpeg;base64,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';
-        // Resizes an image to max `max` px and returns a PNG data URL (keeps logos small for storage)
-        function processImage(file, max = 256) {
+        // Resizes an image to max `max` px (defaults to PNG for transparent logos; supports JPEG/WebP compression via opts)
+        function processImage(file, max = 256, opts = null) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onload = () => {
@@ -2838,8 +2947,15 @@
                         const canvas = document.createElement('canvas');
                         canvas.width = w;
                         canvas.height = h;
-                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                        resolve(canvas.toDataURL('image/png'));
+                        const ctx = canvas.getContext('2d');
+                        const mime = (opts && opts.mime) || 'image/png';
+                        const quality = (opts && typeof opts.quality === 'number') ? opts.quality : 0.8;
+                        if (mime === 'image/jpeg') {
+                            ctx.fillStyle = '#ffffff';
+                            ctx.fillRect(0, 0, w, h);
+                        }
+                        ctx.drawImage(img, 0, 0, w, h);
+                        resolve(mime === 'image/png' ? canvas.toDataURL('image/png') : canvas.toDataURL(mime, quality));
                     };
                     img.onerror = () => reject(new Error('تعذر قراءة الصورة'));
                     img.src = reader.result;
@@ -5323,11 +5439,13 @@
         let orderImgView = [];                  // the photos on screen (for the viewer)
         const canOrdImages = () => canOrd('edit') || canOrd('create');
 
-        // resize and convert to PNG until the data fits in one database node
+        // resize & smart-compress order photos (JPEG 0.78 saves ~80% RTDB bandwidth/storage)
         async function orderImageDataUrl(file) {
             if (!file.type.startsWith('image/')) throw userError('اختار ملف صورة');
-            for (const max of [1600, 1200, 900, 700, 500]) {
-                const url = await processImage(file, max);
+            const useJpg = !storageCfg || storageCfg.compressImages !== false;
+            const opts = useJpg ? { mime: 'image/jpeg', quality: 0.78 } : { mime: 'image/png' };
+            for (const max of [1400, 1100, 850, 650, 480]) {
+                const url = await processImage(file, max, opts);
                 if (url.length <= ORDER_IMG_MAX_CHARS) return url;
             }
             throw userError('الصورة كبيرة قوي حتى بعد الضغط. اختار صورة أصغر');
@@ -5335,7 +5453,7 @@
 
         async function loadOrderImages(orderId) {
             const v = (await rtdb.ref('orderImages/' + orderId).once('value')).val() || {};
-            return Object.keys(v).map(k => ({ key: k, name: v[k].name || '', data: v[k].data || '' })).filter(x => x.data);
+            return Object.keys(v).map(k => ({ key: k, name: v[k].name || '', type: v[k].type || 'image/jpeg', data: v[k].data || '', storagePath: v[k].storagePath || '' })).filter(x => x.data);
         }
 
         function paintOrderImageTiles(boxId, items, editable, removeFn) {
@@ -5390,8 +5508,12 @@
                 }
                 const current = await loadOrderImages(orderId);
                 if (current.length >= ORDER_IMG_MAX) return toast(`الحد ${ORDER_IMG_MAX} صور للطلبية`, 'error');
-                await rtdb.ref('orderImages/' + orderId).push({ name, type: 'image/png', data: dataUrl });
-                toast('تمت إضافة الصورة', 'success');
+                const imgType = dataUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : (dataUrl.startsWith('data:image/webp') ? 'image/webp' : 'image/png');
+                const ext = imgType === 'image/jpeg' ? 'jpg' : (imgType === 'image/webp' ? 'webp' : 'png');
+                const cloud = await cloudUploadBlob(`orderImages/${orderId}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${ext}`, dataUrlToBlob(dataUrl), imgType);
+                const payload = cloud ? { name, type: imgType, data: cloud.url, storagePath: cloud.storagePath } : { name, type: imgType, data: dataUrl };
+                await rtdb.ref('orderImages/' + orderId).push(payload);
+                toast('تمت إضافة الصورة' + (cloud ? ' (تخزين سحابي)' : ''), 'success');
                 paintOrderImages('orderImgBox', orderId, true);
             } catch (err) {
                 console.error(err);
@@ -5403,6 +5525,8 @@
             if (!canOrdImages()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             if (!confirm('حذف الصورة من الطلبية؟')) return;
             try {
+                const cur = (await rtdb.ref(`orderImages/${orderId}/${key}`).once('value')).val();
+                if (cur && cur.storagePath) await cloudDeletePath(cur.storagePath);
                 await rtdb.ref(`orderImages/${orderId}/${key}`).remove();
                 toast('تم حذف الصورة', 'success');
                 paintOrderImages('orderImgBox', orderId, true);
@@ -5412,15 +5536,12 @@
             }
         }
 
-        // opens the photo in a new tab (a blob address works where a data address is blocked)
+        // opens the photo in a new tab (supports both Cloud Storage URLs and base64 data URLs)
         function openOrderImageAt(i) {
             const x = orderImgView[i];
-            if (!x) return;
-            const b64 = x.data.split(',')[1] || '';
-            const bin = atob(b64);
-            const bytes = new Uint8Array(bin.length);
-            for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-            const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+            if (!x || !x.data) return;
+            if (x.data.startsWith('https://')) { window.open(x.data, '_blank'); return; }
+            const url = URL.createObjectURL(dataUrlToBlob(x.data));
             window.open(url, '_blank');
             setTimeout(() => URL.revokeObjectURL(url), 120000);
         }
@@ -5431,7 +5552,11 @@
             if (!list.length) return;
             try {
                 for (const x of list) {
-                    await rtdb.ref('orderImages/' + orderId).push({ name: x.name, type: 'image/png', data: x.data });
+                    const imgType = x.data.startsWith('data:image/jpeg') ? 'image/jpeg' : (x.data.startsWith('data:image/webp') ? 'image/webp' : 'image/png');
+                    const ext = imgType === 'image/jpeg' ? 'jpg' : (imgType === 'image/webp' ? 'webp' : 'png');
+                    const cloud = await cloudUploadBlob(`orderImages/${orderId}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${ext}`, dataUrlToBlob(x.data), imgType);
+                    const payload = cloud ? { name: x.name, type: imgType, data: cloud.url, storagePath: cloud.storagePath } : { name: x.name, type: imgType, data: x.data };
+                    await rtdb.ref('orderImages/' + orderId).push(payload);
                 }
             } catch (err) {
                 console.error(err);
@@ -5439,11 +5564,14 @@
             }
         }
 
-        // a deleted order takes its photos with it (rules allow removing each photo node, not the whole folder)
+        // a deleted order takes its photos with it (also deletes cloud files if any)
         async function dropOrderImages(orderId) {
             try {
                 const v = (await rtdb.ref('orderImages/' + orderId).once('value')).val() || {};
-                await Promise.all(Object.keys(v).map(k => rtdb.ref(`orderImages/${orderId}/${k}`).remove()));
+                await Promise.all(Object.keys(v).map(async k => {
+                    if (v[k] && v[k].storagePath) await cloudDeletePath(v[k].storagePath);
+                    await rtdb.ref(`orderImages/${orderId}/${k}`).remove();
+                }));
             } catch (err) {
                 console.warn('order photos not removed:', err && err.code);
             }
@@ -6132,7 +6260,7 @@
                 const ref = rtdb.ref('presence/' + chatMe());
                 ref.set({ name: meUser ? meUser.name : '', online: true, at: new Date().toISOString() });
                 ref.onDisconnect().set({ name: meUser ? meUser.name : '', online: false, at: new Date().toISOString() });
-                chatPresenceTimer = setInterval(() => { if (sessionUserId) rtdb.ref('presence/' + chatMe()).update({ online: true, at: new Date().toISOString() }).catch(() => {}); }, 25000);
+                chatPresenceTimer = setInterval(() => { if (sessionUserId && !document.hidden) rtdb.ref('presence/' + chatMe()).update({ online: true, at: new Date().toISOString() }).catch(() => {}); }, 35000);
             } catch (e) { /* presence is optional */ }
             chatPresenceUnsub = fbDb.collection('presence').onSnapshot(snap => {
                 chatPresence = {};
@@ -12061,6 +12189,762 @@
             </section>`;
         }
 
+
+        // ================= البيانات والإعلانات العامة الإلزامية (الصفحة الرئيسية) =================
+        const ANN_TYPES = [
+            ['directive',    'قرار / بيان إداري هام', 'fa-gavel',              'border-rose-300 bg-gradient-to-l from-rose-50 via-amber-50/80 to-white',        'bg-rose-600 text-white',    'text-rose-900',    'موافق وملتزم',   'اعتراض مع السبب'],
+            ['warning',      'تنبيه / تحذير عاجل',    'fa-triangle-exclamation','border-red-400 bg-gradient-to-l from-red-50 via-orange-50/70 to-white',          'bg-red-600 text-white',     'text-red-900',     'تم العلم والالتزام','اعتراض مع السبب'],
+            ['offer',        'عرض / خصم / تسعير',     'fa-tags',               'border-teal-300 bg-gradient-to-l from-teal-50 via-emerald-50/70 to-white',       'bg-teal-600 text-white',    'text-teal-900',    'تم العلم بالعرض','ملاحظة / اعتراض'],
+            ['announcement', 'إعلان عام',             'fa-bullhorn',           'border-sky-300 bg-gradient-to-l from-sky-50 via-blue-50/70 to-white',            'bg-sky-600 text-white',     'text-sky-900',     'موافق / تم العلم','اعتراض مع السبب'],
+            ['congrats',     'تهنئة / فرحة',          'fa-champagne-glasses',  'border-amber-300 bg-gradient-to-l from-amber-50 via-emerald-50/70 to-white',     'bg-amber-500 text-white',   'text-amber-900',   'ألف مبروك 🎉',    'ملاحظة / رد'],
+            ['invitation',   'دعوة / اجتماع / مناسبة','fa-envelope-open-text', 'border-indigo-300 bg-gradient-to-l from-indigo-50 via-purple-50/70 to-white',    'bg-indigo-600 text-white',  'text-indigo-900',  'تأكيد الحضور',   'اعتذار مع السبب']
+        ];
+        const annTypeInfo = t => ANN_TYPES.find(x => x[0] === t) || ANN_TYPES[0];
+        const annCanManage = () => isSystemAdmin() || can('announcements.manage') || can('settings.manage');
+
+        let annList = [];
+        let annMyResponses = {};          // annId -> my response object
+        let annStarted = false;
+        let annListUnsub = null;
+        let annRespUnsubs = {};           // annId -> unsub
+        let annObjectionOpenId = null;    // inline objection box open on home
+        let annPopupShownIds = new Set(); // avoid nagging within same page load if already popped once
+        let annFormPendingImg = null;     // null = unchanged, '' = removed, string = new dataUrl/url
+
+        function annStart() {
+            if (annStarted || !rtdb || !fbUser) return;
+            annStarted = true;
+            const ref = rtdb.ref('announcements');
+            const cb = snap => {
+                const val = snap.val() || {};
+                annList = Object.entries(val)
+                    .map(([id, v]) => ({ id, ...(v || {}) }))
+                    .sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) || String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+                annSyncMyResponseListeners();
+                if (parseRoute().name === 'home') {
+                    annRepaintHome();
+                    annMaybeShowUrgentPopup();
+                }
+            };
+            ref.on('value', cb, err => console.warn('announcements listener', err && err.code));
+            annListUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+        }
+
+        function annStop() {
+            if (annListUnsub) { try { annListUnsub(); } catch (e) { /* noop */ } annListUnsub = null; }
+            Object.values(annRespUnsubs).forEach(u => { try { u(); } catch (e) { /* noop */ } });
+            annRespUnsubs = {};
+            annList = [];
+            annMyResponses = {};
+            annObjectionOpenId = null;
+            annPopupShownIds = new Set();
+            annStarted = false;
+        }
+
+        function annIsExpired(a) {
+            if (!a || !a.expiresAt) return false;
+            return String(a.expiresAt) < todayISO();
+        }
+
+        function annTargetsMe(a) {
+            if (!a || a.active === false || annIsExpired(a)) return false;
+            const u = currentUser();
+            if (!u || !u.active) return false;
+            if (!a.audienceMode || a.audienceMode === 'all') return true;
+            const roles = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+            if (!roles.length) return false;
+            return roles.includes(u.roleId);
+        }
+
+        function annMyEffectiveResponse(a) {
+            const r = annMyResponses[a.id];
+            if (!r) return null;
+            const rev = Number(a.revision) || 1;
+            if ((Number(r.revision) || 1) < rev) return null; // edited with re-ack required
+            return r;
+        }
+
+        function annSyncMyResponseListeners() {
+            if (!rtdb || !fbUser) return;
+            const myUid = fbUser.uid;
+            const needed = new Set(annList.filter(a => annTargetsMe(a) || annCanManage()).map(a => a.id));
+            Object.keys(annRespUnsubs).forEach(id => {
+                if (!needed.has(id)) {
+                    try { annRespUnsubs[id](); } catch (e) { /* noop */ }
+                    delete annRespUnsubs[id];
+                    delete annMyResponses[id];
+                }
+            });
+            needed.forEach(id => {
+                if (annRespUnsubs[id]) return;
+                const ref = rtdb.ref(`announcementResponses/${id}/${myUid}`);
+                const cb = snap => {
+                    const v = snap.val();
+                    if (v) annMyResponses[id] = v; else delete annMyResponses[id];
+                    if (parseRoute().name === 'home') annRepaintHome();
+                };
+                ref.on('value', cb, () => {});
+                annRespUnsubs[id] = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+            });
+        }
+
+        function annRoleNameById(roleId) {
+            const r = (appData?.roles || []).find(x => x.id === roleId);
+            return r ? r.name : (roleId || '—');
+        }
+
+        function annAudienceLabel(a) {
+            if (!a.audienceMode || a.audienceMode === 'all') return 'جميع المستخدمين';
+            const roles = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+            if (!roles.length) return 'لم تُحدد أدوار';
+            return roles.map(rid => annRoleNameById(rid)).join(' · ');
+        }
+
+        function annRepaintHome() {
+            const box = el('homeAnnouncementsBox');
+            if (box) box.innerHTML = homeAnnouncementsInnerHtml();
+        }
+
+        function annCardHtml(a, isPendingMandatory) {
+            const [, typeLabel, icon, cardCls, badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(a.type);
+            const myResp = annMyEffectiveResponse(a);
+            const requireResp = a.requireResponse !== false;
+            const allowObj = a.allowObjection !== false;
+            const showObjBox = annObjectionOpenId === a.id;
+            const statusHtml = myResp
+                ? (myResp.status === 'objected'
+                    ? `<div class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-900">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="font-extrabold"><i class="fa-solid fa-hand"></i> تم تسجيل اعتراضك · ${esc(fmtWaDate((myResp.at || '').slice(0, 10)))}</span>
+                            <button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[11px] font-bold underline text-rose-700 hover:text-rose-900">تعديل الرد</button>
+                        </div>
+                        <p class="mt-1 whitespace-pre-line font-medium"><b>السبب:</b> ${esc(myResp.reason || '')}</p>
+                    </div>`
+                    : `<div class="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-900 flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-extrabold"><i class="fa-solid fa-circle-check"></i> ${a.type === 'congrats' ? 'تم تسجيل تفاعلك 🎉' : (a.type === 'invitation' ? 'تم تأكيد حضورك' : 'تم تسجيل موافقتك والتزامك')} · ${esc(fmtWaDate((myResp.at || '').slice(0, 10)))}</span>
+                        ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="text-[11px] font-bold underline text-emerald-700 hover:text-emerald-900">تغيير إلى اعتراض</button>` : ''}
+                    </div>`)
+                : '';
+
+            const actionsHtml = (!myResp || showObjBox) ? `
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <button type="button" onclick="annSubmitResponse('${esc(a.id)}','approved')" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-extrabold shadow-sm flex items-center gap-1.5">
+                        <i class="fa-solid fa-check"></i> ${esc(okLbl)}
+                    </button>
+                    ${allowObj ? `<button type="button" onclick="annToggleObjectionBox('${esc(a.id)}')" class="px-4 py-2 rounded-xl ${showObjBox ? 'bg-rose-700 text-white' : 'bg-white border-2 border-rose-300 text-rose-700 hover:bg-rose-50'} text-xs sm:text-sm font-extrabold flex items-center gap-1.5">
+                        <i class="fa-solid fa-hand"></i> ${esc(objLbl)}
+                    </button>` : ''}
+                </div>
+                ${showObjBox ? `<div class="mt-3 rounded-xl bg-white border-2 border-rose-300 p-3 space-y-2 shadow-sm">
+                    <label class="block text-xs font-extrabold text-rose-800"><i class="fa-solid fa-pen-to-square"></i> اكتب سبب الاعتراض / الملاحظة بوضوح (إجباري):</label>
+                    <textarea id="annObjReason_${esc(a.id)}" rows="3" maxlength="1500" class="${INPUT_CLS} text-sm" placeholder="مثال: لدي عميل متفق معه مسبقاً على خصم محدد أو سبب واضح...">${esc(myResp?.reason || '')}</textarea>
+                    <div class="flex flex-wrap items-center justify-end gap-2">
+                        <button type="button" onclick="annToggleObjectionBox(null)" class="${BTN_SECONDARY} !py-1.5 !text-xs">إلغاء</button>
+                        <button type="button" onclick="annSubmitObjection('${esc(a.id)}')" class="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-paper-plane"></i> إرسال الاعتراض</button>
+                    </div>
+                </div>` : ''}` : '';
+
+            return `<article class="rounded-2xl border-2 ${cardCls} p-4 sm:p-5 shadow-sm transition-all ${isPendingMandatory ? 'ring-2 ring-rose-400/50' : ''}">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-extrabold ${badgeCls}">
+                            <i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}
+                        </span>
+                        ${isPendingMandatory ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-100 text-rose-700 border border-rose-300 animate-pulse"><i class="fa-solid fa-bell"></i> بانتظار ردك — إلزامي</span>' : ''}
+                        ${!requireResp ? '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-white/80 text-slate-600 border border-slate-200">إعلان عام</span>' : ''}
+                        ${(Number(a.revision) || 1) > 1 ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">تحديث #${Number(a.revision)}</span>` : ''}
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        ${annCanManage() ? `<button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="px-2.5 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1" title="تقرير الموافقات والاعتراضات"><i class="fa-solid fa-chart-pie text-brand-600"></i> الردود</button>
+                        <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-2 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold" title="تعديل البيان"><i class="fa-solid fa-pen"></i></button>` : ''}
+                    </div>
+                </div>
+                <h3 class="mt-2.5 text-base sm:text-lg font-extrabold ${titleCls}">${esc(a.title || '')}</h3>
+                <p class="mt-1.5 text-sm text-slate-800 leading-relaxed whitespace-pre-line font-medium">${esc(a.body || '')}</p>
+                ${a.eventDate ? `<div class="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white/80 border border-slate-200 text-xs font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(a.eventDate)}</div>` : ''}
+                ${a.image ? `<div class="mt-3"><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-56 rounded-xl border border-slate-200 object-contain bg-white cursor-zoom-in shadow-sm"></div>` : ''}
+                <div class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                    <span><i class="fa-solid fa-user-tie"></i> ${esc(a.createdBy || 'الإدارة')}</span>
+                    <span><i class="fa-regular fa-clock"></i> ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
+                    <span><i class="fa-solid fa-users"></i> الفئة: <b>${esc(annAudienceLabel(a))}</b></span>
+                    ${a.expiresAt ? `<span><i class="fa-solid fa-hourglass-end"></i> حتى: ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
+                </div>
+                ${statusHtml}
+                ${actionsHtml}
+            </article>`;
+        }
+
+        function homeAnnouncementsInnerHtml() {
+            const visible = annList.filter(a => annTargetsMe(a));
+            const pendingMandatory = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
+            const otherActive = visible.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)));
+            const canMgr = annCanManage();
+            if (!visible.length && !canMgr) return '';
+            return `<section class="space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <h3 class="font-extrabold text-sm sm:text-base text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-bullhorn text-brand-600"></i> البيانات والإعلانات العامة
+                        </h3>
+                        ${pendingMandatory.length ? `<span class="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-extrabold">${pendingMandatory.length} بانتظار ردك</span>` : ''}
+                    </div>
+                    ${canMgr ? `<div class="flex items-center gap-2">
+                        <button type="button" onclick="openAnnouncementForm()" class="px-3 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-plus"></i> بيان / إعلان جديد</button>
+                        <button type="button" onclick="openAnnouncementsManager()" class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1.5"><i class="fa-solid fa-sliders"></i> الإدارة والتقارير (${annList.length})</button>
+                    </div>` : ''}
+                </div>
+                ${pendingMandatory.length ? `<div class="space-y-3">${pendingMandatory.map(a => annCardHtml(a, true)).join('')}</div>` : ''}
+                ${otherActive.length ? `<div class="space-y-3">${otherActive.map(a => annCardHtml(a, false)).join('')}</div>` : ''}
+                ${(!visible.length && canMgr) ? `<div class="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
+                    <span>لا توجد بيانات أو إعلانات نشطة موجهة لدورك حالياً. يمكنك نشر قرار إداري أو تهنئة أو دعوة أو خصم وتحديد الأدوار المستهدفة.</span>
+                </div>` : ''}
+            </section>`;
+        }
+
+        function homeAnnouncementsHtml() {
+            return `<div id="homeAnnouncementsBox">${homeAnnouncementsInnerHtml()}</div>`;
+        }
+
+        function annMaybeShowUrgentPopup() {
+            if (parseRoute().name !== 'home') return;
+            const modalOpen = el('modalBackdrop') && !el('modalBackdrop').classList.contains('hidden');
+            if (modalOpen) return;
+            const urgent = annList.find(a => annTargetsMe(a) && a.requireResponse !== false && a.popupOnHome === true && !annMyEffectiveResponse(a) && !annPopupShownIds.has(a.id + ':' + (a.revision || 1)));
+            if (!urgent) return;
+            annPopupShownIds.add(urgent.id + ':' + (urgent.revision || 1));
+            const [, typeLabel, icon, , badgeCls, , okLbl, objLbl] = annTypeInfo(urgent.type);
+            const allowObj = urgent.allowObjection !== false;
+            openModal(`بيان هام يتطلب ردك`, `<div class="space-y-4">
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(urgent.badge || typeLabel)}</span>
+                    <span class="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">يظل ظاهراً حتى يتم الرد</span>
+                </div>
+                <h4 class="text-lg font-extrabold text-slate-900">${esc(urgent.title || '')}</h4>
+                <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-800 whitespace-pre-line leading-relaxed font-medium">${esc(urgent.body || '')}</div>
+                ${urgent.eventDate ? `<div class="text-xs font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(urgent.eventDate)}</div>` : ''}
+                ${urgent.image ? `<img src="${esc(urgent.image)}" alt="" class="max-h-56 mx-auto rounded-xl border border-slate-200 object-contain">` : ''}
+                <div id="annModalObjBox" class="hidden rounded-xl bg-rose-50 border border-rose-200 p-3 space-y-2">
+                    <label class="block text-xs font-extrabold text-rose-800">سبب الاعتراض (إجباري):</label>
+                    <textarea id="annModalObjText" rows="3" maxlength="1500" class="${INPUT_CLS}" placeholder="اكتب سبب اعتراضك بوضوح..."></textarea>
+                    <div class="flex justify-end"><button type="button" onclick="annSubmitModalObjection('${esc(urgent.id)}')" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold">إرسال الاعتراض</button></div>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="annSubmitResponse('${esc(urgent.id)}','approved',true)" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-check"></i> ${esc(okLbl)}</button>
+                        ${allowObj ? `<button type="button" onclick="el('annModalObjBox').classList.toggle('hidden');el('annModalObjText').focus()" class="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border-2 border-rose-300 text-rose-700 text-sm font-extrabold flex items-center gap-1.5"><i class="fa-solid fa-hand"></i> ${esc(objLbl)}</button>` : ''}
+                    </div>
+                    <button type="button" onclick="closeModal()" class="${BTN_SECONDARY} !text-xs">مراجعة لاحقاً</button>
+                </div>
+            </div>`, 'max-w-xl');
+        }
+
+        function annToggleObjectionBox(annId) {
+            annObjectionOpenId = (annObjectionOpenId === annId) ? null : annId;
+            annRepaintHome();
+            if (annObjectionOpenId) {
+                setTimeout(() => { const ta = el('annObjReason_' + annObjectionOpenId); if (ta) ta.focus(); }, 40);
+            }
+        }
+
+        async function annSubmitResponse(annId, status, closeAfter, reasonText) {
+            if (!rtdb || !fbUser) return;
+            const a = annList.find(x => x.id === annId);
+            if (!a) return;
+            const u = currentUser();
+            if (!u || !u.active) return;
+            const reason = String(reasonText || '').trim().slice(0, 1500);
+            if (status === 'objected' && reason.length < 3) {
+                return toast('من فضلك اكتب سبب الاعتراض بوضوح (3 أحرف على الأقل)', 'error');
+            }
+            const payload = {
+                uid: fbUser.uid,
+                userName: u.name || 'مستخدم',
+                roleId: u.roleId || '',
+                roleName: annRoleNameById(u.roleId),
+                status: status === 'objected' ? 'objected' : 'approved',
+                reason: status === 'objected' ? reason : '',
+                revision: Number(a.revision) || 1,
+                at: new Date().toISOString()
+            };
+            try {
+                await rtdb.ref(`announcementResponses/${annId}/${fbUser.uid}`).set(payload);
+                annMyResponses[annId] = payload;
+                annObjectionOpenId = null;
+                if (status === 'objected' && a.createdById && a.createdById !== fbUser.uid) {
+                    notifyUser(a.createdById, { verb: 'سجّل', kind: 'اعتراض على بيان', detail: `${u.name}: ${a.title} — ${reason.slice(0, 100)}`, target: { col: 'announcements', id: annId } });
+                }
+                if (closeAfter) closeModal();
+                annRepaintHome();
+                toast(status === 'objected' ? 'تم تسجيل اعتراضك وسببه وإبلاغ الإدارة' : 'تم تسجيل موافقتك بنجاح', 'success');
+            } catch (err) {
+                console.error(err);
+                toast('تعذر حفظ الرد. تأكد من الإنترنت ونشر قواعد قاعدة البيانات', 'error');
+            }
+        }
+
+        function annSubmitObjection(annId) {
+            const ta = el('annObjReason_' + annId);
+            annSubmitResponse(annId, 'objected', false, ta ? ta.value : '');
+        }
+
+        function annSubmitModalObjection(annId) {
+            const ta = el('annModalObjText');
+            annSubmitResponse(annId, 'objected', true, ta ? ta.value : '');
+        }
+
+        // ---- إدارة البيانات والإعلانات (للمدير والمصرح لهم) ----
+        async function openAnnouncementsManager() {
+            if (!annCanManage()) return toast('ليس لديك صلاحية لإدارة البيانات والإعلانات', 'error');
+            openModal('إدارة البيانات والإعلانات العامة', `<div class="space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-xs text-slate-500">انشر قرارات إدارية إلزامية، تهنئات، دعوات، عروض وخصومات، وحدّد الأدوار المستهدفة وتابع ردود كل موظف.</p>
+                    <button type="button" onclick="openAnnouncementForm()" class="${BTN_PRIMARY} !py-2"><i class="fa-solid fa-plus"></i> إضافة بيان / إعلان جديد</button>
+                </div>
+                <div id="annMgrList" class="space-y-3"><div class="text-center py-6 text-slate-400 text-sm">جاري تحميل البيانات والإحصائيات...</div></div>
+            </div>`, 'max-w-3xl');
+
+            // Fetch summary counts for each announcement
+            const counts = {};
+            await Promise.all(annList.map(async a => {
+                try {
+                    const v = (await rtdb.ref('announcementResponses/' + a.id).once('value')).val() || {};
+                    const rev = Number(a.revision) || 1;
+                    let ok = 0, obj = 0;
+                    Object.values(v).forEach(r => {
+                        if (!r || (Number(r.revision) || 1) < rev) return;
+                        if (r.status === 'objected') obj++; else ok++;
+                    });
+                    counts[a.id] = { ok, obj };
+                } catch (e) { counts[a.id] = { ok: 0, obj: 0 }; }
+            }));
+
+            const box = el('annMgrList');
+            if (!box) return;
+            if (!annList.length) {
+                box.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500 text-sm">
+                    لا توجد بيانات أو إعلانات بعد. اضغط «إضافة بيان / إعلان جديد» لإنشاء أول بيان عام.
+                </div>`;
+                return;
+            }
+            box.innerHTML = annList.map(a => {
+                const [, typeLabel, icon, , badgeCls] = annTypeInfo(a.type);
+                const c = counts[a.id] || { ok: 0, obj: 0 };
+                const exp = annIsExpired(a);
+                const stateBadge = a.active === false
+                    ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">متوقف</span>'
+                    : (exp ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">منتهي الصلاحية</span>'
+                           : '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">نشط الآن</span>');
+                return `<div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div class="space-y-1 flex-1 min-w-[200px]">
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}</span>
+                                ${stateBadge}
+                                ${a.requireResponse !== false ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">إلزامي بالرد</span>' : ''}
+                                ${a.popupOnHome ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700">نافذة فورية</span>' : ''}
+                            </div>
+                            <div class="font-extrabold text-slate-900 text-sm sm:text-base">${esc(a.title || '')}</div>
+                            <div class="text-xs text-slate-600 line-clamp-2">${esc(a.body || '')}</div>
+                            <div class="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
+                                <span><i class="fa-solid fa-users"></i> <b>${esc(annAudienceLabel(a))}</b></span>
+                                <span><i class="fa-regular fa-clock"></i> ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
+                                ${a.expiresAt ? `<span>ينتهي: ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1.5">
+                            <span class="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-extrabold">✅ ${c.ok}</span>
+                            <span class="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 text-xs font-extrabold">✋ ${c.obj}</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                        <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="px-3 py-1.5 rounded-lg bg-brand-50 hover:bg-brand-100 text-brand-700 text-xs font-extrabold flex items-center gap-1"><i class="fa-solid fa-chart-pie"></i> تقرير الردود والاعتراضات</button>
+                        <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid fa-pen"></i> تعديل</button>
+                        <button type="button" onclick="annToggleActive('${esc(a.id)}')" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid ${a.active === false ? 'fa-play text-emerald-600' : 'fa-pause text-amber-600'}"></i> ${a.active === false ? 'تفعيل' : 'إيقاف مؤقت'}</button>
+                        <button type="button" onclick="annDelete('${esc(a.id)}')" class="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1 mr-auto"><i class="fa-solid fa-trash-can"></i> حذف</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function annFormTypeChanged() {
+            const sel = el('annFType');
+            if (!sel) return;
+            const t = sel.value;
+            const info = annTypeInfo(t);
+            const badgeIn = el('annFBadge');
+            if (badgeIn && !badgeIn.dataset.touched) badgeIn.value = info[1];
+            const reqCb = el('annFRequire');
+            const objCb = el('annFAllowObj');
+            if (reqCb && !reqCb.dataset.touched) reqCb.checked = (t === 'directive' || t === 'warning' || t === 'invitation');
+            if (objCb && !objCb.dataset.touched) objCb.checked = (t !== 'congrats');
+            annUpdateFormPreview();
+        }
+
+        function annUpdateFormPreview() {
+            const box = el('annFormPreview');
+            if (!box) return;
+            const t = el('annFType')?.value || 'directive';
+            const [, typeLabel, icon, cardCls, badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(t);
+            const title = (el('annFTitle')?.value || '').trim() || 'عنوان البيان أو الإعلان سيظهر هنا';
+            const body = (el('annFBody')?.value || '').trim() || 'نص الرسالة والتفاصيل التي سيقرأها الموظفون في الصفحة الرئيسية...';
+            const badge = (el('annFBadge')?.value || '').trim() || typeLabel;
+            const evDate = (el('annFEventDate')?.value || '').trim();
+            const allowObj = el('annFAllowObj')?.checked !== false;
+            box.innerHTML = `<div class="rounded-2xl border-2 ${cardCls} p-3.5 text-right">
+                <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(badge)}</span>
+                <div class="mt-2 font-extrabold text-sm ${titleCls}">${esc(title)}</div>
+                <div class="mt-1 text-xs text-slate-700 whitespace-pre-line">${esc(body)}</div>
+                ${evDate ? `<div class="mt-1.5 text-[11px] font-bold text-slate-600"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(evDate)}</div>` : ''}
+                <div class="mt-2.5 flex flex-wrap gap-1.5">
+                    <span class="px-3 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold">✓ ${esc(okLbl)}</span>
+                    ${allowObj ? `<span class="px-3 py-1 rounded-lg bg-white border border-rose-300 text-rose-700 text-[11px] font-bold">✋ ${esc(objLbl)}</span>` : ''}
+                </div>
+            </div>`;
+        }
+
+        async function annOnImagePicked(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            if (!file.type.startsWith('image/')) return toast('اختر ملف صورة فقط', 'error');
+            try {
+                let url = null;
+                for (const max of [1000, 800, 600]) {
+                    const candidate = await processImage(file, max, { mime: 'image/jpeg', quality: 0.76 });
+                    if (candidate.length <= 280000) { url = candidate; break; }
+                }
+                if (!url) return toast('الصورة كبيرة جداً حتى بعد الضغط', 'error');
+                annFormPendingImg = url;
+                const pv = el('annFImgPreview');
+                if (pv) pv.innerHTML = `<div class="flex items-center gap-3 mt-2"><img src="${url}" class="h-20 rounded-xl border border-slate-200 object-contain bg-white"><button type="button" onclick="annClearFormImage()" class="text-xs font-bold text-rose-600 hover:underline">إزالة الصورة</button></div>`;
+            } catch (e) { toast('تعذر تجهيز الصورة', 'error'); }
+        }
+
+        function annClearFormImage() {
+            annFormPendingImg = '';
+            const pv = el('annFImgPreview');
+            if (pv) pv.innerHTML = '';
+        }
+
+        function openAnnouncementForm(editId) {
+            if (!annCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const cur = editId ? annList.find(x => x.id === editId) : null;
+            annFormPendingImg = null;
+            const roles = (appData?.roles || []);
+            const dirUsers = [...userDirectoryMap.values()].filter(u => u && u.active !== false);
+            const roleCount = rid => dirUsers.filter(u => u.roleId === rid).length;
+            const selRoles = Array.isArray(cur?.targetRoles) ? cur.targetRoles : [];
+            const audMode = cur?.audienceMode || 'all';
+            const typeVal = cur?.type || 'directive';
+            const curImg = cur?.image || '';
+
+            openModal(cur ? 'تعديل البيان / الإعلان' : 'إضافة بيان أو إعلان جديد', `<form onsubmit="saveAnnouncementForm(event,'${esc(editId || '')}')" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-extrabold text-slate-700 mb-1.5">نوع وشكل البيان:</label>
+                    <select id="annFType" onchange="annFormTypeChanged()" class="${INPUT_CLS} font-bold">
+                        ${ANN_TYPES.map(([k, lbl]) => `<option value="${k}" ${typeVal === k ? 'selected' : ''}>${esc(lbl)}</option>`).join('')}
+                    </select>
+                </div>
+
+                <div class="grid sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">عنوان البيان / الإعلان *</label>
+                        <input id="annFTitle" required maxlength="160" oninput="annUpdateFormPreview()" value="${esc(cur?.title || '')}" class="${INPUT_CLS}" placeholder="مثال: ممنوع عمل خصومات على السيراميك هذه الفترة">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">الشارة العلوية (اختياري)</label>
+                        <input id="annFBadge" maxlength="60" oninput="this.dataset.touched='1';annUpdateFormPreview()" value="${esc(cur?.badge || annTypeInfo(typeVal)[1])}" class="${INPUT_CLS}" placeholder="مثال: قرار إداري عاجل / تهنئة خاصة">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 mb-1">نص البيان والتفاصيل *</label>
+                    <textarea id="annFBody" required rows="4" maxlength="3000" oninput="annUpdateFormPreview()" class="${INPUT_CLS}" placeholder="اكتب تفاصيل القرار أو التهنئة أو الدعوة أو العرض بالكامل...">${esc(cur?.body || '')}</textarea>
+                </div>
+
+                <div class="grid sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">موعد / مكان (ممتاز للدعوات والعروض)</label>
+                        <input id="annFEventDate" maxlength="120" oninput="annUpdateFormPreview()" value="${esc(cur?.eventDate || '')}" class="${INPUT_CLS}" placeholder="مثال: الخميس 5 مساءً — قاعة الاجتماعات">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ انتهاء تلقائي (اختياري)</label>
+                        <input id="annFExpires" type="date" value="${esc(cur?.expiresAt || '')}" class="${INPUT_CLS}">
+                    </div>
+                </div>
+
+                <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2.5">
+                    <label class="block text-xs font-extrabold text-slate-800"><i class="fa-solid fa-users text-brand-600"></i> الفئة المستهدفة (من أدوار المنظومة):</label>
+                    <div class="flex flex-wrap gap-3 text-sm">
+                        <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
+                            <input type="radio" name="annAud" value="all" ${audMode === 'all' ? 'checked' : ''} onchange="el('annRolesPick').classList.add('hidden')" class="accent-brand-600">
+                            <span>الكل (جميع المستخدمين)</span>
+                        </label>
+                        <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
+                            <input type="radio" name="annAud" value="roles" ${audMode === 'roles' ? 'checked' : ''} onchange="el('annRolesPick').classList.remove('hidden')" class="accent-brand-600">
+                            <span>أدوار محددة (مندوبين / شحن / محاسب...)</span>
+                        </label>
+                    </div>
+                    <div id="annRolesPick" class="${audMode === 'roles' ? '' : 'hidden'} grid sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200">
+                        ${roles.length ? roles.map(r => `<label class="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 cursor-pointer text-xs hover:border-brand-400">
+                            <span class="flex items-center gap-2 font-bold text-slate-800">
+                                <input type="checkbox" name="annRoleChk" value="${esc(r.id)}" ${selRoles.includes(r.id) ? 'checked' : ''} class="w-4 h-4 accent-brand-600">
+                                ${esc(r.name)}
+                            </span>
+                            <span class="text-[11px] text-slate-500">${roleCount(r.id)} مستخدم</span>
+                        </label>`).join('') : '<p class="text-xs text-amber-700 col-span-2">لم تُحمّل قائمة الأدوار — تأكد من صلاحية قراءة الأدوار.</p>'}
+                    </div>
+                </div>
+
+                <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2">
+                    <label class="block text-xs font-extrabold text-slate-800">خيارات الظهور والرد:</label>
+                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                        <input id="annFRequire" type="checkbox" ${(cur ? cur.requireResponse !== false : true) ? 'checked' : ''} onchange="this.dataset.touched='1'" class="w-4 h-4 mt-0.5 accent-brand-600">
+                        <span><b>إلزامي بالرد المستمر:</b> يظل ظاهراً بوضوح في أعلى الصفحة الرئيسية باستمرار حتى يضغط المستخدم موافقة أو اعتراض</span>
+                    </label>
+                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                        <input id="annFAllowObj" type="checkbox" ${(cur ? cur.allowObjection !== false : true) ? 'checked' : ''} onchange="this.dataset.touched='1';annUpdateFormPreview()" class="w-4 h-4 mt-0.5 accent-brand-600">
+                        <span><b>السماح بالاعتراض مع إجبار كتابة السبب:</b> يظهر زر «اعتراض» ويجبر المستخدم على توضيح السبب قبل الإرسال</span>
+                    </label>
+                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                        <input id="annFPopup" type="checkbox" ${cur?.popupOnHome ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-brand-600">
+                        <span><b>إبراز كنافذة فورية عند فتح الرئيسية:</b> تفتح نافذة منبثقة بالبيان فور دخول المستهدف لحين الرد</span>
+                    </label>
+                    <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                        <input id="annFPinned" type="checkbox" ${(cur ? cur.pinned !== false : true) ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-brand-600">
+                        <span><b>تثبيت في الأعلى (أولوية قصوى)</b></span>
+                    </label>
+                    ${cur ? `<label class="flex items-start gap-2.5 cursor-pointer text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                        <input id="annFBumpRev" type="checkbox" class="w-4 h-4 mt-0.5 accent-amber-600">
+                        <span><b>إعادة طلب الموافقة من الجميع بعد هذا التعديل:</b> سيظهر البيان مجدداً كـ «بانتظار ردك» لكل المستهدفين</span>
+                    </label>` : ''}
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 mb-1">صورة / تصميم مرفق مع البيان (اختياري — يُضغط تلقائياً):</label>
+                    <input type="file" accept="image/*" onchange="annOnImagePicked(this)" class="text-xs">
+                    <div id="annFImgPreview">${curImg ? `<div class="flex items-center gap-3 mt-2"><img src="${esc(curImg)}" class="h-20 rounded-xl border border-slate-200 object-contain bg-white"><button type="button" onclick="annClearFormImage()" class="text-xs font-bold text-rose-600 hover:underline">إزالة الصورة</button></div>` : ''}</div>
+                </div>
+
+                <div>
+                    <div class="text-[11px] font-bold text-slate-500 mb-1">معاينة مباشرة لشكل البيان:</div>
+                    <div id="annFormPreview"></div>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                    <button type="button" onclick="openAnnouncementsManager()" class="${BTN_SECONDARY}">رجوع للقائمة</button>
+                    <button type="submit" class="${BTN_PRIMARY}"><i class="fa-solid fa-paper-plane"></i> ${cur ? 'حفظ التعديلات' : 'نشر البيان الآن'}</button>
+                </div>
+            </form>`, 'max-w-2xl');
+            setTimeout(annUpdateFormPreview, 30);
+        }
+
+        async function saveAnnouncementForm(e, editId) {
+            e.preventDefault();
+            if (!annCanManage() || !rtdb || !fbUser) return;
+            const cur = editId ? annList.find(x => x.id === editId) : null;
+            const title = (el('annFTitle')?.value || '').trim();
+            const body = (el('annFBody')?.value || '').trim();
+            if (!title || !body) return toast('اكتب العنوان ونص البيان', 'error');
+            const audMode = (document.querySelector('input[name="annAud"]:checked') || {}).value || 'all';
+            const targetRoles = audMode === 'roles' ? [...document.querySelectorAll('input[name="annRoleChk"]:checked')].map(x => x.value) : [];
+            if (audMode === 'roles' && !targetRoles.length) return toast('اختر دوراً واحداً على الأقل من الأدوار المستهدفة', 'error');
+
+            const id = cur ? cur.id : uid('ANN-');
+            const now = new Date().toISOString();
+            const u = currentUser();
+            let imageVal = cur?.image || '';
+            if (annFormPendingImg === '') imageVal = '';
+            else if (typeof annFormPendingImg === 'string' && annFormPendingImg.startsWith('data:image/')) {
+                const cloud = await cloudUploadBlob(`announcements/${id}_${Date.now()}.jpg`, dataUrlToBlob(annFormPendingImg), 'image/jpeg');
+                imageVal = cloud ? cloud.url : annFormPendingImg;
+            }
+            const bump = cur && el('annFBumpRev')?.checked;
+            const rev = cur ? ((Number(cur.revision) || 1) + (bump ? 1 : 0)) : 1;
+
+            const data = {
+                id,
+                type: el('annFType')?.value || 'directive',
+                title: title.slice(0, 160),
+                body: body.slice(0, 3000),
+                badge: (el('annFBadge')?.value || '').trim().slice(0, 60),
+                eventDate: (el('annFEventDate')?.value || '').trim().slice(0, 120),
+                expiresAt: (el('annFExpires')?.value || '').trim(),
+                image: imageVal,
+                audienceMode: audMode,
+                targetRoles,
+                requireResponse: !!el('annFRequire')?.checked,
+                allowObjection: !!el('annFAllowObj')?.checked,
+                popupOnHome: !!el('annFPopup')?.checked,
+                pinned: !!el('annFPinned')?.checked,
+                active: cur ? (cur.active !== false) : true,
+                revision: rev,
+                createdAt: cur?.createdAt || now,
+                createdBy: cur?.createdBy || (u ? u.name : 'الإدارة'),
+                createdById: cur?.createdById || fbUser.uid,
+                updatedAt: now
+            };
+            try {
+                await rtdb.ref('announcements/' + id).set(data);
+                notifyDirect(cur ? 'عدّل' : 'نشر', 'بيان وإعلان عام', title, { col: 'announcements', id });
+                toast(cur ? 'تم تحديث البيان بنجاح' : 'تم نشر البيان على الصفحة الرئيسية بنجاح', 'success');
+                openAnnouncementsManager();
+            } catch (err) {
+                console.error(err);
+                toast('تعذر حفظ البيان. تأكد من نشر قواعد قاعدة البيانات الجديدة', 'error');
+            }
+        }
+
+        async function annToggleActive(id) {
+            if (!annCanManage() || !rtdb) return;
+            const cur = annList.find(x => x.id === id);
+            if (!cur) return;
+            try {
+                await rtdb.ref(`announcements/${id}/active`).set(cur.active === false);
+                toast(cur.active === false ? 'تم تفعيل البيان' : 'تم إيقاف البيان مؤقتاً', 'success');
+                openAnnouncementsManager();
+            } catch (e) { toast('تعذر تغيير الحالة', 'error'); }
+        }
+
+        async function annDelete(id) {
+            if (!annCanManage() || !rtdb) return;
+            if (!confirm('حذف هذا البيان وجميع ردوده نهائياً؟')) return;
+            try {
+                await rtdb.ref('announcements/' + id).remove();
+                await rtdb.ref('announcementResponses/' + id).remove().catch(() => {});
+                toast('تم حذف البيان بنجاح', 'success');
+                openAnnouncementsManager();
+            } catch (e) { toast('تعذر حذف البيان', 'error'); }
+        }
+
+        // ---- تقرير الردود والاعتراضات ومن لم يردّ بعد + طباعة A4 ----
+        let _annReportCache = null;
+        async function openAnnouncementReport(annId, tab) {
+            if (!annCanManage() || !rtdb) return toast('ليس لديك صلاحية لعرض التقرير', 'error');
+            const a = annList.find(x => x.id === annId);
+            if (!a) return toast('البيان غير موجود', 'error');
+            const activeTab = tab || 'all';
+            openModal('تقرير الموافقات والاعتراضات', `<div class="py-8 text-center text-slate-400 text-sm">جاري تحميل الردود...</div>`, 'max-w-3xl');
+            try {
+                const respMap = (await rtdb.ref('announcementResponses/' + annId).once('value')).val() || {};
+                const rev = Number(a.revision) || 1;
+                const dirAll = [...userDirectoryMap.values()].filter(u => u && u.active !== false);
+                const targeted = dirAll.filter(u => {
+                    if (!a.audienceMode || a.audienceMode === 'all') return true;
+                    return Array.isArray(a.targetRoles) && a.targetRoles.includes(u.roleId);
+                });
+                const approved = [], objected = [], pending = [];
+                const seenUids = new Set();
+                targeted.forEach(u => {
+                    seenUids.add(u.id);
+                    const r = respMap[u.id];
+                    if (r && (Number(r.revision) || 1) >= rev) {
+                        const row = { uid: u.id, name: r.userName || u.name, roleName: r.roleName || annRoleNameById(u.roleId), status: r.status, reason: r.reason || '', at: r.at || '' };
+                        if (r.status === 'objected') objected.push(row); else approved.push(row);
+                    } else {
+                        pending.push({ uid: u.id, name: u.name, roleName: annRoleNameById(u.roleId), status: 'pending', reason: '', at: '' });
+                    }
+                });
+                // Include any responders outside current directory snapshot
+                Object.entries(respMap).forEach(([uidKey, r]) => {
+                    if (seenUids.has(uidKey) || !r || (Number(r.revision) || 1) < rev) return;
+                    const row = { uid: uidKey, name: r.userName || uidKey, roleName: r.roleName || annRoleNameById(r.roleId), status: r.status, reason: r.reason || '', at: r.at || '' };
+                    if (r.status === 'objected') objected.push(row); else approved.push(row);
+                });
+                _annReportCache = { a, approved, objected, pending };
+                paintAnnouncementReport(activeTab);
+            } catch (err) {
+                console.error(err);
+                toast('تعذر تحميل التقرير', 'error');
+            }
+        }
+
+        function paintAnnouncementReport(tab) {
+            if (!_annReportCache) return;
+            const { a, approved, objected, pending } = _annReportCache;
+            const total = approved.length + objected.length + pending.length;
+            const done = approved.length + objected.length;
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            const list = tab === 'approved' ? approved : (tab === 'objected' ? objected : (tab === 'pending' ? pending : [...objected, ...pending, ...approved]));
+            const tabBtn = (k, lbl) => `<button type="button" onclick="paintAnnouncementReport('${k}')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold ${tab === k ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">${lbl}</button>`;
+
+            const rowsHtml = list.length ? list.map(r => {
+                const badge = r.status === 'objected'
+                    ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-rose-100 text-rose-800">✋ معترض</span>'
+                    : (r.status === 'approved'
+                        ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800">✅ موافق</span>'
+                        : '<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800">⏳ لم يرد بعد</span>');
+                return `<div class="rounded-xl border ${r.status === 'objected' ? 'border-rose-200 bg-rose-50/60' : 'border-slate-200 bg-white'} p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <span class="font-extrabold text-sm text-slate-900">${esc(r.name)}</span>
+                            <span class="text-xs text-slate-500 mr-2">(${esc(r.roleName)})</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            ${r.at ? `<span class="text-[11px] text-slate-500">${esc(debtFmtAt(r.at))}</span>` : ''}
+                            ${badge}
+                        </div>
+                    </div>
+                    ${r.reason ? `<div class="mt-2 rounded-lg bg-white border border-rose-200 px-3 py-2 text-xs text-rose-900 whitespace-pre-line"><b>سبب الاعتراض:</b> ${esc(r.reason)}</div>` : ''}
+                </div>`;
+            }).join('') : '<div class="text-center py-6 text-slate-400 text-sm">لا توجد عناصر في هذا التصنيف</div>';
+
+            openModal('تقرير الموافقات والاعتراضات', `<div class="space-y-4">
+                <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
+                    <div class="font-extrabold text-slate-900">${esc(a.title || '')}</div>
+                    <div class="text-xs text-slate-500 mt-1">الفئة المستهدفة: <b>${esc(annAudienceLabel(a))}</b> · النسخة #${Number(a.revision) || 1}</div>
+                    <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                        <div class="rounded-xl bg-white border border-slate-200 p-2"><div class="text-[11px] text-slate-500">المستهدفون</div><div class="text-lg font-extrabold text-slate-800">${total}</div></div>
+                        <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2"><div class="text-[11px] text-emerald-700">✅ موافقون</div><div class="text-lg font-extrabold text-emerald-700">${approved.length}</div></div>
+                        <div class="rounded-xl bg-rose-50 border border-rose-200 p-2"><div class="text-[11px] text-rose-700">✋ معترضون</div><div class="text-lg font-extrabold text-rose-700">${objected.length}</div></div>
+                        <div class="rounded-xl bg-amber-50 border border-amber-200 p-2"><div class="text-[11px] text-amber-700">⏳ لم يردّوا</div><div class="text-lg font-extrabold text-amber-700">${pending.length}</div></div>
+                    </div>
+                    <div class="mt-3">
+                        <div class="flex justify-between text-[11px] font-bold text-slate-600 mb-1"><span>نسبة الاستجابة</span><span>${pct}% (${done}/${total})</span></div>
+                        <div class="h-2 rounded-full bg-slate-200 overflow-hidden"><div class="h-full bg-brand-600 rounded-full" style="width:${pct}%"></div></div>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex flex-wrap gap-1.5">
+                        ${tabBtn('all', `الكل (${total})`)}
+                        ${tabBtn('objected', `المعترضون (${objected.length})`)}
+                        ${tabBtn('pending', `لم يردّوا (${pending.length})`)}
+                        ${tabBtn('approved', `الموافقون (${approved.length})`)}
+                    </div>
+                    <button type="button" onclick="printAnnouncementReport()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-print"></i> طباعة التقرير A4</button>
+                </div>
+                <div class="space-y-2 max-h-[45vh] overflow-y-auto pr-1">${rowsHtml}</div>
+                <div class="flex justify-end pt-2 border-t border-slate-200">
+                    <button type="button" onclick="openAnnouncementsManager()" class="${BTN_SECONDARY}">رجوع لقائمة البيانات</button>
+                </div>
+            </div>`, 'max-w-3xl');
+        }
+
+        function printAnnouncementReport() {
+            if (!_annReportCache) return;
+            const { a, approved, objected, pending } = _annReportCache;
+            const all = [...objected, ...approved, ...pending];
+            const rows = all.map((r, i) => `<tr>
+                <td>${i + 1}</td>
+                <td><b>${esc(r.name)}</b></td>
+                <td>${esc(r.roleName)}</td>
+                <td>${r.status === 'objected' ? '<b style="color:#be123c">معترض</b>' : (r.status === 'approved' ? '<b style="color:#047857">موافق</b>' : '<span style="color:#b45309">لم يرد بعد</span>')}</td>
+                <td>${esc(r.reason || '—')}</td>
+                <td>${esc(r.at ? debtFmtAt(r.at) : '—')}</td>
+            </tr>`).join('');
+            const body = `
+                <div class="card">
+                    <div><b>عنوان البيان:</b> ${esc(a.title || '')}</div>
+                    <div style="margin-top:6px;white-space:pre-line">${esc(a.body || '')}</div>
+                    <div style="margin-top:8px;font-size:12px;color:#475569">الفئة المستهدفة: ${esc(annAudienceLabel(a))} · الموافقون: ${approved.length} · المعترضون: ${objected.length} · لم يردّوا: ${pending.length}</div>
+                </div>
+                <table>
+                    <thead><tr><th>#</th><th>الاسم</th><th>الدور</th><th>الحالة</th><th>سبب الاعتراض / الملاحظة</th><th>وقت الرد</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            printHtml(shipPrintDoc('تقرير ردود واعتراضات البيان الإداري', a.title || '', body));
+        }
+
         function viewHome() {
             const u = currentUser();
             const cards = ROUTE_ORDER.filter(n => n !== 'home' && canAccessRoute(n)).map(n => {
@@ -12073,7 +12957,7 @@
             }).join('');
             const period = homeCfg.timeColors ? homePeriod(new Date().getHours()) : '';
             const sky = homeCfg.sunArc ? homeSkyPos() : null;
-            setTimeout(() => debtPopupMaybeShow(), 120);
+            setTimeout(() => { debtPopupMaybeShow(); annMaybeShowUrgentPopup(); }, 180);
             const style = `<style>
                 .home-hero { position: relative; overflow: hidden; border-radius: 18px; padding: 46px 20px 14px; text-align: center; background: linear-gradient(135deg, rgb(var(--surface)) 0%, rgb(var(--page-bg)) 100%); border: 1px solid rgb(var(--accent)); box-shadow: 0 2px 0 rgb(var(--accent) / .3), 0 10px 22px -14px rgb(var(--brand-900) / .45); --hero-ink: rgb(var(--brand-800)); --hero-sub: #475569; color: var(--hero-ink); }
                 .home-hero::before { content: ''; position: absolute; inset: 6px; border: 1px solid rgb(var(--accent) / .35); border-radius: 13px; pointer-events: none; }
@@ -12131,6 +13015,7 @@
                             <div class="home-rule"></div>
                         </div>
                     </div>
+                    ${homeAnnouncementsHtml()}
                     <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
                         ${cards || '<p class="text-slate-600 font-bold text-center">مفيش أقسام متاحة لحسابك</p>'}
                     </div>
@@ -13326,10 +14211,72 @@
             </section>`;
         }
 
+
+        // ---------- 6.3 settings: server storage & performance optimization ----------
+        function serverSettingsHtml() {
+            const c = storageCfg || STORAGE_CFG_DEFAULT;
+            const hasStorageSdk = typeof firebase !== 'undefined' && typeof firebase.storage === 'function';
+            return `<section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-5">
+                <div>
+                    <h3 class="font-bold text-lg mb-1"><i class="fa-solid fa-server text-brand-600"></i> مساحة وأداء السيرفر</h3>
+                    <p class="text-xs text-slate-500">تحكم في ضغط الصور، فصل ملفات PDF والصور إلى التخزين السحابي، وتنظيف الإشعارات القديمة لإبقاء قاعدة البيانات سريعة وخفيفة لسنوات.</p>
+                </div>
+                <div class="space-y-3">
+                    <label class="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5 cursor-pointer">
+                        <input id="srvCompress" type="checkbox" ${c.compressImages !== false ? 'checked' : ''} class="w-5 h-5 mt-0.5 accent-brand-600">
+                        <span class="text-sm"><b class="block">ضغط الصور الذكي (JPEG/WebP — توفير ~80% من المساحة)</b><span class="text-xs text-slate-500">يضغط صور الطلبيات والبيانات تلقائياً قبل رفعها بدون فقدان الوضوح (مُوصى به دائماً).</span></span>
+                    </label>
+                    <label class="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5 cursor-pointer">
+                        <input id="srvCloud" type="checkbox" ${c.useCloudStorage ? 'checked' : ''} ${hasStorageSdk ? '' : 'disabled'} class="w-5 h-5 mt-0.5 accent-brand-600">
+                        <span class="text-sm"><b class="block">فصل ملفات PDF والصور الجديدة إلى Firebase Storage</b><span class="text-xs text-slate-500">يرفع الملفات الجديدة في Firebase Storage ويحفظ الرابط فقط داخل قاعدة البيانات (الملفات القديمة تظل تعمل بدون أي تأثير). يتطلب تفعيل Storage من لوحة Firebase Console أولاً؛ وفي حالة عدم تفعيله يرجع تلقائياً للحفظ العادي.</span></span>
+                    </label>
+                    <label class="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5 cursor-pointer">
+                        <input id="srvPrune" type="checkbox" ${c.autoPruneNotifs !== false ? 'checked' : ''} class="w-5 h-5 mt-0.5 accent-brand-600">
+                        <span class="text-sm"><b class="block">تنظيف الإشعارات القديمة تلقائياً</b><span class="text-xs text-slate-500">يحتفظ تلقائياً بآخر <input id="srvNotifKeep" type="number" min="20" max="200" value="${Number(c.notifMaxKeep) || 60}" class="w-16 mx-1 px-2 py-0.5 border border-slate-300 rounded text-center font-bold" onclick="event.stopPropagation()"> إشعار لكل قناة ويحذف الأقدم لتقليل استهلاك الباقة.</span></span>
+                    </label>
+                </div>
+                <div class="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-100">
+                    ${btn('saveServerSettings()', 'حفظ إعدادات السيرفر', 'fa-floppy-disk')}
+                    ${btn('runManualServerCleanup()', 'تنظيف الإشعارات القديمة الآن', 'fa-broom', BTN_SECONDARY)}
+                </div>
+            </section>`;
+        }
+
+        async function saveServerSettings() {
+            if (!can('settings.manage') || !rtdb) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const payload = {
+                useCloudStorage: !!el('srvCloud')?.checked,
+                compressImages: !!el('srvCompress')?.checked,
+                autoPruneNotifs: !!el('srvPrune')?.checked,
+                notifMaxKeep: Math.max(20, Math.min(200, Number(el('srvNotifKeep')?.value) || 60))
+            };
+            try {
+                await rtdb.ref('settings/storage').set(payload);
+                storageCfg = payload;
+                toast('تم حفظ إعدادات مساحة وأداء السيرفر', 'success');
+            } catch (e) {
+                console.error(e);
+                toast('تعذر الحفظ — تأكد من نشر قواعد قاعدة البيانات الجديدة', 'error');
+            }
+        }
+
+        async function runManualServerCleanup() {
+            if (!can('settings.manage') || !rtdb || !fbUser) return;
+            toast('جاري تنظيف الإشعارات الزائدة...', 'info');
+            let removed = 0;
+            removed += await pruneNotifFeed('userNotifications/' + fbUser.uid, true) || 0;
+            for (const sec of NOTIF_SECTIONS) {
+                removed += await pruneNotifFeed('sectionNotifications/' + sec.key, true) || 0;
+            }
+            toast(removed ? `تم تنظيف ${removed} إشعار قديم بنجاح` : 'الإشعارات نظيفة ومضبوطة بالفعل', 'success');
+        }
+
         function settingsSections() {
             const canSys = can('settings.manage');
             const out = [];
             if (canSys) out.push({ key: 'identity', title: 'هوية النظام', icon: 'fa-id-card', desc: 'اسم النظام والشعار ومدة تنبيه انتهاء اللستات.', html: settingsIdentityHtml });
+            if (annCanManage()) out.push({ key: 'announcements', title: 'البيانات والإعلانات العامة', icon: 'fa-bullhorn', desc: 'نشر القرارات الإلزامية، التهنئات، الدعوات والعروض حسب الأدوار مع تقارير الموافقات والاعتراضات.', html: () => `<section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4"><h3 class="font-bold text-lg"><i class="fa-solid fa-bullhorn text-brand-600"></i> إدارة البيانات والإعلانات العامة</h3><p class="text-sm text-slate-600">يمكنك إضافة قرارات إدارية إلزامية (تظل ظاهرة باستمرار حتى يضغط المندوب موافقة أو اعتراض مع ذكر السبب)، أو تهنئة أو دعوة أو عرض وتوجيهها لأي دور من أدوار المنظومة.</p><div class="flex flex-wrap gap-2">${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}${btn('openAnnouncementsManager()', 'عرض كل البيانات والتقارير', 'fa-sliders', BTN_SECONDARY)}</div></section>` });
+            if (canSys) out.push({ key: 'server', title: 'مساحة وأداء السيرفر', icon: 'fa-server', desc: 'ضغط الصور الذكي، فصل الملفات لـ Firebase Storage، وتنظيف الإشعارات القديمة.', html: serverSettingsHtml });
             if (can('home.personal')) out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
             if (can('home.personal')) out.push({ key: 'home', title: 'الشاشة الرئيسية', icon: 'fa-house', desc: 'الكرت وتلوينه حسب الوقت، الشمس والقمر، وشريط التنبيهات.', html: homeSettingsHtml });
             if (can('backup.manage')) out.push({ key: 'backup', title: 'النسخ الاحتياطي', icon: 'fa-database', desc: 'تنزيل نسخة احتياطية أو استعادة من ملف.', html: settingsBackupHtml });
@@ -14506,13 +15453,15 @@
                                volume: patch.volume !== undefined ? Math.min(1, Math.max(0, Number(patch.volume) || 0)) : cur.volume,
                                sections: { ...cur.sections, ...(patch.sections || {}) } };
                 try { localStorage.setItem(this.KEY, JSON.stringify(next)); } catch (e) { /* blocked */ }
+                if (window.AndroidBridge && AndroidBridge.setSoundPrefs) { try { AndroidBridge.setSoundPrefs(JSON.stringify(next)); } catch (e) { /* noop */ } }
                 return next;
             },
             sectionOf(n) {
-                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', debts: 'debts', debtComments: 'debts', chat: 'chat', complaints: 'users', expenses: 'expenses', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
+                const byCol = { shipping: 'shipping', lists: 'lists', orders: 'orders', custOrders: 'custorders', custReps: 'custorders', debts: 'debts', debtComments: 'debts', announcements: 'debts', chat: 'chat', complaints: 'users', expenses: 'expenses', checks: 'checks', partners: 'checks', companies: 'companies', users: 'users', roles: 'users', settings: 'settings' };
                 if (n && n.target && byCol[n.target.col]) return byCol[n.target.col];
                 const k = (n && n.kind) || '';
                 if (k.includes('شحن')) return 'shipping';
+                if (k.includes('مديونية') || k.includes('تحصيل')) return 'debts';
                 if (k.includes('تعليق') || k.includes('طلبية عميل') || k.includes('مندوب')) return 'custorders';
                 if (k.includes('لستة') || k.includes('PDF')) return 'lists';
                 if (k.includes('شيك') || k.includes('مستفيد')) return 'checks';
@@ -14530,6 +15479,7 @@
             setPopup(on) {
                 if (window.AndroidBridge) {
                     try { localStorage.setItem('factoryNativeNotifs', on ? '1' : '0'); } catch (e) { /* blocked */ }
+                    if (AndroidBridge.setNativeNotifs) { try { AndroidBridge.setNativeNotifs(!!on); } catch (e) { /* noop */ } }
                     if (on && AndroidBridge.requestNotifPermission) { try { AndroidBridge.requestNotifPermission(); } catch (e) { /* noop */ } }
                     return;
                 }
@@ -14998,5 +15948,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fb7e3109704bed',t:'MTc5NTU1NTU5Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fb7e3109704bed',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fbdb29ef171498',t:'MTc5NTU1OTQwNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fbdb29ef171498',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
