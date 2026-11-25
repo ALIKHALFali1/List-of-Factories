@@ -128,7 +128,7 @@
         @media (min-width: 1024px) { .hidden.lg\:block { display: block !important; } .hidden.lg\:flex { display: flex !important; } }
         #appShell.hidden { display: none !important; }
         .bg-white { background-color: rgb(var(--surface)) !important; }
-        html, body { font-weight: 500; max-width: 100%; overflow-x: hidden; }
+        html, body { font-weight: 500; max-width: 100%; overflow-x: clip; }
         .font-thin, .font-extralight, .font-light, .font-normal, .font-medium { font-weight: 500 !important; }
         .font-semibold { font-weight: 700 !important; }
         .font-bold, .font-extrabold, .font-black { font-weight: 800 !important; }
@@ -4041,10 +4041,12 @@
         // Universal print engine: works seamlessly in Android WebView (AndroidBridge.printPage),
         // mobile browsers, and desktop browsers with clean @media print isolation and live preview.
         let _printPrevTitle = null;
+        let _printPrevTheme = null;
         let _printEscHandler = null;
 
         function ensurePrintBaseStyle() {
-            if (document.getElementById('alrahmaPrintBaseStyle')) return;
+            const old = document.getElementById('alrahmaPrintBaseStyle');
+            if (old) old.remove();
             const st = document.createElement('style');
             st.id = 'alrahmaPrintBaseStyle';
             st.textContent = `
@@ -4066,22 +4068,41 @@
                     direction: rtl; text-align: right; overflow-x: auto;
                 }
                 @media print {
-                    html, body {
-                        background: #fff !important; margin: 0 !important; padding: 0 !important;
-                        height: auto !important; min-height: 0 !important; overflow: visible !important;
+                    :root, html, html[data-theme="dark"], html[data-theme="light"], body {
+                        background: #ffffff !important;
+                        background-color: #ffffff !important;
+                        background-image: none !important;
+                        color: #000000 !important;
+                        color-scheme: light !important;
+                        --page-bg: 255 255 255 !important;
+                        --surface: 255 255 255 !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        height: auto !important;
+                        min-height: 0 !important;
+                        overflow: visible !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
                     }
+                    body::before, body::after { display: none !important; content: none !important; }
                     body.alrahma-print-mode > *:not(#alrahmaPrintRoot) { display: none !important; }
                     #alrahmaPrintRoot {
                         display: block !important; position: static !important; inset: auto !important;
-                        background: #fff !important; width: 100% !important; height: auto !important;
+                        background: #ffffff !important; background-color: #ffffff !important;
+                        width: 100% !important; height: auto !important; min-height: 0 !important;
                         overflow: visible !important; padding: 0 !important; margin: 0 !important;
+                        box-shadow: none !important;
                     }
                     #alrahmaPrintBar, #alrahmaPrintRoot .alrahma-no-print { display: none !important; }
                     #alrahmaPrintStage {
-                        display: block !important; overflow: visible !important; padding: 0 !important; margin: 0 !important;
+                        display: block !important; background: #ffffff !important; background-color: #ffffff !important;
+                        overflow: visible !important; padding: 0 !important; margin: 0 !important;
+                        height: auto !important; min-height: 0 !important;
                     }
                     #alrahmaPrintSheet {
-                        max-width: none !important; width: 100% !important; margin: 0 !important; padding: 0 !important;
+                        background: #ffffff !important; background-color: #ffffff !important; color: #000000 !important;
+                        max-width: none !important; width: 100% !important; height: auto !important; min-height: 0 !important;
+                        margin: 0 !important; padding: 0 !important;
                         border: none !important; border-radius: 0 !important; box-shadow: none !important;
                         overflow: visible !important;
                     }
@@ -4096,7 +4117,7 @@
                 const s = part.trim();
                 if (!s) return '';
                 if (/^(html|body|:root)(\s*,\s*(html|body|:root))*$/i.test(s)) return '#alrahmaPrintSheet';
-                if (/^(html|body)/i.test(s)) return s.replace(/^(html|body)/i, '#alrahmaPrintSheet');
+                if (/^(html|body)\b/i.test(s)) return s.replace(/^(html|body)\b/i, '#alrahmaPrintSheet');
                 if (s === '*') return '#alrahmaPrintSheet, #alrahmaPrintSheet *';
                 if (s.startsWith('#alrahmaPrintSheet')) return s;
                 return '#alrahmaPrintSheet ' + s;
@@ -4158,6 +4179,10 @@
             const dyn = document.getElementById('alrahmaPrintDynamicStyle');
             if (dyn) dyn.remove();
             document.body.classList.remove('alrahma-print-mode');
+            if (_printPrevTheme !== null) {
+                document.documentElement.dataset.theme = _printPrevTheme;
+                _printPrevTheme = null;
+            }
             if (_printPrevTitle !== null) {
                 document.title = _printPrevTitle;
                 _printPrevTitle = null;
@@ -4228,6 +4253,8 @@
                 sheet.innerHTML = doc.body ? doc.body.innerHTML : String(html || '');
 
                 _printPrevTitle = document.title;
+                _printPrevTheme = document.documentElement.dataset.theme || 'light';
+                document.documentElement.dataset.theme = 'light';
                 document.title = title;
                 document.body.classList.add('alrahma-print-mode');
                 document.body.appendChild(root);
@@ -17675,5 +17702,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6010e1b2bdf141f',t:'MTc5NTYxMzkyMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6010e1b2bdf141f',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60136485ec6e1c9',t:'MTc5NTYxNTU2Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60136485ec6e1c9',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
