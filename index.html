@@ -15593,7 +15593,9 @@
             if (!rtdb || !fbUser || appLiveUrlUnsub) return;
             const ref = rtdb.ref('settings/main/appLiveUrl');
             const cb = snap => {
-                const url = String(snap.val() || '').trim();
+                const raw = snap.val();
+                if (raw === null || raw === undefined) return;
+                const url = String(raw || '').trim().split('#')[0];
                 if (appData && appData.settings) appData.settings.appLiveUrl = url;
                 syncAndroidLiveUrl(url);
             };
@@ -15605,7 +15607,8 @@
         }
 
         function appUpdateSettingsHtml() {
-            const curUrl = (appData && appData.settings && appData.settings.appLiveUrl) || '';
+            const DEFAULT_APP_LIVE_URL = 'https://alikhalfali1.github.io/List-of-Factories/';
+            const curUrl = (appData && appData.settings && appData.settings.appLiveUrl) || DEFAULT_APP_LIVE_URL;
             const isAndroid = !!(window.AndroidBridge);
             let info = null;
             if (isAndroid && typeof AndroidBridge.getAppInfo === 'function') {
@@ -15650,7 +15653,7 @@
 
         async function saveAppLiveUrl() {
             if (!can('settings.manage') || !rtdb) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
-            const url = (el('appLiveUrlInput')?.value || '').trim();
+            const url = (el('appLiveUrlInput')?.value || '').trim().split('#')[0];
             if (url && !/^https?:\/\/.+/i.test(url)) return toast('من فضلك أدخل رابطاً صحيحاً يبدأ بـ https://', 'error');
             try {
                 await rtdb.ref('settings/main/appLiveUrl').set(url);
@@ -17392,5 +17395,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a600ea698fa0b698',t:'MTc5NTYxMjQ1OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a600ea698fa0b698',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a600f6e84ea7e1dc',t:'MTc5NTYxMjk3MA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a600f6e84ea7e1dc',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
