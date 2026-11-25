@@ -12223,6 +12223,27 @@
             ['invitation',   'دعوة / اجتماع / مناسبة','fa-envelope-open-text', 'border-indigo-300 bg-gradient-to-l from-indigo-50 via-purple-50/70 to-white',    'bg-indigo-600 text-white',  'text-indigo-900',  'تأكيد الحضور',     'اعتذار مع السبب']
         ];
         const annTypeInfo = t => ANN_TYPES.find(x => x[0] === t) || ANN_TYPES[0];
+        const PENALTY_KINDS = [
+            ['خصم من الراتب (بالأيام)', 'مثال: 1 يوم أو 2 يوم', true],
+            ['خصم مالي (مبلغ ج.م)', 'مثال: 250 ج.م أو 500 ج.م', true],
+            ['خصم من العمولة / الحافز', 'مثال: 10% من العمولة أو 300 ج.م', true],
+            ['إنذار أول / لفت نظر رسمي', 'اختياري (مثال: إنذار أول)', false],
+            ['إنذار نهائي بالجزاء', 'اختياري (مثال: إنذار أخير)', false],
+            ['إيقاف مؤقت عن العمل', 'مثال: 3 أيام بدون أجر', true],
+            ['جزاء إداري آخر', 'مثال: قيمة أو تفاصيل الجزاء', false]
+        ];
+        function annIsPenalty(a) {
+            if (!a) return false;
+            if (a.type === 'penalty') return true;
+            const b = String(a.badge || '');
+            return b.startsWith('⚖️') || b.includes('خصم من') || b.includes('خصم مالي') || b.includes('جزاء') || b.includes('إنذار') || b.includes('إيقاف مؤقت');
+        }
+        function annVisualInfo(a) {
+            if (annIsPenalty(a)) {
+                return ['penalty', 'قرار خصم / جزاء إداري', 'fa-gavel', 'border-red-400 bg-gradient-to-l from-red-50 via-rose-50/70 to-white', 'bg-red-800 text-white', 'text-red-950', 'تم العلم بالقرار', 'تظلّم / اعتراض مع السبب'];
+            }
+            return annTypeInfo(a && a.type);
+        }
         const annCanManage = () => isSystemAdmin() || can('announcements.manage') || can('settings.manage');
 
         let annList = [];
@@ -12487,7 +12508,8 @@
             document.head.appendChild(st);
         }
 
-        function annPopupAccentGradient(type) {
+        function annPopupAccentGradient(type, isPen) {
+            if (isPen) return 'linear-gradient(90deg,#7f1d1d,#dc2626)';
             const map = {
                 directive: 'linear-gradient(90deg,#4f46e5,#2563eb)',
                 discount:  'linear-gradient(90deg,#059669,#10b981)',
@@ -12644,11 +12666,11 @@
         }
 
         function annPopupCardHtml(a, isPendingMandatory) {
-            const [, typeLabel, icon, , badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(a.type);
+            const [, typeLabel, icon, , badgeCls, titleCls, okLbl, objLbl] = annVisualInfo(a);
             const myResp = annMyEffectiveResponse(a);
             const allowObj = a.allowObjection !== false;
             const showObjBox = annObjectionOpenId === a.id;
-            const accentGrad = annPopupAccentGradient(a.type);
+            const accentGrad = annPopupAccentGradient(a.type, annIsPenalty(a));
 
             const statusHtml = myResp
                 ? (myResp.status === 'objected'
@@ -12962,9 +12984,10 @@
             const u = currentUser();
             if (!u || !u.active) return false;
             if (!a.audienceMode || a.audienceMode === 'all') return true;
-            const roles = Array.isArray(a.targetRoles) ? a.targetRoles : [];
-            if (!roles.length) return false;
-            return roles.includes(u.roleId);
+            const targets = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+            if (!targets.length) return false;
+            const myUid = (fbUser && fbUser.uid) || u.id || '';
+            return (myUid && targets.includes('uid:' + myUid)) || targets.includes(u.roleId);
         }
 
         function annMyEffectiveResponse(a) {
@@ -13001,11 +13024,20 @@
             });
         }
 
+        function annUserNameById(uidVal) {
+            if (!uidVal) return 'موظف';
+            const fromAll = annAllActiveUsers().find(x => x.id === uidVal);
+            if (fromAll && fromAll.name) return fromAll.name;
+            const fromDir = userDirectoryMap.get(uidVal);
+            if (fromDir && fromDir.name) return fromDir.name;
+            return uidVal;
+        }
+
         function annAudienceLabel(a) {
             if (!a.audienceMode || a.audienceMode === 'all') return 'جميع المستخدمين';
-            const roles = Array.isArray(a.targetRoles) ? a.targetRoles : [];
-            if (!roles.length) return 'لم تُحدد أدوار';
-            return roles.map(rid => annRoleNameById(rid)).join(' · ');
+            const targets = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+            if (!targets.length) return 'لم تُحدد فئة';
+            return targets.map(t => t.startsWith('uid:') ? ('👤 ' + annUserNameById(t.slice(4))) : annRoleNameById(t)).join(' · ');
         }
 
         function annRepaintHome() {
@@ -13014,7 +13046,7 @@
         }
 
         function annCardHtml(a, isPendingMandatory) {
-            const [, typeLabel, icon, cardCls, badgeCls, titleCls, okLbl, objLbl] = annTypeInfo(a.type);
+            const [, typeLabel, icon, cardCls, badgeCls, titleCls, okLbl, objLbl] = annVisualInfo(a);
             const myResp = annMyEffectiveResponse(a);
             const requireResp = a.requireResponse !== false;
             const allowObj = a.allowObjection !== false;
@@ -13159,7 +13191,10 @@
                 body: `<div class="space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <p class="text-xs text-slate-500">انشر قرارات إدارية إلزامية، تهنئات، دعوات، عروض وخصومات، وحدّد الأدوار المستهدفة وتابع ردود كل موظف.</p>
-                        <button type="button" onclick="openAnnouncementForm()" class="${BTN_PRIMARY} !py-2"><i class="fa-solid fa-plus"></i> إضافة بيان / إعلان جديد</button>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button type="button" onclick="openPenaltyForm()" class="px-3.5 py-2 rounded-xl bg-red-700 hover:bg-red-800 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-gavel"></i> خصم / جزاء لموظف</button>
+                            <button type="button" onclick="openAnnouncementForm()" class="${BTN_PRIMARY} !py-2"><i class="fa-solid fa-plus"></i> إضافة بيان / إعلان جديد</button>
+                        </div>
                     </div>
                     <div id="annMgrList" class="space-y-3 max-h-[58vh] overflow-y-auto pr-1"><div class="text-center py-6 text-slate-400 text-sm">جاري تحميل البيانات والإحصائيات...</div></div>
                 </div>`
@@ -13188,7 +13223,7 @@
                 return;
             }
             box.innerHTML = annList.map(a => {
-                const [, typeLabel, icon, , badgeCls] = annTypeInfo(a.type);
+                const [, typeLabel, icon, , badgeCls] = annVisualInfo(a);
                 const c = counts[a.id] || { ok: 0, obj: 0 };
                 const exp = annIsExpired(a);
                 const stateBadge = a.active === false
@@ -13344,22 +13379,35 @@
                         <label class="block text-xs font-extrabold text-slate-800"><i class="fa-solid fa-users text-brand-600"></i> الفئة المستهدفة (من أدوار المنظومة):</label>
                         <div class="flex flex-wrap gap-3 text-sm">
                             <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
-                                <input type="radio" name="annAud" value="all" ${audMode === 'all' ? 'checked' : ''} onchange="el('annRolesPick').classList.add('hidden')" class="accent-brand-600">
+                                <input type="radio" name="annAud" value="all" ${audMode === 'all' ? 'checked' : ''} onchange="el('annRolesPick').classList.add('hidden');el('annUsersPick').classList.add('hidden');" class="accent-brand-600">
                                 <span>الكل (جميع المستخدمين)</span>
                             </label>
                             <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
-                                <input type="radio" name="annAud" value="roles" ${audMode === 'roles' ? 'checked' : ''} onchange="el('annRolesPick').classList.remove('hidden')" class="accent-brand-600">
-                                <span>أدوار محددة (مندوبين / شحن / محاسب...)</span>
+                                <input type="radio" name="annAud" value="roles" ${(audMode === 'roles' && !selRoles.every(t => t.startsWith('uid:'))) ? 'checked' : ''} onchange="el('annRolesPick').classList.remove('hidden');el('annUsersPick').classList.add('hidden');" class="accent-brand-600">
+                                <span>أدوار محددة</span>
+                            </label>
+                            <label class="inline-flex items-center gap-2 cursor-pointer font-bold">
+                                <input type="radio" name="annAud" value="users" ${(audMode === 'roles' && selRoles.length && selRoles.every(t => t.startsWith('uid:'))) ? 'checked' : ''} onchange="el('annRolesPick').classList.add('hidden');el('annUsersPick').classList.remove('hidden');" class="accent-brand-600">
+                                <span>موظفون محددون</span>
                             </label>
                         </div>
-                        <div id="annRolesPick" class="${audMode === 'roles' ? '' : 'hidden'} grid sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200">
+                        <div id="annRolesPick" class="${(audMode === 'roles' && !(selRoles.length && selRoles.every(t => t.startsWith('uid:')))) ? '' : 'hidden'} grid sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200">
                             ${roles.length ? roles.map(r => `<label class="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 cursor-pointer text-xs hover:border-brand-400">
                                 <span class="flex items-center gap-2 font-bold text-slate-800">
                                     <input type="checkbox" name="annRoleChk" value="${esc(r.id)}" ${selRoles.includes(r.id) ? 'checked' : ''} class="w-4 h-4 accent-brand-600">
                                     ${esc(r.name || r.id)}
                                 </span>
                                 <span class="text-[11px] text-slate-500">${roleCount(r.id)} مستخدم</span>
-                            </label>`).join('') : '<p class="text-xs text-amber-700 col-span-2">لم تُحمّل قائمة الأدوار — تأكد من نشر قواعد قاعدة البيانات.</p>'}
+                            </label>`).join('') : '<p class="text-xs text-amber-700 col-span-2">لم تُحمّل قائمة الأدوار.</p>'}
+                        </div>
+                        <div id="annUsersPick" class="${(audMode === 'roles' && selRoles.length && selRoles.every(t => t.startsWith('uid:'))) ? '' : 'hidden'} grid sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200 max-h-40 overflow-y-auto">
+                            ${dirUsers.length ? dirUsers.map(u => `<label class="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 cursor-pointer text-xs hover:border-brand-400">
+                                <span class="flex items-center gap-2 font-bold text-slate-800 truncate">
+                                    <input type="checkbox" name="annUserChk" value="${esc('uid:' + u.id)}" ${selRoles.includes('uid:' + u.id) ? 'checked' : ''} class="w-4 h-4 accent-brand-600 shrink-0">
+                                    <span class="truncate">${esc(u.name)}</span>
+                                </span>
+                                <span class="text-[10px] text-slate-500 shrink-0">${esc(u.roleName || '')}</span>
+                            </label>`).join('') : '<p class="text-xs text-slate-500 col-span-2">لا يوجد موظفون نشطون.</p>'}
                         </div>
                     </div>
 
@@ -13407,9 +13455,13 @@
             const title = (el('annFTitle')?.value || '').trim();
             const body = (el('annFBody')?.value || '').trim();
             if (!title || !body) { toast('اكتب العنوان ونص البيان', 'error'); return false; }
-            const audMode = (document.querySelector('input[name="annAud"]:checked') || {}).value || 'all';
-            const targetRoles = audMode === 'roles' ? [...document.querySelectorAll('input[name="annRoleChk"]:checked')].map(x => x.value) : [];
-            if (audMode === 'roles' && !targetRoles.length) { toast('اختر دوراً واحداً على الأقل من الأدوار المستهدفة', 'error'); return false; }
+            const rawAud = (document.querySelector('input[name="annAud"]:checked') || {}).value || 'all';
+            const audMode = rawAud === 'all' ? 'all' : 'roles';
+            const targetRoles = rawAud === 'roles'
+                ? [...document.querySelectorAll('input[name="annRoleChk"]:checked')].map(x => x.value)
+                : (rawAud === 'users' ? [...document.querySelectorAll('input[name="annUserChk"]:checked')].map(x => x.value) : []);
+            if (rawAud === 'roles' && !targetRoles.length) { toast('اختر دوراً واحداً على الأقل من الأدوار المستهدفة', 'error'); return false; }
+            if (rawAud === 'users' && !targetRoles.length) { toast('اختر موظفاً واحداً على الأقل', 'error'); return false; }
 
             const id = cur ? cur.id : uid('ANN-');
             const now = new Date().toISOString();
@@ -13449,11 +13501,261 @@
                 await rtdb.ref('announcements/' + id).set(data);
                 notifyDirect(cur ? 'عدّل' : 'نشر', 'بيان وإعلان عام', title, { col: 'announcements', id });
                 toast(cur ? 'تم تحديث البيان بنجاح' : 'تم نشر البيان على الصفحة الرئيسية بنجاح', 'success');
+                if (parseRoute().name === 'announcements') { render(); return true; }
                 openAnnouncementsManager();
                 return false; // keep the newly opened manager modal open
             } catch (err) {
                 console.error(err);
                 toast('تعذر حفظ البيان. تأكد من نشر قواعد قاعدة البيانات الجديدة', 'error');
+                return false;
+            }
+        }
+
+
+        // ---- فورم مخصص لقرارات الخصم والجزاءات الإدارية للموظفين ----
+        function penAutoFillTitle() {
+            const titleIn = el('penFTitle');
+            if (!titleIn || titleIn.dataset.touched) return;
+            const kind = el('penFKind')?.value || 'خصم من الراتب (بالأيام)';
+            const empSel = el('penFEmp');
+            const empName = empSel && empSel.selectedOptions[0] ? empSel.selectedOptions[0].dataset.name : '';
+            const val = (el('penFVal')?.value || '').trim();
+            const shortKind = kind.split('(')[0].trim();
+            titleIn.value = [shortKind, val ? `(${val})` : '', empName ? `— ${empName}` : ''].filter(Boolean).join(' ');
+        }
+
+        function penKindChanged() {
+            const kind = el('penFKind')?.value || PENALTY_KINDS[0][0];
+            const info = PENALTY_KINDS.find(x => x[0] === kind) || PENALTY_KINDS[0];
+            const valIn = el('penFVal');
+            if (valIn) valIn.placeholder = info[1];
+            penAutoFillTitle();
+            penUpdatePreview();
+        }
+
+        function penUpdatePreview() {
+            const box = el('penFormPreview');
+            if (!box) return;
+            const kind = el('penFKind')?.value || PENALTY_KINDS[0][0];
+            const val = (el('penFVal')?.value || '').trim();
+            const dateVal = el('penFDate')?.value || todayISO();
+            const empSel = el('penFEmp');
+            const empName = empSel && empSel.selectedOptions[0] ? empSel.selectedOptions[0].dataset.name : 'اسم الموظف';
+            const scope = (document.querySelector('input[name="penScope"]:checked') || {}).value || 'private';
+            const scopeLbl = scope === 'all' ? 'إعلان عام لجميع الموظفين' : (scope === 'role' ? 'موجه لقسم / دور الموظف' : `خاص بالموظف فقط (${empName})`);
+            const title = (el('penFTitle')?.value || '').trim() || `قرار ${kind.split('(')[0].trim()} — ${empName}`;
+            const reason = (el('penFReason')?.value || '').trim() || 'سيظهر هنا سبب الخصم وتفاصيل المخالفة بشكل رسمي واضح...';
+            const allowObj = el('penFAllowObj')?.checked !== false;
+            const strip = [empName ? `الموظف: ${empName}` : '', val ? `القيمة: ${val}` : '', dateVal ? `التاريخ: ${fmtWaDate(dateVal)}` : ''].filter(Boolean).join(' · ');
+
+            box.innerHTML = `<div class="rounded-2xl border-2 border-red-300 bg-white overflow-hidden shadow-sm text-right">
+                <div style="height:4px;background:linear-gradient(90deg,#7f1d1d,#dc2626)"></div>
+                <div class="p-3.5 space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-1.5">
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-black bg-red-800 text-white"><i class="fa-solid fa-gavel"></i> ⚖️ ${esc(kind.split('(')[0].trim())}</span>
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">${esc(scopeLbl)}</span>
+                    </div>
+                    <div class="font-black text-sm text-red-950">${esc(title)}</div>
+                    ${strip ? `<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-[11px] font-extrabold text-red-900"><i class="fa-solid fa-scale-balanced text-red-600"></i> ${esc(strip)}</div>` : ''}
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-800 whitespace-pre-line leading-relaxed">${esc(reason)}</div>
+                    <div class="flex flex-wrap gap-1.5 pt-1">
+                        <span class="px-3 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold">✓ تم العلم بالقرار</span>
+                        ${allowObj ? `<span class="px-3 py-1 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 text-[11px] font-bold">✋ تظلّم / اعتراض مع السبب</span>` : ''}
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function openPenaltyForm() {
+            if (!annCanManage()) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            annFormPendingImg = null;
+            const users = annAllActiveUsers();
+            if (!users.length) return toast('لا يوجد موظفون نشطون حالياً', 'error');
+
+            openModal({
+                title: '⚖️ إصدار قرار خصم / جزاء إداري لموظف',
+                size: 'lg',
+                danger: true,
+                submitText: 'إصدار وإرسال القرار الآن',
+                onSubmit: () => savePenaltyForm(),
+                onOpen: () => { penKindChanged(); },
+                body: `<div class="space-y-4 max-h-[64vh] overflow-y-auto pr-1">
+                    <div class="rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-900 flex items-start gap-2">
+                        <i class="fa-solid fa-gavel text-red-700 mt-0.5 text-sm"></i>
+                        <div><b>نموذج الخصومات والجزاءات الإدارية:</b> يظهر القرار للموظف فور دخوله كـ «بيان إلزامي» لا يُغلق إلا بعد الضغط على <b>«تم العلم بالقرار»</b> أو تقديم <b>«تظلّم / اعتراض مع ذكر السبب»</b>، ويُسجّل رسمياً في تقرير الردود القابل للطباعة A4.</div>
+                    </div>
+
+                    <div class="grid sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-700 mb-1">الموظف المعني بالقرار *</label>
+                            <select id="penFEmp" required onchange="penAutoFillTitle();penUpdatePreview()" class="${INPUT_CLS} font-bold">
+                                <option value="">— اختر الموظف —</option>
+                                ${users.map(u => `<option value="${esc(u.id)}" data-name="${esc(u.name)}" data-role="${esc(u.roleId || '')}" data-rolename="${esc(u.roleName || '')}">${esc(u.name)} (${esc(u.roleName || 'موظف')})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-700 mb-1">نوع الخصم / الجزاء *</label>
+                            <select id="penFKind" onchange="penKindChanged()" class="${INPUT_CLS} font-bold">
+                                ${PENALTY_KINDS.map(([k]) => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">قيمة الخصم أو المدة (مثال: 2 يوم / 500 ج.م)</label>
+                            <input id="penFVal" maxlength="60" oninput="penAutoFillTitle();penUpdatePreview()" class="${INPUT_CLS}" placeholder="مثال: 1 يوم أو 2 يوم">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ المخالفة / التنفيذ</label>
+                            <input id="penFDate" type="date" value="${todayISO()}" onchange="penUpdatePreview()" class="${INPUT_CLS}">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">عنوان القرار *</label>
+                        <input id="penFTitle" required maxlength="160" oninput="this.dataset.touched='1';penUpdatePreview()" class="${INPUT_CLS}" placeholder="مثال: خصم يومين من الراتب — أحمد محمد">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">سبب الخصم / تفاصيل المخالفة *</label>
+                        <textarea id="penFReason" required rows="4" maxlength="2500" oninput="penUpdatePreview()" class="${INPUT_CLS}" placeholder="اكتب سبب الخصم أو المخالفة بالتفصيل وبوضوح..."></textarea>
+                    </div>
+
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-2">
+                        <label class="block text-xs font-extrabold text-slate-800"><i class="fa-solid fa-eye text-red-700"></i> من يرى هذا القرار؟</label>
+                        <div class="grid sm:grid-cols-3 gap-2 text-xs">
+                            <label class="flex items-start gap-2 bg-white border border-slate-200 rounded-xl p-2.5 cursor-pointer hover:border-red-300">
+                                <input type="radio" name="penScope" value="private" checked onchange="penUpdatePreview()" class="mt-0.5 accent-red-700">
+                                <span><b class="block text-slate-800">الموظف المعني فقط</b><span class="text-[11px] text-slate-500">سري — لا يراه غيره</span></span>
+                            </label>
+                            <label class="flex items-start gap-2 bg-white border border-slate-200 rounded-xl p-2.5 cursor-pointer hover:border-red-300">
+                                <input type="radio" name="penScope" value="role" onchange="penUpdatePreview()" class="mt-0.5 accent-red-700">
+                                <span><b class="block text-slate-800">قسم / دور الموظف</b><span class="text-[11px] text-slate-500">يراه زملاء نفس الدور</span></span>
+                            </label>
+                            <label class="flex items-start gap-2 bg-white border border-slate-200 rounded-xl p-2.5 cursor-pointer hover:border-red-300">
+                                <input type="radio" name="penScope" value="all" onchange="penUpdatePreview()" class="mt-0.5 accent-red-700">
+                                <span><b class="block text-slate-800">عام للجميع</b><span class="text-[11px] text-slate-500">إعلان عام للعبرة</span></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="grid sm:grid-cols-2 gap-3 items-start">
+                        <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2 text-xs">
+                            <label class="flex items-start gap-2 cursor-pointer">
+                                <input id="penFRequire" type="checkbox" checked class="w-4 h-4 mt-0.5 accent-red-700">
+                                <span><b>إلزامي بالعلم والرد</b> (لا يُغلق الإعلان قبل الرد)</span>
+                            </label>
+                            <label class="flex items-start gap-2 cursor-pointer">
+                                <input id="penFAllowObj" type="checkbox" checked onchange="penUpdatePreview()" class="w-4 h-4 mt-0.5 accent-red-700">
+                                <span><b>السماح بالتظلّم / الاعتراض</b> مع إجبار ذكر السبب</span>
+                            </label>
+                        </div>
+                        <div class="space-y-2">
+                            <div>
+                                <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ انتهاء العرض (اختياري)</label>
+                                <input id="penFExpires" type="date" class="${INPUT_CLS}">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-slate-700 mb-1">صورة / مستند مرفق (اختياري)</label>
+                                <input type="file" accept="image/*" onchange="annOnImagePicked(this)" class="text-xs">
+                                <div id="annFImgPreview"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="text-[11px] font-bold text-slate-500 mb-1">معاينة مباشرة لشكل قرار الخصم / الجزاء:</div>
+                        <div id="penFormPreview"></div>
+                    </div>
+                </div>`
+            });
+        }
+
+        async function savePenaltyForm() {
+            if (!annCanManage() || !rtdb || !fbUser) return false;
+            const empSel = el('penFEmp');
+            const empId = empSel?.value || '';
+            const opt = empSel && empSel.selectedOptions[0];
+            const empName = opt ? (opt.dataset.name || '') : '';
+            const empRoleId = opt ? (opt.dataset.role || '') : '';
+            const empRoleName = opt ? (opt.dataset.rolename || '') : '';
+            if (!empId) { toast('اختر الموظف المعني بالقرار أولاً', 'error'); return false; }
+
+            const kind = el('penFKind')?.value || PENALTY_KINDS[0][0];
+            const val = (el('penFVal')?.value || '').trim();
+            const dateVal = el('penFDate')?.value || todayISO();
+            const title = (el('penFTitle')?.value || '').trim();
+            const reason = (el('penFReason')?.value || '').trim();
+            if (!title || !reason) { toast('اكتب عنوان القرار وسبب الخصم / المخالفة', 'error'); return false; }
+
+            const scope = (document.querySelector('input[name="penScope"]:checked') || {}).value || 'private';
+            let audienceMode = 'roles';
+            let targetRoles = ['uid:' + empId];
+            if (scope === 'all') {
+                audienceMode = 'all';
+                targetRoles = [];
+            } else if (scope === 'role') {
+                audienceMode = 'roles';
+                targetRoles = empRoleId ? [empRoleId, 'uid:' + empId] : ['uid:' + empId];
+            }
+
+            const id = uid('PEN-');
+            const now = new Date().toISOString();
+            const u = currentUser();
+            let imageVal = '';
+            if (typeof annFormPendingImg === 'string' && annFormPendingImg.startsWith('data:image/')) {
+                const cloud = await cloudUploadBlob(`announcements/${id}_${Date.now()}.jpg`, dataUrlToBlob(annFormPendingImg), 'image/jpeg');
+                imageVal = cloud ? cloud.url : annFormPendingImg;
+            }
+
+            const shortKind = kind.split('(')[0].trim();
+            const summaryStrip = [`الموظف: ${empName}`, val ? `القيمة: ${val}` : '', dateVal ? `التاريخ: ${fmtWaDate(dateVal)}` : ''].filter(Boolean).join(' · ').slice(0, 120);
+            const fullBody = [
+                `الموظف المعني: ${empName}${empRoleName ? ` (${empRoleName})` : ''}`,
+                `نوع الإجراء: ${kind}${val ? ` — القيمة / المدة: ${val}` : ''}`,
+                `تاريخ الواقعة / التنفيذ: ${fmtWaDate(dateVal)}`,
+                `────────────────────`,
+                `السبب والتفاصيل:\n${reason}`
+            ].join('\n').slice(0, 3000);
+
+            const data = {
+                id,
+                type: 'warning',
+                title: title.slice(0, 160),
+                body: fullBody,
+                badge: (`⚖️ ${shortKind}`).slice(0, 60),
+                eventDate: summaryStrip,
+                expiresAt: (el('penFExpires')?.value || '').trim().slice(0, 20),
+                image: imageVal,
+                audienceMode,
+                targetRoles,
+                requireResponse: !!el('penFRequire')?.checked,
+                allowObjection: !!el('penFAllowObj')?.checked,
+                popupOnHome: true,
+                pinned: true,
+                active: true,
+                revision: 1,
+                createdAt: now,
+                createdBy: u?.name || 'الإدارة',
+                createdById: fbUser.uid,
+                updatedAt: now
+            };
+
+            try {
+                await rtdb.ref('announcements/' + id).set(data);
+                if (scope === 'private') {
+                    notifyUser(empId, { verb: 'أصدرت الإدارة', kind: shortKind, detail: title, target: { col: 'announcements', id } });
+                } else {
+                    notifyDirect('أصدرت الإدارة', shortKind, title, { col: 'announcements', id });
+                }
+                log('إصدار قرار خصم / جزاء إداري', `${empName} — ${shortKind}${val ? ' (' + val + ')' : ''}`);
+                toast('تم إصدار قرار الخصم / الجزاء بنجاح', 'success');
+                if (parseRoute().name === 'announcements') render();
+                return true;
+            } catch (err) {
+                console.error('savePenaltyForm error:', err);
+                toast('تعذر حفظ القرار — تأكد من الإنترنت وصلاحياتك', 'error');
                 return false;
             }
         }
@@ -13493,10 +13795,13 @@
                 const respMap = snap.val() || {};
                 const rev = Number(a.revision) || 1;
                 const dirAll = annAllActiveUsers();
-                const targetRoleIds = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+                const rawTargets = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+                const targetUids = new Set(rawTargets.filter(t => t.startsWith('uid:')).map(t => t.slice(4)));
+                const targetRoleIds = rawTargets.filter(t => !t.startsWith('uid:'));
                 const targetRoleNames = new Set(targetRoleIds.map(rid => annRoleNameById(rid)));
                 const targeted = dirAll.filter(u => {
                     if (!a.audienceMode || a.audienceMode === 'all') return true;
+                    if (targetUids.has(u.id)) return true;
                     return targetRoleIds.includes(u.roleId) || (u.roleName && targetRoleNames.has(u.roleName));
                 });
                 const approved = [], objected = [], pending = [];
@@ -13678,6 +13983,7 @@
             const pendingToMe = targetedToMe.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
             const activeAll = annList.filter(a => a.active !== false && !annIsExpired(a));
             const inactiveAll = annList.filter(a => a.active === false || annIsExpired(a));
+            const penaltyAll = annList.filter(a => annIsPenalty(a));
 
             if (!isMgr) {
                 const ordered = [...pendingToMe, ...targetedToMe.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)))];
@@ -13714,9 +14020,9 @@
                     ? `<div class="space-y-3">${ordered.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
                     : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500 text-sm">لا توجد بيانات نشطة موجهة لحسابك حالياً</div>`;
             } else {
-                const items = annPageTab === 'active' ? activeAll : (annPageTab === 'inactive' ? inactiveAll : annList);
+                const items = annPageTab === 'active' ? activeAll : (annPageTab === 'inactive' ? inactiveAll : (annPageTab === 'penalties' ? penaltyAll : annList));
                 listHtml = items.length ? `<div class="space-y-3">${items.map(a => {
-                    const [, typeLabel, icon, , badgeCls] = annTypeInfo(a.type);
+                    const [, typeLabel, icon, , badgeCls] = annVisualInfo(a);
                     const c = annPageCounts[a.id] || { ok: '…', obj: '…' };
                     const exp = annIsExpired(a);
                     const stateBadge = a.active === false
@@ -13783,6 +14089,7 @@
                 <div class="flex flex-wrap items-center gap-2">
                     ${tabBtn('all', `الكل (${annList.length})`)}
                     ${tabBtn('active', `نشطة (${activeAll.length})`)}
+                    ${tabBtn('penalties', `⚖️ الخصومات والجزاءات (${penaltyAll.length})`)}
                     ${tabBtn('inactive', `متوقفة / منتهية (${inactiveAll.length})`)}
                     ${tabBtn('mine', `الموجهة لي (${targetedToMe.length})`)}
                 </div>
@@ -13797,6 +14104,7 @@
                 actions: isMgr
                     ? `<div class="flex flex-wrap items-center gap-2">
                         ${btn("navigate('settings/popups')", 'إعدادات القوائم المنبثقة', 'fa-window-restore', BTN_SECONDARY)}
+                        ${btn('openPenaltyForm()', 'قرار خصم / جزاء لموظف', 'fa-gavel', 'inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-700 hover:bg-red-800 text-white text-sm font-bold shadow-sm transition-colors')}
                         ${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}
                     </div>`
                     : '',
@@ -15263,7 +15571,7 @@
             const canSys = can('settings.manage');
             const out = [];
             if (canSys) out.push({ key: 'identity', title: 'هوية النظام', icon: 'fa-id-card', desc: 'اسم النظام والشعار ومدة تنبيه انتهاء اللستات.', html: settingsIdentityHtml });
-            if (annCanManage()) out.push({ key: 'announcements', title: 'البيانات والإعلانات العامة', icon: 'fa-bullhorn', desc: 'نشر القرارات الإلزامية، التهنئات، الدعوات والعروض حسب الأدوار مع تقارير الموافقات والاعتراضات.', html: () => `<section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4"><h3 class="font-bold text-lg"><i class="fa-solid fa-bullhorn text-brand-600"></i> إدارة البيانات والإعلانات العامة</h3><p class="text-sm text-slate-600">يمكنك إضافة قرارات إدارية إلزامية (تظل ظاهرة باستمرار حتى يضغط المندوب موافقة أو اعتراض مع ذكر السبب)، أو تهنئة أو دعوة أو عرض وتوجيهها لأي دور من أدوار المنظومة.</p><div class="flex flex-wrap gap-2">${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}${btn('openAnnouncementsManager()', 'عرض كل البيانات والتقارير', 'fa-sliders', BTN_SECONDARY)}</div></section>` });
+            if (annCanManage()) out.push({ key: 'announcements', title: 'البيانات والإعلانات العامة', icon: 'fa-bullhorn', desc: 'نشر القرارات الإلزامية، التهنئات، الدعوات والعروض حسب الأدوار مع تقارير الموافقات والاعتراضات.', html: () => `<section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4"><h3 class="font-bold text-lg"><i class="fa-solid fa-bullhorn text-brand-600"></i> إدارة البيانات والإعلانات العامة</h3><p class="text-sm text-slate-600">يمكنك إضافة قرارات إدارية إلزامية (تظل ظاهرة باستمرار حتى يضغط المندوب موافقة أو اعتراض مع ذكر السبب)، أو تهنئة أو دعوة أو عرض وتوجيهها لأي دور من أدوار المنظومة.</p><div class="flex flex-wrap gap-2">${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}${btn('openPenaltyForm()', 'قرار خصم / جزاء لموظف', 'fa-gavel', 'inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-700 hover:bg-red-800 text-white text-sm font-bold shadow-sm transition-colors')}${btn("navigate('announcements')", 'فتح صفحة الإعلانات والتقارير', 'fa-sliders', BTN_SECONDARY)}</div></section>` });
             if (canSys || annCanManage() || debtCanConfigPopup()) out.push({ key: 'popups', title: 'القوائم المنبثقة', icon: 'fa-window-restore', desc: 'تحديد مكان ظهور قائمة الإعلانات وقائمة المديونيات (منتصف الشاشة، يمين، يسار) وقفل زر الإغلاق حتى الرد.', html: popupsSettingsHtml });
             if (canSys) out.push({ key: 'server', title: 'مساحة وأداء السيرفر', icon: 'fa-server', desc: 'ضغط الصور الذكي، فصل الملفات لـ Firebase Storage، وتنظيف الإشعارات القديمة.', html: serverSettingsHtml });
             if (can('home.personal')) out.push({ key: 'theme', title: 'المظهر والأرقام', icon: 'fa-palette', desc: 'الألوان والخط وحجم الكتابة وشكل الأرقام والعملة.', html: themeSettingsHtml });
@@ -16937,5 +17245,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6006c0c1c5ce220',t:'MTc5NTYwNzI4Mg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6006c0c1c5ce220',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6007765dd433d73',t:'MTc5NTYwNzc0Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6007765dd433d73',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
