@@ -802,6 +802,7 @@
             orders: { title: 'الطلبيات', icon: 'fa-truck-ramp-box', perm: 'orders.view' },
             customers: { title: 'طلبيات العملاء', icon: 'fa-user-tie', perm: 'custorders.view' },
             debts: { title: 'المديونيات والتحصيل', icon: 'fa-scale-balanced', perm: 'debts.view' },
+            announcements: { title: 'البيانات والإعلانات', icon: 'fa-bullhorn', perm: null },
             chat: { title: 'المحادثات', icon: 'fa-comments', perm: 'chat.use' },
             complaints: { title: 'الشكاوي والتقييم', icon: 'fa-clipboard-check', perm: 'complaints.file' },
             expenses: { title: 'المصروفات وأذونات الصرف', icon: 'fa-money-bill-wave', perm: 'expenses.request' },
@@ -810,7 +811,7 @@
             shipping: { title: 'الشحن والنقل', icon: 'fa-truck', perm: 'shipping.view' },
             settings: { title: 'الإعدادات', icon: 'fa-gear', perm: 'settings.manage', alt: 'backup.manage' }
         };
-        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'debts', 'chat', 'complaints', 'expenses', 'shipping', 'logs', 'users', 'settings'];
+        const ROUTE_ORDER = ['home', 'dashboard', 'companies', 'lists', 'checks', 'orders', 'customers', 'debts', 'announcements', 'chat', 'complaints', 'expenses', 'shipping', 'logs', 'users', 'settings'];
 
         // ============ STATE ============
         let appData = null;
@@ -2057,6 +2058,7 @@
 
         function notifResolve(n) {
             const t = n.target || {};
+            if (t.col === 'announcements') return () => navigate('announcements');
             if (t.col === 'chat' && t.id) return () => { if (notifGuard('chat')) navigate('chat/' + t.id); };
             if (t.col === 'complaints') return () => { if (can('complaints.file') || can('complaints.manage')) navigate('complaints'); else toast('معندكش صلاحية الشكاوي', 'error'); };
             if (t.col === 'expenses') return () => { if (can('expenses.request') || can('expenses.approve') || isSystemAdmin()) navigate('expenses'); else toast('معندكش صلاحية المصروفات', 'error'); };
@@ -4255,6 +4257,7 @@
             if (name === 'complaints') return can('complaints.file') || can('complaints.manage');
             if (name === 'expenses') return can('expenses.request') || can('expenses.approve') || isSystemAdmin();
             if (name === 'debts') return can('debts.view') || can('debts.manage') || can('debts.delete');
+            if (name === 'announcements') return true;
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -4667,6 +4670,7 @@
                 return `<a href="#/${name}" onclick="toggleSidebar(false)"
                            class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white ${indent ? 'ps-10' : ''} ${activeName === name ? 'active' : ''}">
                             <i class="fa-solid ${r.icon} w-5 text-center"></i> ${r.title}
+                            ${name === 'announcements' ? `<span id="annNavBadge" class="hidden ms-auto min-w-[1.3rem] h-[1.3rem] px-1 rounded-full bg-rose-600 text-white text-[11px] font-black leading-[1.3rem] text-center" title="بيانات بانتظار ردك"></span>` : ''}
                             ${name === 'chat' ? `<span id="chatNavBadge" class="hidden ms-auto min-w-[1.3rem] h-[1.3rem] px-1 rounded-full bg-rose-600 text-white text-[11px] font-black leading-[1.3rem] text-center"></span>` : ''}
                             ${name === 'expenses' ? `<span id="expNavBadge" class="hidden ms-auto min-w-[1.3rem] h-[1.3rem] px-1 rounded-full bg-amber-500 text-white text-[11px] font-black leading-[1.3rem] text-center" title="طلبات بانتظار الموافقة"></span>` : ''}
                         </a>`;
@@ -4690,6 +4694,7 @@
             el('sideNav').innerHTML = links.join('') || '<p class="text-sm text-slate-400 p-3">لا توجد أقسام متاحة</p>';
             const chatTopBtn = el('chatTopBtn');
             if (chatTopBtn) chatTopBtn.classList.toggle('hidden', !canAccessRoute('chat'));
+            if (typeof annUpdateTopBadge === 'function') annUpdateTopBadge();
 
             if (u) {
                 el('sideUser').innerHTML = `${avatarHtml(u.name)}
@@ -11936,6 +11941,7 @@
             orders: param => viewOrders(param),
             customers: param => viewCustomerOrders(param),
             debts: param => param === 'log' ? viewDebtLog() : viewDebts(param),
+            announcements: () => viewAnnouncements(),
             chat: param => viewChat(param),
             complaints: () => viewComplaints(),
             expenses: () => viewExpenses(),
@@ -11989,6 +11995,7 @@
             orders: 'طلبيات التوريد والتسليم',
             customers: 'طلبيات العملاء والجدولة والتقارير',
             debts: 'متابعة العملاء المتأخرين والمتهربين وسجل الإجراءات والإنذارات',
+            announcements: 'القرارات الإدارية والإعلانات العامة ومتابعة الموافقات والاعتراضات',
             users: 'المستخدمين والأدوار والمندوبين',
             logs: 'سجل كل الأنشطة',
             shipping: 'جدول العربيات والمواعيد وشاشة حركة النقل',
@@ -12236,32 +12243,77 @@
             return found?.name || roleId;
         }
 
+        function annAllActiveUsers() {
+            const byId = new Map();
+            const rolesArr = annAllRolesArr();
+            const roleIdByName = new Map(rolesArr.map(r => [String(r.name || '').trim(), r.id]));
+            // 1. Prefer appData.users (has authoritative roleId)
+            (appData?.users || []).forEach(u => {
+                if (!u || !u.id || u.active === false) return;
+                byId.set(u.id, {
+                    id: u.id,
+                    name: u.name || '',
+                    roleId: u.roleId || '',
+                    roleName: annRoleNameById(u.roleId),
+                    active: true
+                });
+            });
+            // 2. Merge userDirectoryMap entries (resolve roleId from roleName if needed)
+            userDirectoryMap.forEach((u, id) => {
+                if (!u || u.active === false) return;
+                if (byId.has(id)) return;
+                const inferredRoleId = u.roleId || (u.isAdmin ? 'admin' : (roleIdByName.get(String(u.roleName || '').trim()) || ''));
+                byId.set(id, {
+                    id,
+                    name: u.name || '',
+                    roleId: inferredRoleId,
+                    roleName: u.roleName || annRoleNameById(inferredRoleId),
+                    active: true
+                });
+            });
+            return [...byId.values()];
+        }
+
         function annUpdateTopBadge() {
-            const badge = el('annTopBadge');
-            const btn = el('annTopBtn');
-            if (!badge || !btn) return;
             const visible = annList.filter(a => annTargetsMe(a));
             const pending = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a)).length;
             const activeCnt = visible.length;
-            if (pending > 0) {
-                badge.textContent = pending > 9 ? '9+' : String(pending);
-                badge.classList.remove('hidden', 'bg-brand-600');
-                badge.classList.add('bg-rose-600');
-                btn.title = `لديك ${pending} بيان هام بانتظار ردك`;
-            } else if (activeCnt > 0 && !annCanManage()) {
-                badge.textContent = activeCnt > 9 ? '9+' : String(activeCnt);
-                badge.classList.remove('hidden', 'bg-rose-600');
-                badge.classList.add('bg-brand-600');
-                btn.title = `البيانات والإعلانات النشطة (${activeCnt})`;
-            } else {
-                badge.classList.add('hidden');
-                btn.title = annCanManage() ? 'إدارة البيانات والإعلانات العامة' : 'البيانات والإعلانات العامة';
+            const badge = el('annTopBadge');
+            const btn = el('annTopBtn');
+            if (badge && btn) {
+                if (pending > 0) {
+                    badge.textContent = pending > 9 ? '9+' : String(pending);
+                    badge.classList.remove('hidden', 'bg-brand-600');
+                    badge.classList.add('bg-rose-600');
+                    btn.title = `لديك ${pending} بيان هام بانتظار ردك`;
+                } else if (activeCnt > 0 && !annCanManage()) {
+                    badge.textContent = activeCnt > 9 ? '9+' : String(activeCnt);
+                    badge.classList.remove('hidden', 'bg-rose-600');
+                    badge.classList.add('bg-brand-600');
+                    btn.title = `البيانات والإعلانات النشطة (${activeCnt})`;
+                } else {
+                    badge.classList.add('hidden');
+                    btn.title = annCanManage() ? 'إدارة البيانات والإعلانات العامة' : 'البيانات والإعلانات العامة';
+                }
+            }
+            const navBadge = el('annNavBadge');
+            if (navBadge) {
+                if (pending > 0) {
+                    navBadge.textContent = pending > 9 ? '9+' : String(pending);
+                    navBadge.classList.remove('hidden', 'bg-sky-600');
+                    navBadge.classList.add('bg-rose-600');
+                } else if (activeCnt > 0) {
+                    navBadge.textContent = activeCnt > 9 ? '9+' : String(activeCnt);
+                    navBadge.classList.remove('hidden', 'bg-rose-600');
+                    navBadge.classList.add('bg-sky-600');
+                } else {
+                    navBadge.classList.add('hidden');
+                }
             }
         }
 
         function openAnnTopButton() {
-            if (annCanManage()) return openAnnouncementsManager();
-            return openMyAnnouncementsModal();
+            navigate('announcements');
         }
 
         function openMyAnnouncementsModal() {
@@ -12269,7 +12321,7 @@
             const body = visible.length
                 ? `<div class="space-y-3 max-h-[65vh] overflow-y-auto">${visible.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
                 : `<div class="py-10 text-center text-slate-500 text-sm"><i class="fa-solid fa-bullhorn text-2xl text-slate-300 mb-2 block"></i>لا توجد بيانات أو إعلانات نشطة موجهة لك حالياً</div>`;
-            openModal({ title: 'البيانات والإعلانات العامة', body, size: 'lg' });
+            openModal({ title: 'البيانات والإعلانات العامة', submitText: null, body, size: 'lg' });
         }
 
         // ---------- Luxury Announcements Popup (Center / Right / Left + Mandatory Lock) ----------
@@ -12285,6 +12337,9 @@
         let annPopupStyleInjected = false;
         let annPopupDismissedVisit = false;
         let annPopupAutoOpenedPendingKey = '';
+        let annPopupSheetIdx = 0;
+        let annPopupStickId = null;     // keeps the last just-answered sheet visible briefly when all pending finish so user sees confirmation + close button
+        let annPopupLastSheetId = '';
 
         function annPopupNormCfg(raw) {
             const c = (raw && typeof raw === 'object') ? raw : {};
@@ -12416,6 +12471,9 @@
                 .ap-tab.ap-right{right:0;border-radius:.9rem 0 0 .9rem}
                 @keyframes apPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
                 @keyframes apPopIn{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
+                @keyframes apSheetIn{0%{transform:translate3d(0,14px,0) scale(.98);opacity:0}100%{transform:translate3d(0,0,0) scale(1);opacity:1}}
+                .ap-sheet-enter{animation:apSheetIn .30s cubic-bezier(.22,1,.36,1)}
+                .ap-panel.ap-has-stack{box-shadow:0 28px 65px -16px rgba(15,23,42,.42),0 10px 0 -4px rgba(255,255,255,.92),0 12px 18px -4px rgba(15,23,42,.22),0 0 0 1px rgba(255,255,255,.65) inset}
                 @keyframes apShake{0%,100%{transform:translate3d(-50%,-50%,0)}20%{transform:translate3d(calc(-50% - 7px),-50%,0)}40%{transform:translate3d(calc(-50% + 7px),-50%,0)}60%{transform:translate3d(calc(-50% - 5px),-50%,0)}80%{transform:translate3d(calc(-50% + 4px),-50%,0)}}
             `;
             document.head.appendChild(st);
@@ -12640,6 +12698,30 @@
             </article>`;
         }
 
+        function annPopupStep(delta) {
+            const { visible, pendingCount } = annPopupVisibleItems();
+            if (annPopupIsLocked(pendingCount)) {
+                annPopupNudgeLocked();
+                return;
+            }
+            if (!visible.length) return;
+            annPopupStickId = null;
+            annPopupSheetIdx = (annPopupSheetIdx + delta + visible.length) % visible.length;
+            annPopupMaybeShow(true, true);
+        }
+
+        function annPopupGoTo(idx) {
+            const { visible, pendingCount } = annPopupVisibleItems();
+            if (annPopupIsLocked(pendingCount)) {
+                annPopupNudgeLocked();
+                return;
+            }
+            if (!visible.length) return;
+            annPopupStickId = null;
+            annPopupSheetIdx = Math.max(0, Math.min(visible.length - 1, idx));
+            annPopupMaybeShow(true, true);
+        }
+
         function annPopupMaybeShow(isRefresh, forceOpen) {
             if (parseRoute().name !== 'home') { annPopupUnmount(); return; }
             const cfg = annPopupGetCfg();
@@ -12648,14 +12730,13 @@
             if (!visible.length) { annPopupUnmount(); return; }
             annPopupInjectStyle();
 
-            // If a NEW mandatory pending announcement arrives, automatically bring the popup back even if muted/dismissed earlier
-            const pendingKey = visible
-                .filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a))
-                .map(a => a.id + ':' + (a.revision || 1))
-                .join('|');
+            // If a NEW mandatory pending announcement arrives, automatically bring the popup back
+            const pendingList = visible.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
+            const pendingKey = pendingList.map(a => a.id + ':' + (a.revision || 1)).join('|');
             if (pendingKey && pendingKey !== annPopupAutoOpenedPendingKey) {
                 annPopupAutoOpenedPendingKey = pendingKey;
                 annPopupDismissedVisit = false;
+                annPopupStickId = null;
             }
 
             const hasPending = pendingCount > 0;
@@ -12672,11 +12753,36 @@
             const oldTab = document.getElementById('annSideTab');
             if (oldTab) oldTab.remove();
 
+            // Pick the SINGLE active sheet to display right now (one paper after another!)
+            let activeItem = null;
+            let activePos = 0;
+            let totalSheets = visible.length;
+            if (hasPending) {
+                // Always focus the very next unanswered mandatory announcement (1 at a time)
+                activeItem = pendingList[0];
+                activePos = 0;
+                totalSheets = pendingList.length;
+                annPopupStickId = null;
+            } else {
+                if (annPopupStickId) {
+                    const foundIdx = visible.findIndex(x => x.id === annPopupStickId);
+                    if (foundIdx >= 0) annPopupSheetIdx = foundIdx;
+                }
+                if (annPopupSheetIdx >= visible.length || annPopupSheetIdx < 0) annPopupSheetIdx = 0;
+                activeItem = visible[annPopupSheetIdx];
+                activePos = annPopupSheetIdx;
+                totalSheets = visible.length;
+            }
+            if (!activeItem) return;
+
+            const sheetChanged = annPopupLastSheetId && annPopupLastSheetId !== activeItem.id;
+            annPopupLastSheetId = activeItem.id;
+            const isActivePending = activeItem.requireResponse !== false && !annMyEffectiveResponse(activeItem);
+            const remainingAfterThis = hasPending ? Math.max(0, pendingCount - 1) : 0;
+
             const pos = cfg.position;
             const posCls = pos === 'center' ? 'ap-center' : (pos === 'right' ? 'ap-right' : 'ap-left');
-            const swipeHint = pos === 'center'
-                ? (isLocked ? '🔒 اختر موافق أو اعتراض ليظهر زر الإغلاق' : 'يمكنك الإغلاق الآن بالضغط على ✕ أو زر الإغلاق')
-                : (isLocked ? '🔒 اختر موافق أو اعتراض ليظهر زر الإغلاق' : (pos === 'right' ? 'اسحب لليمين للإخفاء →' : '← اسحب لليسار للإخفاء'));
+            const hasMoreStack = totalSheets > 1;
 
             // Backdrop for centered mode
             let backdrop = document.getElementById('annPopupBackdrop');
@@ -12698,11 +12804,7 @@
 
             let panel = document.getElementById('annSidePopup');
             const alreadyOpen = !!(panel && panel.classList.contains('ap-open'));
-            let savedScroll = 0;
-            if (panel) {
-                const bodyEl = panel.querySelector('[data-ap-scroll]');
-                if (bodyEl) savedScroll = bodyEl.scrollTop;
-            } else {
+            if (!panel) {
                 panel = document.createElement('aside');
                 panel.id = 'annSidePopup';
                 panel.setAttribute('role', 'dialog');
@@ -12711,27 +12813,47 @@
                 annPopupBindSwipe(panel);
             }
 
-            panel.className = 'ap-panel ' + posCls + (hasPending ? ' ap-urgent' : '') + (alreadyOpen ? ' ap-open' : '');
+            panel.className = 'ap-panel ' + posCls + (hasPending ? ' ap-urgent' : '') + (hasMoreStack ? ' ap-has-stack' : '') + (alreadyOpen ? ' ap-open' : '');
             const headerStyle = hasPending
                 ? 'background:linear-gradient(135deg,#450a0a 0%,#9f1239 52%,#d97706 100%)'
                 : 'background:linear-gradient(135deg,#0f172a 0%,#0c4a6e 55%,#0369a1 100%)';
+
+            // Progress dots (up to 8 dots)
+            const dotsHtml = totalSheets > 1 ? `<div class="flex items-center justify-center gap-1.5 mt-2">
+                ${Array.from({ length: Math.min(totalSheets, 8) }, (_, i) => {
+                    const isCur = i === activePos;
+                    return `<button type="button" ${!isLocked ? `onclick="annPopupGoTo(${i})"` : ''} class="h-1.5 rounded-full transition-all ${isCur ? 'w-5 bg-white' : 'w-1.5 bg-white/40 hover:bg-white/70'}" aria-label="إعلان ${i + 1}"></button>`;
+                }).join('')}
+            </div>` : '';
+
+            const footerLeft = isLocked
+                ? (remainingAfterThis > 0
+                    ? `<span class="text-[11px] font-extrabold text-rose-700 flex items-center gap-1"><i class="fa-solid fa-layer-group"></i> بعد الرد سيظهر الإعلان التالي (${remainingAfterThis} متبقٍ)</span>`
+                    : `<span class="text-[11px] font-extrabold text-rose-700 flex items-center gap-1"><i class="fa-solid fa-lock"></i> اختر موافق أو اعتراض ليظهر زر الإغلاق</span>`)
+                : (visible.length > 1
+                    ? `<div class="flex items-center gap-1.5">
+                        <button type="button" onclick="annPopupStep(-1)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black flex items-center gap-1"><i class="fa-solid fa-chevron-right text-[10px]"></i> السابق</button>
+                        <span class="text-[11px] font-mono font-bold text-slate-500 px-1">${activePos + 1}/${visible.length}</span>
+                        <button type="button" onclick="annPopupStep(1)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black flex items-center gap-1">التالي <i class="fa-solid fa-chevron-left text-[10px]"></i></button>
+                    </div>`
+                    : `<span class="text-[11px] font-bold text-emerald-700"><i class="fa-solid fa-circle-check"></i> يمكنك الإغلاق الآن</span>`);
 
             panel.innerHTML = `
                 <div class="ap-head px-4 py-3.5 text-white shrink-0" style="${headerStyle}">
                     <div class="relative z-10 flex items-center justify-between gap-3">
                         <div class="flex items-center gap-3 min-w-0">
                             <div class="w-10 h-10 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0 shadow-inner">
-                                <i class="fa-solid ${hasPending ? 'fa-bullhorn text-amber-200 animate-bounce' : 'fa-bullhorn text-sky-200'} text-base"></i>
+                                <i class="fa-solid fa-bullhorn ${hasPending ? 'text-amber-200 animate-bounce' : 'text-sky-200'} text-base"></i>
                             </div>
                             <div class="min-w-0">
                                 <div class="font-black text-base flex items-center gap-2 flex-wrap">
-                                    <span>بيانات وإعلانات الإدارة</span>
-                                    <span class="px-2 py-0.5 rounded-full bg-white/20 border border-white/20 text-[11px] font-mono">${visible.length}</span>
+                                    <span>بيان من الإدارة</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-white/20 border border-white/20 text-[11px] font-mono">${activePos + 1} / ${totalSheets}</span>
                                 </div>
                                 <div class="text-xs ${hasPending ? 'text-amber-100' : 'text-sky-100'} font-bold mt-0.5 flex items-center gap-1.5">
                                     ${hasPending
-                                        ? `<i class="fa-solid fa-bell text-amber-200"></i> <span>لديك ${pendingCount} بيان هام بانتظار ردك الآن</span>`
-                                        : `<i class="fa-solid fa-circle-check text-emerald-300"></i> <span>تم الاطلاع على جميع البيانات الإلزامية</span>`}
+                                        ? `<i class="fa-solid fa-bell text-amber-200"></i> <span>${pendingCount === 1 ? 'بيان هام بانتظار ردك الآن' : `متبقي ${pendingCount} بيانات بانتظار ردك — ورقة تلو الأخرى`}</span>`
+                                        : `<i class="fa-solid fa-circle-check text-emerald-300"></i> <span>تم الرد على جميع البيانات الإلزامية</span>`}
                                 </div>
                             </div>
                         </div>
@@ -12741,27 +12863,26 @@
                             ${!isLocked ? `<button type="button" onclick="annPopupDismiss(false)" title="إغلاق" class="ap-close-pop w-8 h-8 rounded-xl bg-white/20 hover:bg-rose-500 border border-white/25 flex items-center justify-center text-sm font-black transition-colors"><i class="fa-solid fa-xmark"></i></button>` : ''}
                         </div>
                     </div>
+                    ${dotsHtml}
                 </div>
                 <div class="ap-head-gold shrink-0"></div>
-                <div data-ap-scroll class="p-3.5 space-y-3 overflow-y-auto flex-1 bg-slate-100/75">
-                    ${visible.map(a => annPopupCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}
+                <div data-ap-scroll class="p-3.5 overflow-y-auto flex-1 bg-slate-100/75">
+                    <div class="${sheetChanged ? 'ap-sheet-enter' : ''}">
+                        ${annPopupCardHtml(activeItem, isActivePending)}
+                    </div>
                 </div>
                 <div class="px-4 py-2.5 bg-white border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 shrink-0">
-                    <span class="text-[11px] font-bold ${isLocked ? 'text-rose-700' : 'text-slate-500'}">${swipeHint}</span>
+                    ${footerLeft}
                     <div class="flex items-center gap-2">
                         ${!isLocked ? `
-                            <button type="button" onclick="annPopupDismiss(true)" title="عدم الإظهار تلقائياً على هذا الجهاز" class="text-[11px] font-bold text-slate-400 hover:text-slate-700 px-2 py-1">إخفاء بجهازي</button>
+                            <button type="button" onclick="annPopupDismiss(true)" title="عدم الإظهار تلقائياً على هذا الجهاز" class="text-[11px] font-bold text-slate-400 hover:text-slate-700 px-1.5 py-1">إخفاء بجهازي</button>
                             <button type="button" onclick="annPopupDismiss(false)" class="ap-close-pop px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-xmark"></i> إغلاق</button>
                         ` : `
-                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-black"><i class="fa-solid fa-lock"></i> مطلوب الرد أولاً</span>
+                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-black"><i class="fa-solid fa-lock"></i> مطلوب الرد</span>
                         `}
                     </div>
                 </div>`;
 
-            if (savedScroll > 0) {
-                const bodyEl = panel.querySelector('[data-ap-scroll]');
-                if (bodyEl) bodyEl.scrollTop = savedScroll;
-            }
             if (!alreadyOpen) {
                 requestAnimationFrame(() => requestAnimationFrame(() => {
                     if (panel && panel.parentNode) panel.classList.add('ap-open');
@@ -12782,6 +12903,7 @@
                 annSyncMyResponseListeners();
                 annUpdateTopBadge();
                 if (parseRoute().name === 'home') annPopupMaybeShow(true);
+                if (parseRoute().name === 'announcements') annRepaintPage();
             };
             ref.on('value', cb, err => console.warn('announcements listener', err && err.code));
             annListUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
@@ -12852,6 +12974,7 @@
                     if (v) annMyResponses[id] = v; else delete annMyResponses[id];
                     annUpdateTopBadge();
                     if (parseRoute().name === 'home') annPopupMaybeShow(true);
+                    if (parseRoute().name === 'announcements') annRepaintPage();
                 };
                 ref.on('value', cb, () => {});
                 annRespUnsubs[id] = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
@@ -12947,6 +13070,7 @@
         function annToggleObjectionBox(annId) {
             annObjectionOpenId = (annObjectionOpenId === annId) ? null : annId;
             if (parseRoute().name === 'home') annPopupMaybeShow(true, true);
+            if (parseRoute().name === 'announcements') render();
             const host = el('modalHost');
             if (host && !host.classList.contains('hidden') && !annCanManage()) openMyAnnouncementsModal();
             if (annObjectionOpenId) {
@@ -12984,8 +13108,10 @@
                 if (status === 'objected' && a.createdById && a.createdById !== fbUser.uid) {
                     notifyUser(a.createdById, { verb: 'سجّل', kind: 'اعتراض على بيان', detail: `${u.name}: ${a.title} — ${reason.slice(0, 100)}`, target: { col: 'announcements', id: annId } });
                 }
+                annPopupStickId = annId;
                 if (closeAfter) closeModal();
                 annRepaintHome();
+                if (parseRoute().name === 'announcements') annRepaintPage();
                 toast(status === 'objected' ? 'تم تسجيل اعتراضك وسببه وإبلاغ الإدارة' : 'تم تسجيل موافقتك بنجاح', 'success');
             } catch (err) {
                 console.error(err);
@@ -13008,6 +13134,7 @@
             if (!annCanManage()) return toast('ليس لديك صلاحية لإدارة البيانات والإعلانات', 'error');
             openModal({
                 title: 'إدارة البيانات والإعلانات العامة',
+                submitText: null,
                 size: 'lg',
                 body: `<div class="space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -13145,7 +13272,7 @@
             const cur = editId ? annList.find(x => x.id === editId) : null;
             annFormPendingImg = null;
             const roles = annAllRolesArr();
-            const dirUsers = [...userDirectoryMap.values()].filter(u => u && u.active !== false);
+            const dirUsers = annAllActiveUsers();
             const roleCount = rid => dirUsers.filter(u => u.roleId === rid).length;
             const selRoles = Array.isArray(cur?.targetRoles) ? cur.targetRoles : [];
             const audMode = cur?.audienceMode || 'all';
@@ -13318,7 +13445,7 @@
             try {
                 await rtdb.ref(`announcements/${id}/active`).set(cur.active === false);
                 toast(cur.active === false ? 'تم تفعيل البيان' : 'تم إيقاف البيان مؤقتاً', 'success');
-                openAnnouncementsManager();
+                if (parseRoute().name === 'announcements') render(); else openAnnouncementsManager();
             } catch (e) { toast('تعذر تغيير الحالة', 'error'); }
         }
 
@@ -13329,7 +13456,7 @@
                 await rtdb.ref('announcements/' + id).remove();
                 await rtdb.ref('announcementResponses/' + id).remove().catch(() => {});
                 toast('تم حذف البيان بنجاح', 'success');
-                openAnnouncementsManager();
+                if (parseRoute().name === 'announcements') render(); else openAnnouncementsManager();
             } catch (e) { toast('تعذر حذف البيان', 'error'); }
         }
 
@@ -13340,14 +13467,17 @@
             const a = annList.find(x => x.id === annId);
             if (!a) return toast('البيان غير موجود', 'error');
             const activeTab = tab || 'all';
-            openModal({ title: 'تقرير الموافقات والاعتراضات', size: 'lg', body: `<div class="py-8 text-center text-slate-400 text-sm">جاري تحميل الردود...</div>` });
+            openModal({ title: 'تقرير الموافقات والاعتراضات', submitText: null, size: 'lg', body: `<div class="py-8 text-center text-slate-400 text-sm"><i class="fa-solid fa-spinner fa-spin ml-2"></i> جاري تحميل الردود...</div>` });
             try {
-                const respMap = (await rtdb.ref('announcementResponses/' + annId).once('value')).val() || {};
+                const snap = await rtdb.ref('announcementResponses/' + annId).once('value');
+                const respMap = snap.val() || {};
                 const rev = Number(a.revision) || 1;
-                const dirAll = [...userDirectoryMap.values()].filter(u => u && u.active !== false);
+                const dirAll = annAllActiveUsers();
+                const targetRoleIds = Array.isArray(a.targetRoles) ? a.targetRoles : [];
+                const targetRoleNames = new Set(targetRoleIds.map(rid => annRoleNameById(rid)));
                 const targeted = dirAll.filter(u => {
                     if (!a.audienceMode || a.audienceMode === 'all') return true;
-                    return Array.isArray(a.targetRoles) && a.targetRoles.includes(u.roleId);
+                    return targetRoleIds.includes(u.roleId) || (u.roleName && targetRoleNames.has(u.roleName));
                 });
                 const approved = [], objected = [], pending = [];
                 const seenUids = new Set();
@@ -13355,10 +13485,10 @@
                     seenUids.add(u.id);
                     const r = respMap[u.id];
                     if (r && (Number(r.revision) || 1) >= rev) {
-                        const row = { uid: u.id, name: r.userName || u.name, roleName: r.roleName || annRoleNameById(u.roleId), status: r.status, reason: r.reason || '', at: r.at || '' };
+                        const row = { uid: u.id, name: r.userName || u.name, roleName: r.roleName || u.roleName || annRoleNameById(u.roleId), status: r.status, reason: r.reason || '', at: r.at || '' };
                         if (r.status === 'objected') objected.push(row); else approved.push(row);
                     } else {
-                        pending.push({ uid: u.id, name: u.name, roleName: annRoleNameById(u.roleId), status: 'pending', reason: '', at: '' });
+                        pending.push({ uid: u.id, name: u.name, roleName: u.roleName || annRoleNameById(u.roleId), status: 'pending', reason: '', at: '' });
                     }
                 });
                 Object.entries(respMap).forEach(([uidKey, r]) => {
@@ -13369,8 +13499,20 @@
                 _annReportCache = { a, approved, objected, pending };
                 paintAnnouncementReport(activeTab);
             } catch (err) {
-                console.error(err);
-                toast('تعذر تحميل التقرير', 'error');
+                console.error('openAnnouncementReport error:', err);
+                const msg = (err && (err.code === 'PERMISSION_DENIED' || String(err.message || '').includes('permission_denied')))
+                    ? 'تعذر قراءة الردود بسبب قواعد Firebase — تأكد من نشر ملف database.rules.json المحدّث في Firebase Console.'
+                    : ('تعذر تحميل الردود: ' + ((err && err.message) || 'خطأ غير متوقع'));
+                openModal({
+                    title: 'تقرير الموافقات والاعتراضات',
+                    submitText: null,
+                    size: 'md',
+                    body: `<div class="rounded-xl bg-rose-50 border border-rose-200 p-4 text-sm text-rose-800 space-y-2">
+                        <div class="font-black"><i class="fa-solid fa-triangle-exclamation"></i> حدث خطأ أثناء تحميل الردود</div>
+                        <p class="text-xs leading-relaxed">${esc(msg)}</p>
+                        <div class="pt-1"><button type="button" onclick="openAnnouncementReport('${esc(annId)}','${esc(activeTab)}')" class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold">إعادة المحاولة</button></div>
+                    </div>`
+                });
             }
         }
 
@@ -13396,7 +13538,7 @@
                             <span class="text-xs text-slate-500 mr-2">(${esc(r.roleName)})</span>
                         </div>
                         <div class="flex items-center gap-2">
-                            ${r.at ? `<span class="text-[11px] text-slate-500">${esc(debtFmtAt(r.at))}</span>` : ''}
+                            ${r.at ? `<span class="text-[11px] text-slate-500">${esc(fmtDateTime(r.at))}</span>` : ''}
                             ${badge}
                         </div>
                     </div>
@@ -13406,6 +13548,7 @@
 
             openModal({
                 title: 'تقرير الموافقات والاعتراضات',
+                submitText: null,
                 size: 'lg',
                 body: `<div class="space-y-4">
                     <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
@@ -13449,7 +13592,7 @@
                 <td>${esc(r.roleName)}</td>
                 <td>${r.status === 'objected' ? '<b style="color:#be123c">معترض</b>' : (r.status === 'approved' ? '<b style="color:#047857">موافق</b>' : '<span style="color:#b45309">لم يرد بعد</span>')}</td>
                 <td>${esc(r.reason || '—')}</td>
-                <td>${esc(r.at ? debtFmtAt(r.at) : '—')}</td>
+                <td>${esc(r.at ? fmtDateTime(r.at) : '—')}</td>
             </tr>`).join('');
             const body = `
                 <div class="card">
@@ -13464,14 +13607,200 @@
             printHtml(shipPrintDoc('تقرير ردود واعتراضات البيان الإداري', a.title || '', body));
         }
 
+
+        // ---- Dedicated Full Page: البيانات والإعلانات (#/announcements) ----
+        let annPageTab = 'all';
+        let annPageCounts = {};
+
+        function annSetPageTab(t) {
+            annPageTab = t;
+            render();
+        }
+
+        function annRepaintPage() {
+            if (parseRoute().name !== 'announcements') return;
+            const host = el('annPageBody');
+            if (!host) { render(); return; }
+            host.innerHTML = annPageInnerHtml();
+            if (annCanManage()) annLoadPageCounts();
+        }
+
+        async function annLoadPageCounts() {
+            if (!annCanManage() || !rtdb || !annList.length) return;
+            const next = {};
+            await Promise.all(annList.map(async a => {
+                try {
+                    const v = (await rtdb.ref('announcementResponses/' + a.id).once('value')).val() || {};
+                    const rev = Number(a.revision) || 1;
+                    let ok = 0, obj = 0;
+                    Object.values(v).forEach(r => {
+                        if (!r || (Number(r.revision) || 1) < rev) return;
+                        if (r.status === 'objected') obj++; else ok++;
+                    });
+                    next[a.id] = { ok, obj, loaded: true };
+                } catch (e) {
+                    next[a.id] = { ok: 0, obj: 0, loaded: false };
+                }
+            }));
+            annPageCounts = next;
+            annList.forEach(a => {
+                const c = next[a.id];
+                const okEl = el('annCntOk_' + a.id);
+                const objEl = el('annCntObj_' + a.id);
+                if (okEl && c) okEl.textContent = String(c.ok);
+                if (objEl && c) objEl.textContent = String(c.obj);
+            });
+        }
+
+        function annPageInnerHtml() {
+            const isMgr = annCanManage();
+            const targetedToMe = annList.filter(a => annTargetsMe(a));
+            const pendingToMe = targetedToMe.filter(a => a.requireResponse !== false && !annMyEffectiveResponse(a));
+            const activeAll = annList.filter(a => a.active !== false && !annIsExpired(a));
+            const inactiveAll = annList.filter(a => a.active === false || annIsExpired(a));
+
+            if (!isMgr) {
+                const ordered = [...pendingToMe, ...targetedToMe.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)))];
+                return `<div class="space-y-4">
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                            <div class="text-xs font-bold text-slate-500">الإعلانات الموجهة لك</div>
+                            <div class="text-2xl font-black text-slate-900 mt-1">${targetedToMe.length}</div>
+                        </div>
+                        <div class="bg-white rounded-2xl border ${pendingToMe.length ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} p-4 shadow-sm">
+                            <div class="text-xs font-bold ${pendingToMe.length ? 'text-rose-700' : 'text-slate-500'}">بانتظار ردك</div>
+                            <div class="text-2xl font-black ${pendingToMe.length ? 'text-rose-700' : 'text-emerald-600'} mt-1">${pendingToMe.length}</div>
+                        </div>
+                        <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm col-span-2 sm:col-span-1">
+                            <div class="text-xs font-bold text-slate-500">تم الرد عليها</div>
+                            <div class="text-2xl font-black text-emerald-700 mt-1">${targetedToMe.length - pendingToMe.length}</div>
+                        </div>
+                    </div>
+                    ${ordered.length
+                        ? `<div class="space-y-3">${ordered.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
+                        : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500">
+                            <i class="fa-solid fa-bullhorn text-3xl text-slate-300 mb-2 block"></i>
+                            <div class="font-bold">لا توجد بيانات أو إعلانات نشطة موجهة لك حالياً</div>
+                        </div>`}
+                </div>`;
+            }
+
+            const tabBtn = (k, lbl) => `<button type="button" onclick="annSetPageTab('${k}')" class="px-3.5 py-2 rounded-xl text-xs font-extrabold transition-colors ${annPageTab === k ? 'bg-brand-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'}">${lbl}</button>`;
+
+            let listHtml = '';
+            if (annPageTab === 'mine') {
+                const ordered = [...pendingToMe, ...targetedToMe.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)))];
+                listHtml = ordered.length
+                    ? `<div class="space-y-3">${ordered.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
+                    : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500 text-sm">لا توجد بيانات نشطة موجهة لحسابك حالياً</div>`;
+            } else {
+                const items = annPageTab === 'active' ? activeAll : (annPageTab === 'inactive' ? inactiveAll : annList);
+                listHtml = items.length ? `<div class="space-y-3">${items.map(a => {
+                    const [, typeLabel, icon, , badgeCls] = annTypeInfo(a.type);
+                    const c = annPageCounts[a.id] || { ok: '…', obj: '…' };
+                    const exp = annIsExpired(a);
+                    const stateBadge = a.active === false
+                        ? '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">متوقف</span>'
+                        : (exp ? '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">منتهي الصلاحية</span>'
+                               : '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">نشط الآن</span>');
+                    return `<article class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm space-y-3">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div class="space-y-1.5 flex-1 min-w-[220px]">
+                                <div class="flex flex-wrap items-center gap-1.5">
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}</span>
+                                    ${stateBadge}
+                                    ${a.requireResponse !== false ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">إلزامي بالرد</span>' : '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600">إعلان عام</span>'}
+                                    ${(Number(a.revision) || 1) > 1 ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">تحديث #${Number(a.revision)}</span>` : ''}
+                                </div>
+                                <h3 class="font-black text-slate-900 text-base">${esc(a.title || '')}</h3>
+                                <p class="text-sm text-slate-700 whitespace-pre-line leading-relaxed">${esc(a.body || '')}</p>
+                                ${a.eventDate ? `<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900"><i class="fa-solid fa-calendar-day text-amber-600"></i> ${esc(a.eventDate)}</div>` : ''}
+                                ${a.image ? `<div><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-40 rounded-xl border border-slate-200 object-contain bg-slate-50 cursor-zoom-in"></div>` : ''}
+                                <div class="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-1 pt-1">
+                                    <span><i class="fa-solid fa-users"></i> الفئة: <b>${esc(annAudienceLabel(a))}</b></span>
+                                    <span><i class="fa-solid fa-user-tie"></i> ${esc(a.createdBy || 'الإدارة')}</span>
+                                    <span><i class="fa-regular fa-clock"></i> ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
+                                    ${a.expiresAt ? `<span><i class="fa-solid fa-hourglass-end"></i> ينتهي: ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2 shrink-0">
+                                <button type="button" onclick="openAnnouncementReport('${esc(a.id)}','approved')" class="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-black">✅ <span id="annCntOk_${esc(a.id)}">${c.ok}</span></button>
+                                <button type="button" onclick="openAnnouncementReport('${esc(a.id)}','objected')" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 text-xs font-black">✋ <span id="annCntObj_${esc(a.id)}">${c.obj}</span></button>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
+                            <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-chart-pie"></i> تقرير الردود والاعتراضات</button>
+                            <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid fa-pen"></i> تعديل</button>
+                            <button type="button" onclick="annToggleActive('${esc(a.id)}')" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid ${a.active === false ? 'fa-play text-emerald-600' : 'fa-pause text-amber-600'}"></i> ${a.active === false ? 'تفعيل' : 'إيقاف مؤقت'}</button>
+                            <button type="button" onclick="annDelete('${esc(a.id)}')" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1 mr-auto"><i class="fa-solid fa-trash-can"></i> حذف</button>
+                        </div>
+                    </article>`;
+                }).join('')}</div>` : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500 text-sm">
+                    <i class="fa-solid fa-bullhorn text-3xl text-slate-300 mb-2 block"></i>
+                    لا توجد بيانات أو إعلانات في هذا التصنيف حالياً.
+                </div>`;
+            }
+
+            return `<div class="space-y-4">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                        <div class="text-xs font-bold text-slate-500">إجمالي البيانات</div>
+                        <div class="text-2xl font-black text-slate-900 mt-1">${annList.length}</div>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-emerald-200 p-4 shadow-sm">
+                        <div class="text-xs font-bold text-emerald-700">نشطة حالياً</div>
+                        <div class="text-2xl font-black text-emerald-700 mt-1">${activeAll.length}</div>
+                    </div>
+                    <div class="bg-white rounded-2xl border ${pendingToMe.length ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} p-4 shadow-sm">
+                        <div class="text-xs font-bold ${pendingToMe.length ? 'text-rose-700' : 'text-slate-500'}">بانتظار ردك</div>
+                        <div class="text-2xl font-black ${pendingToMe.length ? 'text-rose-700' : 'text-slate-800'} mt-1">${pendingToMe.length}</div>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                        <div class="text-xs font-bold text-slate-500">متوقفة / منتهية</div>
+                        <div class="text-2xl font-black text-slate-600 mt-1">${inactiveAll.length}</div>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    ${tabBtn('all', `الكل (${annList.length})`)}
+                    ${tabBtn('active', `نشطة (${activeAll.length})`)}
+                    ${tabBtn('inactive', `متوقفة / منتهية (${inactiveAll.length})`)}
+                    ${tabBtn('mine', `الموجهة لي (${targetedToMe.length})`)}
+                </div>
+                ${listHtml}
+            </div>`;
+        }
+
+        function viewAnnouncements() {
+            const isMgr = annCanManage();
+            return {
+                title: 'البيانات والإعلانات',
+                actions: isMgr
+                    ? `<div class="flex flex-wrap items-center gap-2">
+                        ${btn("navigate('settings/popups')", 'إعدادات القوائم المنبثقة', 'fa-window-restore', BTN_SECONDARY)}
+                        ${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}
+                    </div>`
+                    : '',
+                after: () => { if (isMgr) annLoadPageCounts(); },
+                html: `<div id="annPageBody">${annPageInnerHtml()}</div>`
+            };
+        }
+
         function viewHome() {
             const u = currentUser();
             const cards = ROUTE_ORDER.filter(n => n !== 'home' && canAccessRoute(n)).map(n => {
                 const r = ROUTES[n];
+                const annPending = (n === 'announcements') ? annList.filter(a => annTargetsMe(a) && a.requireResponse !== false && !annMyEffectiveResponse(a)).length : 0;
+                const annActive = (n === 'announcements') ? annList.filter(a => annTargetsMe(a)).length : 0;
+                const annHomePill = (n === 'announcements' && (annPending > 0 || annActive > 0))
+                    ? (annPending > 0
+                        ? `<span id="annHomeCardBadge" class="mt-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-black bg-rose-100 text-rose-700 border border-rose-200 animate-pulse"><i class="fa-solid fa-bell text-[10px]"></i> ${annPending} بانتظار ردك</span>`
+                        : `<span id="annHomeCardBadge" class="mt-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-sky-100 text-sky-800 border border-sky-200">${annActive} إعلان نشط</span>`)
+                    : '';
                 return `<a href="#/${n}" class="home-card">
                         <span class="home-card-icon"><i class="fa-solid ${r.icon}"></i></span>
                         <span class="home-card-title">${esc(r.title)}</span>
                         <span class="home-card-desc">${esc(HOME_DESC[n] || '')}</span>
+                        ${annHomePill}
                     </a>`;
             }).join('');
             const period = homeCfg.timeColors ? homePeriod(new Date().getHours()) : '';
@@ -16588,5 +16917,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5fc200bdfc1cc66',t:'MTc5NTU2MjIyNg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5fc200bdfc1cc66',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
