@@ -128,7 +128,7 @@
         @media (min-width: 1024px) { .hidden.lg\:block { display: block !important; } .hidden.lg\:flex { display: flex !important; } }
         #appShell.hidden { display: none !important; }
         .bg-white { background-color: rgb(var(--surface)) !important; }
-        html, body { font-weight: 500; }
+        html, body { font-weight: 500; max-width: 100%; overflow-x: hidden; }
         .font-thin, .font-extralight, .font-light, .font-normal, .font-medium { font-weight: 500 !important; }
         .font-semibold { font-weight: 700 !important; }
         .font-bold, .font-extrabold, .font-black { font-weight: 800 !important; }
@@ -673,7 +673,7 @@
                 <i class="fa-solid fa-wifi me-1"></i> أنت غير متصل بالإنترنت — التغييرات محفوظة على الجهاز وستُرفع تلقائياً عند عودة الاتصال
             </div>
 
-            <main id="content" class="flex-1 min-w-0 p-3 sm:p-6 space-y-4 sm:space-y-6" tabindex="-1"></main>
+            <main id="content" class="flex-1 min-w-0 max-w-full overflow-x-hidden p-3 sm:p-6 space-y-4 sm:space-y-6" tabindex="-1"></main>
 
             <footer class="bg-white border-t border-slate-200 py-3 px-4 text-center text-xs text-slate-500">
                 لوحة تحكم لستات وخصومات المصانع © 2026 · <span class="font-mono">v6.0.0</span>
@@ -2058,7 +2058,13 @@
 
         function notifResolve(n) {
             const t = n.target || {};
-            if (t.col === 'announcements') return () => navigate('announcements');
+            if (t.col === 'announcements') return () => {
+                navigate('announcements');
+                if (t.id && annCanManage()) {
+                    const tab = String(n.kind || '').includes('اعتراض') ? 'objected' : 'all';
+                    setTimeout(() => openAnnouncementReport(t.id, tab), 280);
+                }
+            };
             if (t.col === 'chat' && t.id) return () => { if (notifGuard('chat')) navigate('chat/' + t.id); };
             if (t.col === 'complaints') return () => { if (can('complaints.file') || can('complaints.manage')) navigate('complaints'); else toast('معندكش صلاحية الشكاوي', 'error'); };
             if (t.col === 'expenses') return () => { if (can('expenses.request') || can('expenses.approve') || isSystemAdmin()) navigate('expenses'); else toast('معندكش صلاحية المصروفات', 'error'); };
@@ -2305,6 +2311,7 @@
             debtPopupCfgStop(); debtPopupCfgStart();
             storageCfgStop(); storageCfgStart();
             annStop(); annStart();
+            appLiveUrlStop(); appLiveUrlStart();
             if (fbUser) setTimeout(() => pruneNotifFeed('userNotifications/' + fbUser.uid, false), 6000);
         }
 
@@ -2339,6 +2346,7 @@
             debtPopupCfgStop();
             storageCfgStop();
             annStop();
+            appLiveUrlStop();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -4468,18 +4476,18 @@
             modalSubmit = onSubmit;
             modalSeq++;
             el('modalHost').innerHTML = `
-                <div id="modalBackdrop" class="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+                <div id="modalBackdrop" class="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4"
                      onclick="if (event.target === this) closeModal()">
-                    <form id="modalForm" class="modal-panel bg-white rounded-2xl w-full ${sizes[size]} shadow-2xl border border-slate-100 flex flex-col"
+                    <form id="modalForm" class="modal-panel bg-white rounded-2xl w-full max-w-full ${sizes[size]} shadow-2xl border border-slate-100 flex flex-col overflow-hidden"
                           ${onSubmit ? 'onsubmit="submitModal(event)"' : 'onsubmit="event.preventDefault()"'}>
-                        <div class="flex justify-between items-center px-5 sm:px-6 py-4 border-b border-slate-100">
-                            <h3 class="text-lg font-bold text-slate-800">${title}</h3>
-                            <button type="button" onclick="closeModal()" aria-label="إغلاق" class="${BTN_ICON} text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+                        <div class="flex justify-between items-center gap-2 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 shrink-0">
+                            <h3 class="text-base sm:text-lg font-bold text-slate-800 min-w-0 break-words">${title}</h3>
+                            <button type="button" onclick="closeModal()" aria-label="إغلاق" class="${BTN_ICON} shrink-0 text-slate-400 hover:text-slate-600 hover:bg-slate-100">
                                 <i class="fa-solid fa-xmark"></i>
                             </button>
                         </div>
-                        <div class="px-5 sm:px-6 py-4 space-y-4">${body}</div>
-                        <div class="px-5 sm:px-6 py-4 border-t border-slate-100 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+                        <div class="px-3.5 sm:px-6 py-3.5 sm:py-4 space-y-4 overflow-y-auto overflow-x-hidden flex-1 min-w-0">${body}</div>
+                        <div class="px-4 sm:px-6 py-3 sm:py-4 border-t border-slate-100 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end shrink-0 bg-white">
                             <button type="button" onclick="closeModal()" class="${BTN_SECONDARY} w-full sm:w-auto">إغلاق</button>
                             ${onSubmit ? `<button type="submit" class="${BTN_PRIMARY} w-full sm:w-auto ${danger ? '!bg-rose-600 hover:!bg-rose-700' : ''}">${submitText}</button>` : ''}
                         </div>
@@ -13856,18 +13864,18 @@
                     : (r.status === 'approved'
                         ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800">✅ موافق</span>'
                         : '<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800">⏳ لم يرد بعد</span>');
-                return `<div class="rounded-xl border ${r.status === 'objected' ? 'border-rose-200 bg-rose-50/60' : 'border-slate-200 bg-white'} p-3">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                            <span class="font-extrabold text-sm text-slate-900">${esc(r.name)}</span>
-                            <span class="text-xs text-slate-500 mr-2">(${esc(r.roleName)})</span>
+                return `<div class="rounded-xl border ${r.status === 'objected' ? 'border-rose-200 bg-rose-50/60' : 'border-slate-200 bg-white'} p-3 min-w-0">
+                    <div class="flex flex-wrap items-center justify-between gap-1.5">
+                        <div class="min-w-0">
+                            <span class="font-extrabold text-sm text-slate-900 break-words">${esc(r.name)}</span>
+                            <span class="text-xs text-slate-500 mr-1.5">(${esc(r.roleName)})</span>
                         </div>
-                        <div class="flex items-center gap-2">
-                            ${r.at ? `<span class="text-[11px] text-slate-500">${esc(fmtDateTime(r.at))}</span>` : ''}
+                        <div class="flex flex-wrap items-center gap-1.5 shrink-0">
+                            ${r.at ? `<span class="text-[10px] sm:text-[11px] text-slate-500">${esc(fmtDateTime(r.at))}</span>` : ''}
                             ${badge}
                         </div>
                     </div>
-                    ${r.reason ? `<div class="mt-2 rounded-lg bg-white border border-rose-200 px-3 py-2 text-xs text-rose-900 whitespace-pre-line"><b>سبب الاعتراض:</b> ${esc(r.reason)}</div>` : ''}
+                    ${r.reason ? `<div class="mt-2 rounded-lg bg-white border border-rose-200 px-3 py-2 text-xs text-rose-900 whitespace-pre-line break-words leading-relaxed"><b>سبب الاعتراض:</b> ${esc(r.reason)}</div>` : ''}
                 </div>`;
             }).join('') : '<div class="text-center py-6 text-slate-400 text-sm">لا توجد عناصر في هذا التصنيف</div>';
 
@@ -13875,15 +13883,15 @@
                 title: 'تقرير الموافقات والاعتراضات',
                 submitText: null,
                 size: 'lg',
-                body: `<div class="space-y-4">
-                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
-                        <div class="font-extrabold text-slate-900">${esc(a.title || '')}</div>
-                        <div class="text-xs text-slate-500 mt-1">الفئة المستهدفة: <b>${esc(annAudienceLabel(a))}</b> · النسخة #${Number(a.revision) || 1}</div>
+                body: `<div class="space-y-3.5 min-w-0">
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 sm:p-3.5 min-w-0">
+                        <div class="font-extrabold text-sm sm:text-base text-slate-900 break-words">${esc(a.title || '')}</div>
+                        <div class="text-[11px] sm:text-xs text-slate-500 mt-1 break-words">الفئة المستهدفة: <b>${esc(annAudienceLabel(a))}</b> · النسخة #${Number(a.revision) || 1}</div>
                         <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                            <div class="rounded-xl bg-white border border-slate-200 p-2"><div class="text-[11px] text-slate-500">المستهدفون</div><div class="text-lg font-extrabold text-slate-800">${total}</div></div>
-                            <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2"><div class="text-[11px] text-emerald-700">✅ موافقون</div><div class="text-lg font-extrabold text-emerald-700">${approved.length}</div></div>
-                            <div class="rounded-xl bg-rose-50 border border-rose-200 p-2"><div class="text-[11px] text-rose-700">✋ معترضون</div><div class="text-lg font-extrabold text-rose-700">${objected.length}</div></div>
-                            <div class="rounded-xl bg-amber-50 border border-amber-200 p-2"><div class="text-[11px] text-amber-700">⏳ لم يردّوا</div><div class="text-lg font-extrabold text-amber-700">${pending.length}</div></div>
+                            <div class="rounded-xl bg-white border border-slate-200 p-2"><div class="text-[11px] text-slate-500">المستهدفون</div><div class="text-base sm:text-lg font-extrabold text-slate-800">${total}</div></div>
+                            <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2"><div class="text-[11px] text-emerald-700">✅ موافقون</div><div class="text-base sm:text-lg font-extrabold text-emerald-700">${approved.length}</div></div>
+                            <div class="rounded-xl bg-rose-50 border border-rose-200 p-2"><div class="text-[11px] text-rose-700">✋ معترضون</div><div class="text-base sm:text-lg font-extrabold text-rose-700">${objected.length}</div></div>
+                            <div class="rounded-xl bg-amber-50 border border-amber-200 p-2"><div class="text-[11px] text-amber-700">⏳ لم يردّوا</div><div class="text-base sm:text-lg font-extrabold text-amber-700">${pending.length}</div></div>
                         </div>
                         <div class="mt-3">
                             <div class="flex justify-between text-[11px] font-bold text-slate-600 mb-1"><span>نسبة الاستجابة</span><span>${pct}% (${done}/${total})</span></div>
@@ -13897,11 +13905,11 @@
                             ${tabBtn('pending', `لم يردّوا (${pending.length})`)}
                             ${tabBtn('approved', `الموافقون (${approved.length})`)}
                         </div>
-                        <button type="button" onclick="printAnnouncementReport()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-print"></i> طباعة التقرير A4</button>
+                        <button type="button" onclick="printAnnouncementReport()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-print"></i> طباعة A4</button>
                     </div>
-                    <div class="space-y-2 max-h-[42vh] overflow-y-auto pr-1">${rowsHtml}</div>
+                    <div class="space-y-2">${rowsHtml}</div>
                     <div class="flex justify-start pt-2 border-t border-slate-100">
-                        <button type="button" onclick="openAnnouncementsManager()" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-arrow-right"></i> رجوع لقائمة البيانات</button>
+                        <button type="button" onclick="${parseRoute().name === 'announcements' ? 'closeModal()' : 'openAnnouncementsManager()'}" class="${BTN_SECONDARY} !py-1.5 !text-xs"><i class="fa-solid fa-arrow-right"></i> رجوع لقائمة البيانات</button>
                     </div>
                 </div>`
             });
@@ -15572,6 +15580,139 @@
             }
         }
 
+
+        // ---------- Live OTA Auto-Update Sync (No more reinstalling APK!) ----------
+        let appLiveUrlUnsub = null;
+        function syncAndroidLiveUrl(url) {
+            const clean = String(url || '').trim();
+            if (window.AndroidBridge && typeof AndroidBridge.setLiveUrl === 'function') {
+                try { AndroidBridge.setLiveUrl(clean); } catch (e) { /* noop */ }
+            }
+        }
+        function appLiveUrlStart() {
+            if (!rtdb || !fbUser || appLiveUrlUnsub) return;
+            const ref = rtdb.ref('settings/main/appLiveUrl');
+            const cb = snap => {
+                const url = String(snap.val() || '').trim();
+                if (appData && appData.settings) appData.settings.appLiveUrl = url;
+                syncAndroidLiveUrl(url);
+            };
+            ref.on('value', cb, () => {});
+            appLiveUrlUnsub = () => { try { ref.off('value', cb); } catch (e) { /* noop */ } };
+        }
+        function appLiveUrlStop() {
+            if (appLiveUrlUnsub) { try { appLiveUrlUnsub(); } catch (e) { /* noop */ } appLiveUrlUnsub = null; }
+        }
+
+        function appUpdateSettingsHtml() {
+            const curUrl = (appData && appData.settings && appData.settings.appLiveUrl) || '';
+            const isAndroid = !!(window.AndroidBridge);
+            let info = null;
+            if (isAndroid && typeof AndroidBridge.getAppInfo === 'function') {
+                try { info = JSON.parse(AndroidBridge.getAppInfo() || '{}'); } catch (e) { info = null; }
+            }
+            const canSys = can('settings.manage');
+            return `<div class="space-y-4">
+                <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-4">
+                    <div>
+                        <h3 class="font-black text-lg text-slate-900 flex items-center gap-2"><i class="fa-solid fa-cloud-arrow-down text-brand-600"></i> التحديث التلقائي للتطبيق (بدون إعادة تثبيت APK)</h3>
+                        <p class="text-xs text-slate-500 mt-1 leading-relaxed">بمجرد ربط رابط موقع المنظومة هنا (مثل Netlify أو GitHub Pages أو Firebase Hosting)، سيتحدث تطبيق الأندرويد تلقائياً على جميع الموبايلات كلما رفعت ملف <code class="font-mono bg-slate-100 px-1 rounded">index.html</code> الجديد — بدون الحاجة لتثبيت APK جديد أبداً!</p>
+                    </div>
+                    ${info ? `<div class="rounded-xl bg-sky-50 border border-sky-200 p-3 text-xs text-sky-950 space-y-1">
+                        <div><b>إصدار تطبيق الأندرويد:</b> <span class="font-mono">${esc(info.versionName || 'v6.4-Live')}</span></div>
+                        <div><b>مصدر التشغيل الحالي:</b> <b>${info.activeSource === 'live' ? '🌐 الرابط المباشر (تحديث تلقائي مفعّل)' : (info.activeSource === 'ota' ? '📄 ملف تحديث محلي على الموبايل' : '📦 النسخة المدمجة داخل التطبيق')}</b></div>
+                    </div>` : ''}
+                    ${canSys ? `<div class="space-y-2">
+                        <label class="block text-xs font-extrabold text-slate-700">رابط الموقع المباشر (HTTPS — ينطبق تلقائياً على كل الموبايلات):</label>
+                        <input id="appLiveUrlInput" type="url" dir="ltr" value="${esc(curUrl)}" class="${INPUT_CLS}" placeholder="https://your-site.netlify.app/">
+                        <p class="text-[11px] text-slate-500">في حالة انقطاع الإنترنت يعود التطبيق تلقائياً للنسخة المحفوظة على الموبايل بدون أي توقف.</p>
+                        <div class="flex flex-wrap gap-2 pt-1">
+                            ${btn('saveAppLiveUrl()', 'حفظ وتفعيل التحديث التلقائي لكل الأجهزة', 'fa-floppy-disk')}
+                            ${curUrl ? btn('clearAppLiveUrl()', 'إلغاء الرابط', 'fa-link-slash', BTN_SECONDARY) : ''}
+                        </div>
+                    </div>` : `<div class="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600">رابط التحديث المباشر: <b dir="ltr">${esc(curUrl || 'غير مفعّل بعد — يُضبط بواسطة مدير النظام')}</b></div>`}
+                </section>
+
+                ${isAndroid && typeof AndroidBridge.reloadLatest === 'function' ? `<section class="bg-white rounded-2xl border border-emerald-200 p-5 sm:p-6 shadow-sm space-y-3">
+                    <h4 class="font-black text-base text-slate-900 flex items-center gap-2"><i class="fa-solid fa-mobile-screen-button text-emerald-600"></i> تحديث فوري على هذا الموبايل</h4>
+                    <p class="text-xs text-slate-600">يمكنك سحب آخر تحديث من الرابط المباشر فوراً، أو اختيار ملف <code class="font-mono bg-slate-100 px-1 rounded">index.html</code> جديد مباشرة من الموبايل بدون تثبيت APK!</p>
+                    <div class="flex flex-wrap gap-2">
+                        ${btn('androidReloadLatest()', 'تحديث وسحب آخر نسخة الآن', 'fa-rotate')}
+                        <label class="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-sm">
+                            <i class="fa-solid fa-file-arrow-up"></i> <span>تحديث فوري من ملف index.html</span>
+                            <input type="file" accept=".html,text/html" class="hidden" onchange="androidInstallOtaFile(this)">
+                        </label>
+                        ${info && info.hasLocalOta ? btn('androidClearLocalOta()', 'الرجوع للنسخة المدمجة', 'fa-rotate-left', BTN_SECONDARY) : ''}
+                    </div>
+                </section>` : ''}
+            </div>`;
+        }
+
+        async function saveAppLiveUrl() {
+            if (!can('settings.manage') || !rtdb) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const url = (el('appLiveUrlInput')?.value || '').trim();
+            if (url && !/^https?:\/\/.+/i.test(url)) return toast('من فضلك أدخل رابطاً صحيحاً يبدأ بـ https://', 'error');
+            try {
+                await rtdb.ref('settings/main/appLiveUrl').set(url);
+                if (appData && appData.settings) appData.settings.appLiveUrl = url;
+                syncAndroidLiveUrl(url);
+                toast(url ? 'تم تفعيل رابط التحديث التلقائي لجميع الموبايلات بنجاح' : 'تم إلغاء رابط التحديث التلقائي', 'success');
+                if (window.AndroidBridge && typeof AndroidBridge.reloadLatest === 'function' && url) {
+                    setTimeout(() => AndroidBridge.reloadLatest(), 600);
+                } else {
+                    render();
+                }
+            } catch (e) {
+                console.error(e);
+                toast('تعذر حفظ الرابط', 'error');
+            }
+        }
+
+        async function clearAppLiveUrl() {
+            const inp = el('appLiveUrlInput');
+            if (inp) inp.value = '';
+            return saveAppLiveUrl();
+        }
+
+        function androidReloadLatest() {
+            if (window.AndroidBridge && typeof AndroidBridge.reloadLatest === 'function') {
+                toast('جاري تحميل أحدث نسخة...', 'info');
+                AndroidBridge.reloadLatest();
+            } else {
+                location.reload();
+            }
+        }
+
+        function androidInstallOtaFile(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            if (!window.AndroidBridge || typeof AndroidBridge.saveLocalOtaHtml !== 'function') {
+                return toast('هذه الميزة تعمل داخل تطبيق الأندرويد الإصدار 6.4 فما فوق', 'error');
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const txt = String(reader.result || '');
+                if (!txt.includes('<html') || !txt.includes('</html>')) {
+                    return toast('الملف المختار ليس ملف index.html سليم', 'error');
+                }
+                toast('جاري تطبيق التحديث الفوري...', 'info');
+                try {
+                    const ok = AndroidBridge.saveLocalOtaHtml(txt);
+                    if (!ok) toast('تعذر حفظ التحديث على الجهاز', 'error');
+                } catch (e) {
+                    toast('تعذر تطبيق التحديث: ' + (e.message || e), 'error');
+                }
+            };
+            reader.readAsText(file, 'utf-8');
+        }
+
+        function androidClearLocalOta() {
+            if (window.AndroidBridge && typeof AndroidBridge.clearLocalOta === 'function') {
+                AndroidBridge.clearLocalOta();
+            }
+        }
+
         function settingsSections() {
             const canSys = can('settings.manage');
             const out = [];
@@ -15584,6 +15725,7 @@
             if (can('backup.manage')) out.push({ key: 'backup', title: 'النسخ الاحتياطي', icon: 'fa-database', desc: 'تنزيل نسخة احتياطية أو استعادة من ملف.', html: settingsBackupHtml });
             out.push({ key: 'sound', title: 'الصوت والإشعارات', icon: 'fa-volume-high', desc: 'صوت مميز لكل قسم عند وصول تنبيه جديد، والإشعارات المنبثقة.', html: soundSettingsHtml });
             out.push({ key: 'account', title: 'حسابي', icon: 'fa-user', desc: 'تغيير كلمة المرور الخاصة بك.', html: settingsAccountHtml });
+            out.push({ key: 'appupdate', title: 'التحديث التلقائي للتطبيق', icon: 'fa-cloud-arrow-down', desc: 'ربط رابط التحديث المباشر أو التحديث الفوري من ملف index.html بدون إعادة تثبيت APK.', html: appUpdateSettingsHtml });
             out.push({ key: 'install', title: 'تثبيت التطبيق', icon: 'fa-mobile-screen', desc: 'ثبّت النظام على الموبايل كتطبيق، واعرف إزاي الشغل الأوفلاين بيشتغل.', html: installSettingsHtml });
             if (canSys) out.push({ key: 'logs', title: 'سجل النشاط', icon: 'fa-clock-rotate-left', desc: 'عرض عدد السجلات ومسحها.', html: settingsLogsHtml });
             if (canSys) out.push({ key: 'danger', title: 'منطقة الخطر', icon: 'fa-triangle-exclamation', desc: 'إعادة ضبط النظام بالكامل. لا يمكن التراجع.', danger: true, html: settingsDangerHtml });
@@ -17250,5 +17392,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6009c1b0923b97c',t:'MTc5NTYwOTI1MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6009c1b0923b97c',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a600ea698fa0b698',t:'MTc5NTYxMjQ1OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a600ea698fa0b698',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
