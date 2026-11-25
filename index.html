@@ -12478,7 +12478,7 @@
                 .ap-backdrop.ap-open{opacity:1}
                 .ap-panel{position:fixed;z-index:48;display:flex;flex-direction:column;border-radius:1.45rem;background:#ffffff;border:1px solid rgba(148,163,184,.28);box-shadow:0 28px 65px -16px rgba(15,23,42,.42),0 0 0 1px rgba(255,255,255,.65) inset;will-change:transform,opacity;transition:transform .36s cubic-bezier(.22,1,.36,1),opacity .28s ease;touch-action:pan-y;overflow:hidden}
                 .ap-panel.ap-urgent{border-color:rgba(244,63,94,.42);box-shadow:0 28px 70px -14px rgba(159,18,57,.38),0 0 0 1px rgba(255,255,255,.7) inset}
-                .ap-panel.ap-center{top:50%;left:50%;width:min(34.5rem,calc(100vw - 1.5rem));max-height:min(86vh,46rem);transform:translate3d(-50%,-50%,0) scale(.93);opacity:0}
+                .ap-panel.ap-center{top:50%;left:50%;width:min(34.5rem,calc(100vw - 1.25rem));max-height:min(86vh,46rem);max-height:min(86dvh,46rem);transform:translate3d(-50%,-50%,0) scale(.93);opacity:0}
                 .ap-panel.ap-center.ap-open{transform:translate3d(-50%,-50%,0) scale(1)!important;opacity:1!important}
                 .ap-panel.ap-left{top:4.8rem;left:.9rem;width:min(24.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);transform:translate3d(-115%,0,0);opacity:0}
                 .ap-panel.ap-right{top:4.8rem;right:.9rem;width:min(24.5rem,calc(100vw - 1.5rem));max-height:calc(100vh - 6rem);transform:translate3d(115%,0,0);opacity:0}
@@ -13084,7 +13084,7 @@
                     </div>
                 </div>` : ''}` : '';
 
-            return `<article class="rounded-2xl border-2 ${cardCls} p-4 sm:p-5 shadow-sm transition-all ${isPendingMandatory ? 'ring-2 ring-rose-400/50' : ''}">
+            return `<article class="rounded-2xl border-2 ${cardCls} p-3.5 sm:p-5 shadow-sm transition-all max-w-full overflow-hidden min-w-0 ${isPendingMandatory ? 'ring-2 ring-rose-400/50' : ''}">
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div class="flex flex-wrap items-center gap-2">
                         <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-extrabold ${badgeCls}">
@@ -13099,8 +13099,8 @@
                         <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-2 py-1 rounded-lg bg-white/90 hover:bg-white border border-slate-300 text-slate-700 text-xs font-bold" title="تعديل البيان"><i class="fa-solid fa-pen"></i></button>
                     </div>` : ''}
                 </div>
-                <h3 class="mt-2.5 text-base sm:text-lg font-extrabold ${titleCls}">${esc(a.title || '')}</h3>
-                <p class="mt-1.5 text-sm text-slate-800 leading-relaxed whitespace-pre-line font-medium">${esc(a.body || '')}</p>
+                <h3 class="mt-2.5 text-sm sm:text-lg font-extrabold break-words ${titleCls}">${esc(a.title || '')}</h3>
+                <p class="mt-1.5 text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-line break-words font-medium">${esc(a.body || '')}</p>
                 ${a.eventDate ? `<div class="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white/80 border border-slate-200 text-xs font-bold text-slate-700"><i class="fa-solid fa-calendar-day text-brand-600"></i> ${esc(a.eventDate)}</div>` : ''}
                 ${a.image ? `<div class="mt-3"><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-56 rounded-xl border border-slate-200 object-contain bg-white cursor-zoom-in shadow-sm"></div>` : ''}
                 <div class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
@@ -13987,38 +13987,38 @@
 
             if (!isMgr) {
                 const ordered = [...pendingToMe, ...targetedToMe.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)))];
-                return `<div class="space-y-4">
-                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                            <div class="text-xs font-bold text-slate-500">الإعلانات الموجهة لك</div>
-                            <div class="text-2xl font-black text-slate-900 mt-1">${targetedToMe.length}</div>
+                return `<div class="space-y-3.5 max-w-full overflow-x-hidden">
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
+                        <div class="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-sm min-w-0">
+                            <div class="text-[11px] sm:text-xs font-bold text-slate-500 truncate">الإعلانات الموجهة لك</div>
+                            <div class="text-xl sm:text-2xl font-black text-slate-900 mt-1">${targetedToMe.length}</div>
                         </div>
-                        <div class="bg-white rounded-2xl border ${pendingToMe.length ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} p-4 shadow-sm">
-                            <div class="text-xs font-bold ${pendingToMe.length ? 'text-rose-700' : 'text-slate-500'}">بانتظار ردك</div>
-                            <div class="text-2xl font-black ${pendingToMe.length ? 'text-rose-700' : 'text-emerald-600'} mt-1">${pendingToMe.length}</div>
+                        <div class="bg-white rounded-2xl border ${pendingToMe.length ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} p-3 sm:p-4 shadow-sm min-w-0">
+                            <div class="text-[11px] sm:text-xs font-bold ${pendingToMe.length ? 'text-rose-700' : 'text-slate-500'} truncate">بانتظار ردك</div>
+                            <div class="text-xl sm:text-2xl font-black ${pendingToMe.length ? 'text-rose-700' : 'text-emerald-600'} mt-1">${pendingToMe.length}</div>
                         </div>
-                        <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm col-span-2 sm:col-span-1">
-                            <div class="text-xs font-bold text-slate-500">تم الرد عليها</div>
-                            <div class="text-2xl font-black text-emerald-700 mt-1">${targetedToMe.length - pendingToMe.length}</div>
+                        <div class="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-sm col-span-2 sm:col-span-1 min-w-0">
+                            <div class="text-[11px] sm:text-xs font-bold text-slate-500 truncate">تم الرد عليها</div>
+                            <div class="text-xl sm:text-2xl font-black text-emerald-700 mt-1">${targetedToMe.length - pendingToMe.length}</div>
                         </div>
                     </div>
                     ${ordered.length
                         ? `<div class="space-y-3">${ordered.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
-                        : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500">
+                        : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-10 text-center text-slate-500">
                             <i class="fa-solid fa-bullhorn text-3xl text-slate-300 mb-2 block"></i>
-                            <div class="font-bold">لا توجد بيانات أو إعلانات نشطة موجهة لك حالياً</div>
+                            <div class="font-bold text-sm">لا توجد بيانات أو إعلانات نشطة موجهة لك حالياً</div>
                         </div>`}
                 </div>`;
             }
 
-            const tabBtn = (k, lbl) => `<button type="button" onclick="annSetPageTab('${k}')" class="px-3.5 py-2 rounded-xl text-xs font-extrabold transition-colors ${annPageTab === k ? 'bg-brand-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'}">${lbl}</button>`;
+            const tabBtn = (k, lbl) => `<button type="button" onclick="annSetPageTab('${k}')" class="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-extrabold transition-colors whitespace-nowrap ${annPageTab === k ? 'bg-brand-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'}">${lbl}</button>`;
 
             let listHtml = '';
             if (annPageTab === 'mine') {
                 const ordered = [...pendingToMe, ...targetedToMe.filter(a => !(a.requireResponse !== false && !annMyEffectiveResponse(a)))];
                 listHtml = ordered.length
                     ? `<div class="space-y-3">${ordered.map(a => annCardHtml(a, a.requireResponse !== false && !annMyEffectiveResponse(a))).join('')}</div>`
-                    : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500 text-sm">لا توجد بيانات نشطة موجهة لحسابك حالياً</div>`;
+                    : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-10 text-center text-slate-500 text-sm">لا توجد بيانات نشطة موجهة لحسابك حالياً</div>`;
             } else {
                 const items = annPageTab === 'active' ? activeAll : (annPageTab === 'inactive' ? inactiveAll : (annPageTab === 'penalties' ? penaltyAll : annList));
                 listHtml = items.length ? `<div class="space-y-3">${items.map(a => {
@@ -14026,71 +14026,82 @@
                     const c = annPageCounts[a.id] || { ok: '…', obj: '…' };
                     const exp = annIsExpired(a);
                     const stateBadge = a.active === false
-                        ? '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">متوقف</span>'
-                        : (exp ? '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">منتهي الصلاحية</span>'
-                               : '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">نشط الآن</span>');
-                    return `<article class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm space-y-3">
-                        <div class="flex flex-wrap items-start justify-between gap-3">
-                            <div class="space-y-1.5 flex-1 min-w-[220px]">
+                        ? '<span class="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-slate-200 text-slate-700">متوقف</span>'
+                        : (exp ? '<span class="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-amber-100 text-amber-800">منتهي</span>'
+                               : '<span class="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-emerald-100 text-emerald-700">نشط</span>');
+                    return `<article class="bg-white rounded-2xl border ${annIsPenalty(a) ? 'border-red-200' : 'border-slate-200'} p-3.5 sm:p-5 shadow-sm space-y-3 min-w-0 max-w-full overflow-hidden">
+                        <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
+                            <div class="space-y-1.5 flex-1 min-w-0">
                                 <div class="flex flex-wrap items-center gap-1.5">
-                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}</span>
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-extrabold ${badgeCls}"><i class="fa-solid ${icon}"></i> ${esc(a.badge || typeLabel)}</span>
                                     ${stateBadge}
-                                    ${a.requireResponse !== false ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">إلزامي بالرد</span>' : '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600">إعلان عام</span>'}
-                                    ${(Number(a.revision) || 1) > 1 ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">تحديث #${Number(a.revision)}</span>` : ''}
+                                    ${a.requireResponse !== false ? '<span class="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">إلزامي</span>' : '<span class="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-slate-100 text-slate-600">عام</span>'}
+                                    ${(Number(a.revision) || 1) > 1 ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">#${Number(a.revision)}</span>` : ''}
                                 </div>
-                                <h3 class="font-black text-slate-900 text-base">${esc(a.title || '')}</h3>
-                                <p class="text-sm text-slate-700 whitespace-pre-line leading-relaxed">${esc(a.body || '')}</p>
-                                ${a.eventDate ? `<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900"><i class="fa-solid fa-calendar-day text-amber-600"></i> ${esc(a.eventDate)}</div>` : ''}
-                                ${a.image ? `<div><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-40 rounded-xl border border-slate-200 object-contain bg-slate-50 cursor-zoom-in"></div>` : ''}
-                                <div class="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-1 pt-1">
-                                    <span><i class="fa-solid fa-users"></i> الفئة: <b>${esc(annAudienceLabel(a))}</b></span>
+                                <h3 class="font-black text-slate-900 text-sm sm:text-base break-words leading-snug">${esc(a.title || '')}</h3>
+                                <p class="text-xs sm:text-sm text-slate-700 whitespace-pre-line break-words leading-relaxed">${esc(a.body || '')}</p>
+                                ${a.eventDate ? `<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-[11px] sm:text-xs font-bold text-amber-900 max-w-full break-words"><i class="fa-solid fa-calendar-day text-amber-600 shrink-0"></i> <span class="break-words">${esc(a.eventDate)}</span></div>` : ''}
+                                ${a.image ? `<div><img src="${esc(a.image)}" alt="" onclick="window.open(this.src,'_blank')" class="max-h-40 max-w-full rounded-xl border border-slate-200 object-contain bg-slate-50 cursor-zoom-in"></div>` : ''}
+                                <div class="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-1 pt-1 break-words">
+                                    <span class="break-words"><i class="fa-solid fa-users"></i> الفئة: <b>${esc(annAudienceLabel(a))}</b></span>
                                     <span><i class="fa-solid fa-user-tie"></i> ${esc(a.createdBy || 'الإدارة')}</span>
                                     <span><i class="fa-regular fa-clock"></i> ${esc(fmtWaDate((a.updatedAt || a.createdAt || '').slice(0, 10)))}</span>
                                     ${a.expiresAt ? `<span><i class="fa-solid fa-hourglass-end"></i> ينتهي: ${esc(fmtWaDate(a.expiresAt))}</span>` : ''}
                                 </div>
                             </div>
-                            <div class="flex flex-wrap items-center gap-2 shrink-0">
-                                <button type="button" onclick="openAnnouncementReport('${esc(a.id)}','approved')" class="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-black">✅ <span id="annCntOk_${esc(a.id)}">${c.ok}</span></button>
-                                <button type="button" onclick="openAnnouncementReport('${esc(a.id)}','objected')" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 text-xs font-black">✋ <span id="annCntObj_${esc(a.id)}">${c.obj}</span></button>
+                            <div class="flex items-center gap-2 shrink-0 self-start">
+                                <button type="button" onclick="openAnnouncementReport('${esc(a.id)}','approved')" class="px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-black">✅ <span id="annCntOk_${esc(a.id)}">${c.ok}</span></button>
+                                <button type="button" onclick="openAnnouncementReport('${esc(a.id)}','objected')" class="px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 text-xs font-black">✋ <span id="annCntObj_${esc(a.id)}">${c.obj}</span></button>
                             </div>
                         </div>
-                        <div class="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
-                            <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-chart-pie"></i> تقرير الردود والاعتراضات</button>
-                            <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid fa-pen"></i> تعديل</button>
-                            <button type="button" onclick="annToggleActive('${esc(a.id)}')" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid ${a.active === false ? 'fa-play text-emerald-600' : 'fa-pause text-amber-600'}"></i> ${a.active === false ? 'تفعيل' : 'إيقاف مؤقت'}</button>
-                            <button type="button" onclick="annDelete('${esc(a.id)}')" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1 mr-auto"><i class="fa-solid fa-trash-can"></i> حذف</button>
+                        <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-2.5 border-t border-slate-100">
+                            <button type="button" onclick="openAnnouncementReport('${esc(a.id)}')" class="flex-1 sm:flex-none justify-center px-3 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-chart-pie"></i> الردود والاعتراضات</button>
+                            <button type="button" onclick="openAnnouncementForm('${esc(a.id)}')" class="px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid fa-pen"></i> تعديل</button>
+                            <button type="button" onclick="annToggleActive('${esc(a.id)}')" class="px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1"><i class="fa-solid ${a.active === false ? 'fa-play text-emerald-600' : 'fa-pause text-amber-600'}"></i> ${a.active === false ? 'تفعيل' : 'إيقاف'}</button>
+                            <button type="button" onclick="annDelete('${esc(a.id)}')" class="px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1 sm:mr-auto"><i class="fa-solid fa-trash-can"></i> حذف</button>
                         </div>
                     </article>`;
-                }).join('')}</div>` : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-500 text-sm">
+                }).join('')}</div>` : `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-10 text-center text-slate-500 text-sm">
                     <i class="fa-solid fa-bullhorn text-3xl text-slate-300 mb-2 block"></i>
                     لا توجد بيانات أو إعلانات في هذا التصنيف حالياً.
                 </div>`;
             }
 
-            return `<div class="space-y-4">
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                        <div class="text-xs font-bold text-slate-500">إجمالي البيانات</div>
-                        <div class="text-2xl font-black text-slate-900 mt-1">${annList.length}</div>
+            return `<div class="space-y-3.5 sm:space-y-4 max-w-full overflow-x-hidden">
+                <div class="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+                    <button type="button" onclick="openAnnouncementForm()" class="justify-center inline-flex items-center gap-1.5 px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs sm:text-sm font-extrabold shadow-sm transition-colors">
+                        <i class="fa-solid fa-plus"></i> <span>بيان / إعلان جديد</span>
+                    </button>
+                    <button type="button" onclick="openPenaltyForm()" class="justify-center inline-flex items-center gap-1.5 px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl bg-red-700 hover:bg-red-800 text-white text-xs sm:text-sm font-extrabold shadow-sm transition-colors">
+                        <i class="fa-solid fa-gavel"></i> <span>خصم / جزاء لموظف</span>
+                    </button>
+                    <button type="button" onclick="navigate('settings/popups')" class="col-span-2 sm:col-span-1 justify-center inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm font-bold shadow-xs transition-colors sm:mr-auto">
+                        <i class="fa-solid fa-window-restore text-brand-600"></i> <span>إعدادات القوائم المنبثقة</span>
+                    </button>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+                    <div class="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-sm min-w-0">
+                        <div class="text-[11px] sm:text-xs font-bold text-slate-500 truncate">إجمالي البيانات</div>
+                        <div class="text-xl sm:text-2xl font-black text-slate-900 mt-0.5">${annList.length}</div>
                     </div>
-                    <div class="bg-white rounded-2xl border border-emerald-200 p-4 shadow-sm">
-                        <div class="text-xs font-bold text-emerald-700">نشطة حالياً</div>
-                        <div class="text-2xl font-black text-emerald-700 mt-1">${activeAll.length}</div>
+                    <div class="bg-white rounded-2xl border border-emerald-200 p-3 sm:p-4 shadow-sm min-w-0">
+                        <div class="text-[11px] sm:text-xs font-bold text-emerald-700 truncate">نشطة حالياً</div>
+                        <div class="text-xl sm:text-2xl font-black text-emerald-700 mt-0.5">${activeAll.length}</div>
                     </div>
-                    <div class="bg-white rounded-2xl border ${pendingToMe.length ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} p-4 shadow-sm">
-                        <div class="text-xs font-bold ${pendingToMe.length ? 'text-rose-700' : 'text-slate-500'}">بانتظار ردك</div>
-                        <div class="text-2xl font-black ${pendingToMe.length ? 'text-rose-700' : 'text-slate-800'} mt-1">${pendingToMe.length}</div>
+                    <div class="bg-white rounded-2xl border ${pendingToMe.length ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'} p-3 sm:p-4 shadow-sm min-w-0">
+                        <div class="text-[11px] sm:text-xs font-bold ${pendingToMe.length ? 'text-rose-700' : 'text-slate-500'} truncate">بانتظار ردك</div>
+                        <div class="text-xl sm:text-2xl font-black ${pendingToMe.length ? 'text-rose-700' : 'text-slate-800'} mt-0.5">${pendingToMe.length}</div>
                     </div>
-                    <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                        <div class="text-xs font-bold text-slate-500">متوقفة / منتهية</div>
-                        <div class="text-2xl font-black text-slate-600 mt-1">${inactiveAll.length}</div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-sm min-w-0">
+                        <div class="text-[11px] sm:text-xs font-bold text-slate-500 truncate">متوقفة / منتهية</div>
+                        <div class="text-xl sm:text-2xl font-black text-slate-600 mt-0.5">${inactiveAll.length}</div>
                     </div>
                 </div>
-                <div class="flex flex-wrap items-center gap-2">
+                <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
                     ${tabBtn('all', `الكل (${annList.length})`)}
                     ${tabBtn('active', `نشطة (${activeAll.length})`)}
                     ${tabBtn('penalties', `⚖️ الخصومات والجزاءات (${penaltyAll.length})`)}
-                    ${tabBtn('inactive', `متوقفة / منتهية (${inactiveAll.length})`)}
+                    ${tabBtn('inactive', `متوقفة (${inactiveAll.length})`)}
                     ${tabBtn('mine', `الموجهة لي (${targetedToMe.length})`)}
                 </div>
                 ${listHtml}
@@ -14101,15 +14112,9 @@
             const isMgr = annCanManage();
             return {
                 title: 'البيانات والإعلانات',
-                actions: isMgr
-                    ? `<div class="flex flex-wrap items-center gap-2">
-                        ${btn("navigate('settings/popups')", 'إعدادات القوائم المنبثقة', 'fa-window-restore', BTN_SECONDARY)}
-                        ${btn('openPenaltyForm()', 'قرار خصم / جزاء لموظف', 'fa-gavel', 'inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-700 hover:bg-red-800 text-white text-sm font-bold shadow-sm transition-colors')}
-                        ${btn('openAnnouncementForm()', 'إضافة بيان / إعلان جديد', 'fa-plus')}
-                    </div>`
-                    : '',
+                actions: '',
                 after: () => { if (isMgr) annLoadPageCounts(); },
-                html: `<div id="annPageBody">${annPageInnerHtml()}</div>`
+                html: `<div id="annPageBody" class="max-w-full overflow-x-hidden">${annPageInnerHtml()}</div>`
             };
         }
 
@@ -17245,5 +17250,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6007765dd433d73',t:'MTc5NTYwNzc0Nw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6007765dd433d73',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6009c1b0923b97c',t:'MTc5NTYwOTI1MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6009c1b0923b97c',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
