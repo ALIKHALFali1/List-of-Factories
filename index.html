@@ -1366,6 +1366,11 @@
                     date: String(c.date || ''), customer: String(c.customer || ''), repId: String(c.repId || ''), repName: String(c.repName || ''),
                     category: String(c.category || ''), completeness: String(c.completeness || ''), validUntil: String(c.validUntil || ''),
                     delivery: CUST_DELIVERY.includes(c.delivery) ? c.delivery : 'لم تُسلم', booking: String(c.booking || ''), notes: String(c.notes || ''), customerPhone: String(c.customerPhone || ''),
+                    customerPhones: Array.isArray(c.customerPhones)
+                        ? c.customerPhones.filter(x => x && x.phone).map(x => ({ phone: String(x.phone).slice(0, 12), type: x.type === 'call' ? 'call' : 'whatsapp' }))
+                        : (c.customerPhones && typeof c.customerPhones === 'object'
+                            ? Object.values(c.customerPhones).filter(x => x && x.phone).map(x => ({ phone: String(x.phone).slice(0, 12), type: x.type === 'call' ? 'call' : 'whatsapp' }))
+                            : []),
                     transport: CUST_TRANSPORT.includes(c.transport) ? c.transport : 'بدون نقل', payMethod: CUST_PAYMETHODS.includes(c.payMethod) ? c.payMethod : 'نقدي'
                 }));
             d.logs = (Array.isArray(d.logs) ? d.logs : []).slice(0, LOG_LIMIT);
@@ -8232,7 +8237,7 @@
                 <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
                 ${canCustComments() ? `<button type="button" onclick="openCustComments('${id}')" title="تعليقات الفاتورة" aria-label="تعليقات الفاتورة" class="${BTN_ICON} relative ${pending ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'}"><i class="fa-solid fa-comments"></i>${unseen ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${unseen}</span>` : ''}</button>` : ''}
                 <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
-                ${c.customerPhone ? `<button type="button" onclick="custWhatsApp('${id}')" title="إرسال الفاتورة واتساب للعميل" aria-label="واتساب للعميل" class="${BTN_ICON} text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
+                ${custPhonesOf(c).length ? `<button type="button" onclick="custWhatsApp('${id}')" title="إرسال الفاتورة واتساب للعميل" aria-label="واتساب للعميل" class="${BTN_ICON} text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
                 ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
             </div>`;
@@ -8289,7 +8294,9 @@
                     </div>
                     <p class="font-bold text-lg text-slate-800">${esc(c.customer || '—')}</p>
                     <p class="text-sm text-slate-600">${esc(fmtDateAr(c.date) || '—')} · ${esc(c.category || '—')} · ${esc(c.completeness || '—')}</p>
-                    ${c.customerPhone ? `<p class="text-sm text-slate-600">التليفون: <span dir="ltr" class="font-mono">${esc(c.customerPhone)}</span></p>` : ''}
+                    ${custPhonesOf(c).length ? `<div class="flex flex-wrap items-center gap-1.5 text-xs">${custPhonesOf(c).map(ph => ph.type === 'call'
+                        ? `<a href="tel:${esc(ph.phone)}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-mono font-bold"><i class="fa-solid fa-phone text-[10px]"></i><span dir="ltr">${esc(ph.phone)}</span></a>`
+                        : `<button type="button" onclick="custWhatsApp('${esc(c.id)}','${esc(ph.phone)}')" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono font-bold"><i class="fa-brands fa-whatsapp text-[11px]"></i><span dir="ltr">${esc(ph.phone)}</span></button>`).join('')}</div>` : ''}
                     <div class="grid grid-cols-3 gap-2 text-center">
                         <div class="rounded-xl bg-slate-50 border border-slate-200 p-2"><p class="text-[11px] font-bold text-slate-500">المبلغ</p><p class="font-bold text-sm whitespace-nowrap">${fmtMoney(numOr0(c.amount))}</p></div>
                         <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2"><p class="text-[11px] font-bold text-emerald-700">المدفوع</p><p class="font-bold text-sm whitespace-nowrap">${fmtMoney(numOr0(c.paid))}</p></div>
@@ -8762,6 +8769,98 @@
             box.className = `${INPUT_CLS} bg-emerald-50/60 font-bold ${after > 0 ? 'text-emerald-700' : after < 0 ? 'text-rose-700' : 'text-slate-600'}`;
         }
 
+        const CUST_PHONE_MAX = 12;
+        const CUST_PHONES_LIMIT = 5;
+
+        function custCleanPhone(raw) {
+            return custLatinDigits(String(raw ?? '')).replace(/[^0-9]/g, '').slice(0, CUST_PHONE_MAX);
+        }
+
+        function custPhonesOf(c) {
+            if (!c) return [];
+            const rawList = Array.isArray(c.customerPhones)
+                ? c.customerPhones
+                : (c.customerPhones && typeof c.customerPhones === 'object' ? Object.values(c.customerPhones) : []);
+            const out = [];
+            for (const item of rawList) {
+                if (!item) continue;
+                const ph = custCleanPhone(typeof item === 'string' ? item : item.phone);
+                if (!ph) continue;
+                const type = (item && item.type === 'call') ? 'call' : 'whatsapp';
+                out.push({ phone: ph, type });
+            }
+            if (!out.length && c.customerPhone) {
+                const ph = custCleanPhone(c.customerPhone);
+                if (ph) out.push({ phone: ph, type: 'whatsapp' });
+            }
+            return out;
+        }
+
+        function custSanitizePhoneInput(inp) {
+            if (!inp) return;
+            const cleaned = custCleanPhone(inp.value);
+            if (inp.value !== cleaned) inp.value = cleaned;
+            const row = inp.closest('[data-cust-phone-row]');
+            const cnt = row ? row.querySelector('[data-phone-count]') : null;
+            if (cnt) {
+                cnt.textContent = `${cleaned.length}/${CUST_PHONE_MAX}`;
+                cnt.className = `text-[11px] font-mono font-bold px-1.5 py-0.5 rounded ${cleaned.length >= CUST_PHONE_MAX ? 'bg-amber-100 text-amber-800' : cleaned.length >= 11 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`;
+            }
+        }
+
+        function custSetPhoneRowType(btn, type) {
+            const row = btn.closest('[data-cust-phone-row]');
+            if (!row) return;
+            const hidden = row.querySelector('input[name="custPhoneType[]"]');
+            if (hidden) hidden.value = type;
+            const waBtn = row.querySelector('[data-type-btn="whatsapp"]');
+            const callBtn = row.querySelector('[data-type-btn="call"]');
+            if (waBtn) {
+                waBtn.className = type === 'whatsapp'
+                    ? 'px-2.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1 border-2 border-emerald-500 bg-emerald-50 text-emerald-700 transition cursor-pointer'
+                    : 'px-2.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1 border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 transition cursor-pointer';
+            }
+            if (callBtn) {
+                callBtn.className = type === 'call'
+                    ? 'px-2.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1 border-2 border-sky-500 bg-sky-50 text-sky-700 transition cursor-pointer'
+                    : 'px-2.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1 border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 transition cursor-pointer';
+            }
+        }
+
+        function custPhoneRowHtml(phone = '', type = 'whatsapp', removable = false) {
+            const cleaned = custCleanPhone(phone);
+            const t = type === 'call' ? 'call' : 'whatsapp';
+            const waCls = t === 'whatsapp'
+                ? 'px-2.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1 border-2 border-emerald-500 bg-emerald-50 text-emerald-700 transition cursor-pointer'
+                : 'px-2.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1 border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 transition cursor-pointer';
+            const callCls = t === 'call'
+                ? 'px-2.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1 border-2 border-sky-500 bg-sky-50 text-sky-700 transition cursor-pointer'
+                : 'px-2.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1 border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 transition cursor-pointer';
+            const cntCls = cleaned.length >= CUST_PHONE_MAX ? 'bg-amber-100 text-amber-800' : cleaned.length >= 11 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500';
+            return `<div data-cust-phone-row class="flex flex-wrap sm:flex-nowrap items-center gap-2 p-2 rounded-xl border border-slate-200 bg-slate-50/70">
+                <div class="relative flex-1 min-w-[160px] flex items-center gap-1.5">
+                    <input name="custPhoneNum[]" type="tel" inputmode="numeric" maxlength="${CUST_PHONE_MAX}" value="${esc(cleaned)}" dir="ltr" placeholder="01xxxxxxxxx" oninput="custSanitizePhoneInput(this)" class="${INPUT_CLS} font-mono !py-2">
+                    <span data-phone-count class="text-[11px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${cntCls}">${cleaned.length}/${CUST_PHONE_MAX}</span>
+                </div>
+                <input type="hidden" name="custPhoneType[]" value="${t}">
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" data-type-btn="whatsapp" onclick="custSetPhoneRowType(this,'whatsapp')" class="${waCls}" title="رقم واتساب"><i class="fa-brands fa-whatsapp text-sm"></i> واتساب</button>
+                    <button type="button" data-type-btn="call" onclick="custSetPhoneRowType(this,'call')" class="${callCls}" title="رقم اتصال"><i class="fa-solid fa-phone text-xs"></i> اتصال</button>
+                    ${removable ? `<button type="button" onclick="this.closest('[data-cust-phone-row]').remove()" title="حذف الرقم" aria-label="حذف الرقم" class="w-8 h-8 rounded-lg flex items-center justify-center text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer"><i class="fa-solid fa-trash-can text-xs"></i></button>` : ''}
+                </div>
+            </div>`;
+        }
+
+        function custAddPhoneRow() {
+            const list = el('custPhonesList');
+            if (!list) return;
+            const count = list.querySelectorAll('[data-cust-phone-row]').length;
+            if (count >= CUST_PHONES_LIMIT) return toast(`الحد الأقصى ${CUST_PHONES_LIMIT} أرقام للفاتورة الواحدة`, 'error');
+            list.insertAdjacentHTML('beforeend', custPhoneRowHtml('', 'call', true));
+            const inputs = list.querySelectorAll('input[name="custPhoneNum[]"]');
+            if (inputs.length) inputs[inputs.length - 1].focus();
+        }
+
         function openCustModal(id = null) {
             if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
             const c = id ? appData.custOrders.find(x => x.id === id) : null;
@@ -8774,6 +8873,19 @@
                 const [v, l] = Array.isArray(o) ? o : [o, o];
                 return `<option value="${esc(v)}" ${String(value ?? '') === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
             }).join('')}</select>`);
+            const existingPhones = custPhonesOf(c);
+            const initPhones = existingPhones.length ? existingPhones : [{ phone: '', type: 'whatsapp' }];
+            const phonesSection = `<div class="sm:col-span-2 space-y-2">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <label class="block text-sm font-bold text-slate-700">أرقام تليفون العميل <span class="text-xs font-normal text-slate-500">(يقفل عند 12 رقم — الافتراضي واتساب)</span></label>
+                    <button type="button" onclick="custAddPhoneRow()" class="px-2.5 py-1.5 rounded-lg text-xs font-extrabold bg-brand-50 text-brand-700 hover:bg-brand-100 border border-brand-200 flex items-center gap-1 cursor-pointer">
+                        <i class="fa-solid fa-plus"></i> إضافة رقم آخر
+                    </button>
+                </div>
+                <div id="custPhonesList" class="space-y-2">
+                    ${initPhones.map((ph, idx) => custPhoneRowHtml(ph.phone, ph.type, idx > 0)).join('')}
+                </div>
+            </div>`;
             openModal({
                 title: c ? `تعديل طلبية العميل ${custNoLabel(c)}` : 'طلبية عميل جديدة',
                 size: 'lg',
@@ -8782,7 +8894,7 @@
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('التاريخ *', `<input name="date" type="date" required value="${esc(c ? c.date : todayISO())}" class="${INPUT_CLS}">`)}
                         ${field('اسم العميل *', `<input name="customer" required value="${esc(c?.customer)}" oninput="custRemainingPreview()" class="${INPUT_CLS}">`)}
-                        ${field('تليفون العميل', `<input name="customerPhone" type="tel" value="${esc(c?.customerPhone)}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'رقم الموبايل اللي في الفاتورة')}
+                        ${phonesSection}
                         ${field('رقم الطلب *', `<input name="no" type="number" min="1" step="1" required value="${c ? esc(c.no) : nextCustNo()}" dir="ltr" class="${INPUT_CLS} font-mono">`, 'بياخد رقم تلقائي، وتقدر تكتب غيره')}
                         ${sel('repId', 'اسم المندوب', repOpts, c ? c.repId : '')}
                         ${sel('category', 'الصنف', [['', '— اختر الصنف —'], ...CUST_CATEGORIES], c ? c.category : '')}
@@ -8838,7 +8950,20 @@
                 repName: rep ? rep.name : (keepOld ? c.repName : ''),
                 booking: c ? (c.booking || '') : '',
                 transport, payMethod,
-                customerPhone: String(fd.get('customerPhone') || '').trim(),
+                ...(() => {
+                    const nums = fd.getAll('custPhoneNum[]');
+                    const types = fd.getAll('custPhoneType[]');
+                    const list = [];
+                    for (let i = 0; i < nums.length; i++) {
+                        const ph = custCleanPhone(nums[i]);
+                        if (!ph) continue;
+                        const t = types[i] === 'call' ? 'call' : 'whatsapp';
+                        list.push({ phone: ph, type: t });
+                    }
+                    const waFirst = list.find(x => x.type === 'whatsapp');
+                    const primary = waFirst ? waFirst.phone : (list[0] ? list[0].phone : '');
+                    return { customerPhone: primary, customerPhones: list };
+                })(),
                 notes: String(fd.get('notes') || '').trim()
             };
             const excess = r2(paid - amount);
@@ -9013,7 +9138,11 @@
                     <tbody>
                         <tr>
                             <th>اسم العميل</th><td>${esc(c.customer || '—')}</td>
-                            <th>تليفون العميل</th><td dir="ltr" style="text-align:right">${esc(c.customerPhone || '—')}</td>
+                            <th>تليفون العميل</th><td style="text-align:right">${(() => {
+                                const phs = custPhonesOf(c);
+                                if (!phs.length) return '—';
+                                return phs.map(p => `<div style="white-space:nowrap"><span dir="ltr" style="font-family:monospace;font-weight:700">${esc(p.phone)}</span> <span style="font-size:8.5pt;color:${p.type === 'call' ? '#0369a1' : '#047857'}">(${p.type === 'call' ? 'اتصال' : 'واتساب'})</span></div>`).join('');
+                            })()}</td>
                         </tr>
                         <tr>
                             <th>المندوب</th><td>${esc(c.repName || '—')}</td>
@@ -9074,7 +9203,13 @@
                 ${row('الرقم', `<span class="font-mono font-bold">${esc(custNoLabel(c))}</span>`)}
                 ${row('التاريخ', esc(fmtDateAr(c.date) || '—'))}
                 ${row('العميل', `<b>${esc(c.customer || '—')}</b>`)}
-                ${row('تليفون العميل', `<span dir="ltr" class="font-mono">${esc(c.customerPhone || '—')}</span>`)}
+                ${row('أرقام تليفون العميل', (() => {
+                    const phs = custPhonesOf(c);
+                    if (!phs.length) return '—';
+                    return `<div class="flex flex-wrap justify-end gap-1.5">${phs.map(ph => ph.type === 'call'
+                        ? `<a href="tel:${esc(ph.phone)}" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-200 font-mono text-xs font-bold hover:bg-sky-100"><i class="fa-solid fa-phone"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">اتصال</span></a>`
+                        : `<button type="button" onclick="custWhatsApp('${esc(c.id)}','${esc(ph.phone)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono text-xs font-bold hover:bg-emerald-100 cursor-pointer"><i class="fa-brands fa-whatsapp"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">واتساب</span></button>`).join('')}</div>`;
+                })())}
                 ${row('المندوب', esc(c.repName || '—'))}
                 ${row('الصنف', esc(c.category || '—'))}
                 ${row('حالة الطلبية', esc(c.completeness || '—'))}
@@ -9136,10 +9271,30 @@
             'IBAN:',
             '`EG69000201820001000007008`'
         ].join('\n');
-        function custWhatsApp(id) {
+        function custWhatsApp(id, explicitPhone = '') {
             const c = appData.custOrders.find(x => x.id === id);
             if (!c) return;
-            const phone = custWaPhone(c.customerPhone);
+            let chosenRaw = String(explicitPhone || '').trim();
+            if (!chosenRaw) {
+                const phs = custPhonesOf(c);
+                const waList = phs.filter(x => x.type === 'whatsapp');
+                if (waList.length > 1) {
+                    openModal({
+                        title: `اختر رقم الواتساب — ${esc(c.customer || '')}`,
+                        size: 'sm',
+                        body: `<div class="space-y-2">
+                            <p class="text-xs text-slate-600">الفاتورة مسجل عليها أكثر من رقم واتساب، اختر الرقم المراد الإرسال إليه:</p>
+                            ${waList.map(p => `<button type="button" onclick="closeModal();custWhatsApp('${esc(c.id)}','${esc(p.phone)}')" class="w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold cursor-pointer">
+                                <span class="flex items-center gap-2"><i class="fa-brands fa-whatsapp text-lg"></i> رقم واتساب</span>
+                                <span dir="ltr" class="font-mono text-sm">${esc(p.phone)}</span>
+                            </button>`).join('')}
+                        </div>`
+                    });
+                    return;
+                }
+                chosenRaw = (waList[0] || phs[0])?.phone || c.customerPhone || '';
+            }
+            const phone = custWaPhone(chosenRaw);
             if (!phone) return toast('الفاتورة دي مفيهاش رقم تليفون عميل — ضيفه من تعديل الفاتورة', 'error');
             const remaining = custRemaining(c);
             const holdDate = custHoldDate(c), dueDate = custBalanceDueDate(c);
@@ -9159,6 +9314,7 @@
                 '',
                 '🧾 *فاتورة رقم:* ' + custNoLabel(c).replace('رقم ', ''),
                 ...(c.date ? ['📅 *تاريخ الفاتورة:* ' + fmtWaDate(c.date)] : []),
+                ...(c.validUntil ? ['⏳ *تاريخ الانتهاء:* ' + fmtWaDate(c.validUntil)] : []),
                 '',
                 '💰 *الإجمالي:* ' + fmtMoney(numOr0(c.amount)),
                 '✅ *المدفوع:* ' + fmtMoney(numOr0(c.paid)),
@@ -17702,5 +17858,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60136485ec6e1c9',t:'MTc5NTYxNTU2Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60136485ec6e1c9',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6017d7baf2a3f1d',t:'MTc5NTYxODQ4Mg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6017d7baf2a3f1d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
