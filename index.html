@@ -11527,12 +11527,13 @@
             minRemaining: 0,
             maxItems: 8,
             autoHideSec: 0,         // 0 = يدوي بالسحب فقط
-            oncePerSession: false
+            oncePerSession: true
         };
         let debtPopupCfg = { ...DEBT_POPUP_DEFAULT };
         let debtPopupCfgUnsub = null, debtPopupCfgStarted = false;
         let debtPopupDismissedSession = false;
         let debtPopupDismissedVisit = false;
+        let debtPopupShownOnce = false;
         let debtPopupAutoTimer = null;
         let debtPopupStyleInjected = false;
 
@@ -11578,6 +11579,7 @@
             debtPopupCfgStarted = false;
             debtPopupDismissedSession = false;
             debtPopupDismissedVisit = false;
+            debtPopupShownOnce = false;
             debtPopupUnmount();
         }
 
@@ -11643,7 +11645,10 @@
         function debtPopupUnmount() {
             debtPopupClearTimer();
             const p = document.getElementById('debtSidePopup');
-            if (p) p.remove();
+            if (p) {
+                if (debtPopupShownOnce) debtPopupDismissedSession = true;
+                p.remove();
+            }
             const t = document.getElementById('debtSideTab');
             if (t) t.remove();
             debtPopupDismissedVisit = false;
@@ -11676,7 +11681,7 @@
             const panel = document.getElementById('debtSidePopup');
             const count = debtPopupMatchingItems().length;
             debtPopupDismissedVisit = true;
-            if (debtPopupCfg.oncePerSession) debtPopupDismissedSession = true;
+            debtPopupDismissedSession = true;
             if (muteDevice) debtPopupSetLocalMuted(true);
             if (panel) {
                 panel.classList.remove('dp-dragging', 'dp-open');
@@ -11718,7 +11723,7 @@
                     panel.style.transform = `translate3d(${isLeft ? '-115%' : '115%'}, 0, 0)`;
                     panel.style.opacity = '0';
                     debtPopupDismissedVisit = true;
-                    if (debtPopupCfg.oncePerSession) debtPopupDismissedSession = true;
+                    debtPopupDismissedSession = true;
                     const count = debtPopupMatchingItems().length;
                     setTimeout(() => { if (panel.parentNode) panel.remove(); debtPopupRenderTab(count); if (typeof sidePopupsReflow === 'function') sidePopupsReflow(); }, 280);
                 } else {
@@ -11756,7 +11761,7 @@
             const all = debtPopupMatchingItems();
             if (!all.length) { debtPopupUnmount(); return; }
             debtPopupInjectStyle();
-            if (debtPopupLocalMuted() || debtPopupDismissedVisit || (debtPopupCfg.oncePerSession && debtPopupDismissedSession)) {
+            if (debtPopupLocalMuted() || debtPopupDismissedVisit || debtPopupDismissedSession) {
                 const oldP = document.getElementById('debtSidePopup');
                 if (oldP) oldP.remove();
                 debtPopupRenderTab(all.length);
@@ -11826,6 +11831,7 @@
                     </div>
                 </div>`;
 
+            debtPopupShownOnce = true;
             if (!alreadyOpen) {
                 requestAnimationFrame(() => requestAnimationFrame(() => {
                     if (panel && panel.parentNode) panel.classList.add('dp-open');
@@ -12336,6 +12342,8 @@
         let annPopupCfgUnsub = null;
         let annPopupStyleInjected = false;
         let annPopupDismissedVisit = false;
+        let annPopupDismissedSession = false;
+        let annPopupShownOnce = false;
         let annPopupAutoOpenedPendingKey = '';
         let annPopupSheetIdx = 0;
         let annPopupStickId = null;     // keeps the last just-answered sheet visible briefly when all pending finish so user sees confirmation + close button
@@ -12495,7 +12503,11 @@
             const b = document.getElementById('annPopupBackdrop');
             if (b) b.remove();
             const p = document.getElementById('annSidePopup');
-            if (p) p.remove();
+            if (p) {
+                const { pendingCount } = annPopupVisibleItems();
+                if (annPopupShownOnce && !annPopupIsLocked(pendingCount)) annPopupDismissedSession = true;
+                p.remove();
+            }
             const t = document.getElementById('annSideTab');
             if (t) t.remove();
             annPopupDismissedVisit = false;
@@ -12529,6 +12541,8 @@
             btnEl.onclick = () => {
                 annPopupSetLocalMuted(false);
                 annPopupDismissedVisit = false;
+                annPopupDismissedSession = false;
+                annPopupDismissedSession = false;
                 annPopupMaybeShow(true, true);
             };
             document.body.appendChild(btnEl);
@@ -12554,6 +12568,7 @@
             const panel = document.getElementById('annSidePopup');
             const backdrop = document.getElementById('annPopupBackdrop');
             annPopupDismissedVisit = true;
+            annPopupDismissedSession = true;
             if (muteDevice) annPopupSetLocalMuted(true);
             if (backdrop) {
                 backdrop.classList.remove('ap-open');
@@ -12603,6 +12618,7 @@
                     panel.style.transform = `translate3d(${isLeft ? '-115%' : '115%'}, 0, 0)`;
                     panel.style.opacity = '0';
                     annPopupDismissedVisit = true;
+                    annPopupDismissedSession = true;
                     const { visible, pendingCount } = annPopupVisibleItems();
                     setTimeout(() => { if (panel.parentNode) panel.remove(); annPopupRenderTab(visible.length, pendingCount); sidePopupsReflow(); }, 280);
                 } else {
@@ -12736,13 +12752,14 @@
             if (pendingKey && pendingKey !== annPopupAutoOpenedPendingKey) {
                 annPopupAutoOpenedPendingKey = pendingKey;
                 annPopupDismissedVisit = false;
+                annPopupDismissedSession = false;
                 annPopupStickId = null;
             }
 
             const hasPending = pendingCount > 0;
             const isLocked = annPopupIsLocked(pendingCount);
             const muted = !hasPending && annPopupLocalMuted();
-            if (!forceOpen && !isLocked && (muted || annPopupDismissedVisit)) {
+            if (!forceOpen && !isLocked && (muted || annPopupDismissedVisit || annPopupDismissedSession)) {
                 const oldB = document.getElementById('annPopupBackdrop');
                 if (oldB) oldB.remove();
                 const oldP = document.getElementById('annSidePopup');
@@ -12883,6 +12900,7 @@
                     </div>
                 </div>`;
 
+            annPopupShownOnce = true;
             if (!alreadyOpen) {
                 requestAnimationFrame(() => requestAnimationFrame(() => {
                     if (panel && panel.parentNode) panel.classList.add('ap-open');
@@ -12927,6 +12945,8 @@
             annObjectionOpenId = null;
             annPopupShownIds = new Set();
             annPopupAutoOpenedPendingKey = '';
+            annPopupDismissedSession = false;
+            annPopupShownOnce = false;
             annStarted = false;
             annPopupUnmount();
             annUpdateTopBadge();
@@ -16917,5 +16937,5 @@
         };
 
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6006c0c1c5ce220',t:'MTc5NTYwNzI4Mg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6006c0c1c5ce220',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
