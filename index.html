@@ -939,7 +939,24 @@
             return n ? `${n}%` : '-';
         }
 
-        function fmtMoney(n) { return `${n.toFixed(themeState.decimals)} ${themeState.currency}`; }
+        function fmtNumber(n, dec) {
+            const val = Number(n);
+            const num = Number.isFinite(val) ? val : 0;
+            const d = (typeof dec === 'number') ? dec : themeState.decimals;
+            const neg = num < 0 ? '-' : '';
+            const fixed = Math.abs(num).toFixed(d);
+            const [intPart, fracPart] = fixed.split('.');
+            const sepMode = themeState.thousandsSep || 'dot';
+            if (sepMode === 'none') {
+                return neg + (fracPart !== undefined ? `${intPart}.${fracPart}` : intPart);
+            }
+            const thSep = sepMode === 'dot' ? '.' : ',';
+            const decSep = sepMode === 'dot' ? ',' : '.';
+            const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, thSep);
+            return neg + (fracPart !== undefined ? `${grouped}${decSep}${fracPart}` : grouped);
+        }
+
+        function fmtMoney(n) { return `${fmtNumber(n, themeState.decimals)} ${themeState.currency}`; }
 
         /* ================================================================
            MODULE: Theme — design tokens, presets, digits, light/dark mode
@@ -953,7 +970,7 @@
             navy:  { name: 'كحلي وذهبي (كلاسيكي)', primary: '#1e3a5f', accent: '#c9a961', surface: '#fffdf7', page: '#f7f3ea' },
             green: { name: 'أخضر مصنع', primary: '#15803d', accent: '#ca8a04', surface: '#ffffff', page: '#f1f5f1' }
         };
-        const THEME_DEFAULT = { preset: 'blue', primary: '#0284c7', accent: '#c9a961', surface: '#ffffff', page: '#f1f5f9', headingFont: 'Cairo', bodyFont: 'Cairo', fontSize: 'medium', radius: 'normal', shadow: 'normal', digits: 'western', decimals: 2, currency: 'ج.م', mode: 'auto' };
+        const THEME_DEFAULT = { preset: 'blue', primary: '#0284c7', accent: '#c9a961', surface: '#ffffff', page: '#f1f5f9', headingFont: 'Cairo', bodyFont: 'Cairo', fontSize: 'medium', radius: 'normal', shadow: 'normal', digits: 'western', decimals: 2, thousandsSep: 'dot', currency: 'ج.م', mode: 'auto' };
         let themeState = { ...THEME_DEFAULT };
 
         // keeps only values this app understands; anything else is dropped
@@ -968,6 +985,7 @@
             if (['flat', 'normal', 'strong'].includes(o.shadow)) out.shadow = o.shadow;
             if (['western', 'arabic'].includes(o.digits)) out.digits = o.digits;
             if (o.decimals === 0 || o.decimals === 2) out.decimals = o.decimals;
+            if (['dot', 'comma', 'none'].includes(o.thousandsSep)) out.thousandsSep = o.thousandsSep;
             if (typeof o.currency === 'string' && o.currency.trim() && o.currency.trim().length <= 12) out.currency = o.currency.trim();
             if (typeof o.preset === 'string' && (o.preset === 'custom' || Object.prototype.hasOwnProperty.call(THEME_PRESETS, o.preset))) out.preset = o.preset;
             if (['light', 'dark', 'auto'].includes(o.mode)) out.mode = o.mode;
@@ -1028,7 +1046,7 @@
             const colorKey = ['primary', 'accent', 'surface', 'page'].includes(key);
             themeState = { ...themeState, ...patch, preset: colorKey ? 'custom' : themeState.preset };
             themeSave(); applyTheme();
-            if (key === 'decimals' || key === 'currency') render();   // money text is built on render
+            if (key === 'decimals' || key === 'currency' || key === 'thousandsSep') render();   // money text is built on render
         }
         function themePreset(name) {
             const p = THEME_PRESETS[name];
@@ -1111,6 +1129,7 @@
                         </select></label>
                     ${sel('shadow', 'الظلال', [['flat', 'بدون'], ['normal', 'عادية'], ['strong', 'قوية']], t.shadow)}
                     ${sel('digits', 'شكل الأرقام', [['western', '123'], ['arabic', '١٢٣']], t.digits)}
+                    ${sel('thousandsSep', 'فواصل الآلاف للأرقام', [['dot', 'نقطة (70.000)'], ['comma', 'فاصلة (70,000)'], ['none', 'بدون فواصل (70000)']], t.thousandsSep || 'dot')}
                     ${sel('decimals', 'الكسور العشرية للمبالغ', [[0, 'بدون'], [2, 'منزلتين']], t.decimals)}
                     <label class="block"><span class="block text-xs font-bold text-slate-700 mb-1">رمز العملة</span>
                         <input name="currency" maxlength="12" value="${esc(t.currency)}" onchange="themeSet('currency', this.value)" class="${INPUT_CLS}"></label>
@@ -1118,7 +1137,7 @@
                 <div class="mt-4 rounded-xl border border-slate-200 p-4" style="background: rgb(var(--page-bg))">
                     <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                         <p style="font-family: var(--font-heading); color: rgb(var(--brand-800)); font-weight: 700; font-size: 1.25rem">معاينة: عنوان القسم</p>
-                        <p style="font-family: var(--font-body)" class="text-sm text-slate-700 mt-1">نص تجريبي: المبلغ ${esc(fmtMoney(1250.5))}</p>
+                        <p style="font-family: var(--font-body)" class="text-sm text-slate-700 mt-1">نص تجريبي: المبلغ ${esc(fmtMoney(70000))} · ${esc(fmtMoney(1250.5))}</p>
                         <button type="button" class="mt-3 px-4 py-2 rounded-lg text-white text-sm font-bold" style="background: rgb(var(--brand-600))">زرار</button>
                         <span class="ms-2 px-3 py-1 rounded-full text-xs font-bold" style="background: rgb(var(--accent) / .25); color: rgb(var(--brand-800))">شارة مميزة</span>
                     </div>
@@ -3103,7 +3122,7 @@
         }
 
         function fmtDigits(n) {
-            return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return fmtNumber(n, themeState.decimals);
         }
 
         function updateAmountWords(value) {
@@ -9289,6 +9308,15 @@
             'IBAN:',
             '`EG69000201820001000007008`'
         ].join('\n');
+        function custWaGreeting(name) {
+            const clean = String(name || '').trim();
+            const titled = clean ? (/^(أ|ا|م|د)\s*\//.test(clean) ? clean : 'أ/' + clean) : '';
+            return [
+                '*شركة الرحمة للسيراميك ترحب بكم* 🌟',
+                '*إدارة طلبيات العملاء*',
+                ...(titled ? ['', titled] : [])
+            ];
+        }
         function custWhatsApp(id, explicitPhone = '') {
             if (!canCust('whatsapp')) return toast('ليس لديك صلاحية إرسال الفاتورة عبر واتساب', 'error');
             const c = appData.custOrders.find(x => x.id === id);
@@ -9317,19 +9345,33 @@
             if (!phone) return toast('الفاتورة دي مفيهاش رقم تليفون عميل — ضيفه من تعديل الفاتورة', 'error');
             const remaining = custRemaining(c);
             const holdDate = custHoldDate(c), dueDate = custBalanceDueDate(c);
+            const paidNotice = remaining < 0
+                ? '✅ *الحساب مسدد بالكامل*، والمبلغ الزيادة ' + fmtMoney(-remaining) + ' تم تسجيله كرصيد لصالحكم في حسابكم لدينا.'
+                : '✅ *الحساب مسدد بالكامل.*';
             const paymentText = remaining > 0 ? [
                 '',
-                '📌 *تفاصيل السداد:*',
+                '📌 *تفاصيل الحجز والسداد:*',
                 ...(holdDate ? ['• تاريخ حجز الفاتورة: ' + fmtWaDate(holdDate)] : []),
+                ...(c.validUntil ? ['• موعد انتهاء مدة الطلبية: ' + fmtWaDate(c.validUntil)] : []),
                 '• آخر موعد للسداد (خلال 7 أيام): ' + (dueDate ? fmtWaDate(dueDate) : 'خلال 7 أيام من تاريخ حجز الفاتورة'),
                 '• في حال عدم السداد خلال المهلة، سيتم فك حجز البضاعة وترحيل المبلغ المدفوع كرصيد لصالحكم في حسابكم لدينا.',
                 '',
                 CUST_BANK_INFO_TEXT,
                 '',
                 'شكرًا لتعاونكم 🙏'
-            ].join('\n') : (remaining < 0 ? '\nالحساب مسدد بالكامل، والمبلغ الزيادة ' + fmtMoney(-remaining) + ' اتسجل رصيد لصالحكم في حسابكم لدينا — شكرًا لتعاملكم معنا 🙏' : '\nالحساب مسدد بالكامل — شكرًا لتعاملكم معنا 🙏');
+            ].join('\n') : [
+                '',
+                paidNotice,
+                '',
+                '📌 *تفاصيل الحجز وموعد الانتهاء:*',
+                ...(holdDate ? ['• تاريخ حجز الفاتورة: ' + fmtWaDate(holdDate)] : []),
+                ...(c.validUntil ? ['• موعد انتهاء مدة الطلبية: ' + fmtWaDate(c.validUntil)] : []),
+                '• يُرجى استلام البضاعة قبل موعد الانتهاء الموضح أعلاه؛ وفي حال عدم الاستلام خلال المهلة، سيتم فك حجز البضاعة والاحتفاظ بالمبلغ كرصيد لصالحكم في حسابكم لدينا.',
+                '',
+                'شكرًا لتعاملكم معنا 🙏'
+            ].join('\n');
             const lines = [
-                'أهلاً ' + (c.customer || '') + ' 🌟',
+                ...custWaGreeting(c.customer),
                 '',
                 '🧾 *فاتورة رقم:* ' + custNoLabel(c).replace('رقم ', ''),
                 ...(c.date ? ['📅 *تاريخ الفاتورة:* ' + fmtWaDate(c.date)] : []),
@@ -9337,9 +9379,9 @@
                 '',
                 '💰 *الإجمالي:* ' + fmtMoney(numOr0(c.amount)),
                 '✅ *المدفوع:* ' + fmtMoney(numOr0(c.paid)),
-                '⏳ *المتبقي:* ' + fmtMoney(remaining),
+                '⏳ *المتبقي:* ' + fmtMoney(Math.max(0, remaining)),
                 paymentText,
-                '— ' + (appData.settings.systemName || 'الرحمة')
+                '— ' + (appData.settings.systemName || 'شركة الرحمة للسيراميك')
             ];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
         }
@@ -9352,16 +9394,18 @@
             const tot = rows.reduce((a, c) => a + numOr0(c.amount), 0), paid = rows.reduce((a, c) => a + numOr0(c.paid), 0);
             const rem = r2(tot - paid);
             const lines = [
-                '📋 *كشف حساب — ' + customer + '*',
+                ...custWaGreeting(customer),
                 '',
-                ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' — ' + fmtWaDate(c.date) : '') + '\n  الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' | المتبقي: ' + fmtMoney(custRemaining(c))),
+                '📋 *كشف حساب العميل:*',
+                '',
+                ...rows.map(c => '• فاتورة ' + custNoLabel(c).replace('رقم ', '') + (c.date ? ' — ' + fmtWaDate(c.date) : '') + (c.validUntil ? ' (تنتهي: ' + fmtWaDate(c.validUntil) + ')' : '') + '\n  الإجمالي: ' + fmtMoney(numOr0(c.amount)) + ' | المتبقي: ' + fmtMoney(Math.max(0, custRemaining(c)))),
                 '',
                 '💰 *الإجمالي:* ' + fmtMoney(tot),
                 '✅ *المدفوع:* ' + fmtMoney(paid),
                 (rem >= 0 ? '⏳ *المتبقي:* ' + fmtMoney(rem) : '💳 *رصيد لصالحكم عندنا:* ' + fmtMoney(-rem)),
                 ...(rem > 0 ? ['', CUST_BANK_INFO_TEXT] : []),
                 '',
-                '— ' + (appData.settings.systemName || 'الرحمة')
+                '— ' + (appData.settings.systemName || 'شركة الرحمة للسيراميك')
             ];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
         }
@@ -17198,7 +17242,7 @@
                     const end = parseFloat(raw.replace(/,/g, ''));
                     if (!window.gsap || this.level === 'lite') return;
                     const obj = { v: 0 };
-                    gsap.to(obj, { v: end, duration: .9, ease: 'power2.out', onUpdate: () => { node.textContent = Math.round(obj.v).toLocaleString('en-US'); } });
+                    gsap.to(obj, { v: end, duration: .9, ease: 'power2.out', onUpdate: () => { node.textContent = fmtNumber(Math.round(obj.v), 0); } });
                 });
             },
             bindTilt() {
@@ -17903,5 +17947,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a6020c1e7e49c0ab',t:'MTc5NTYyNDMyNA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a6020c1e7e49c0ab',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a609df832e2a81a6',t:'MTc5NTcwNjM4Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a609df832e2a81a6',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
