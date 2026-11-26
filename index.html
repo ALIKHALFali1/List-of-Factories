@@ -8834,11 +8834,43 @@
         const WA_CHECK_STORAGE_KEY = 'alrahma_wa_checker_v1';
         const custWaCheckCache = new Map(); // normalizedPhone -> true | false
 
+        const RAPIDAPI_WA_PRESETS = {
+            whatsapp_checker4: {
+                label: 'WhatsApp Checker (whatsapp-checker4 — مجاني شهرياً بدون رقم)',
+                host: 'whatsapp-checker4.p.rapidapi.com',
+                method: 'POST',
+                path: '/check',
+                body: '{"input":"+{phone}"}'
+            },
+            whatsapp_data10: {
+                label: 'WhatsApp Data (whatsapp-data10 — مجاني شهرياً بدون رقم)',
+                host: 'whatsapp-data10.p.rapidapi.com',
+                method: 'GET',
+                path: '/validate?phone={phone}',
+                body: ''
+            },
+            custom_rapid: {
+                label: 'خدمة RapidAPI أخرى (إدخال Host و Endpoint يدوياً)',
+                host: '',
+                method: 'GET',
+                path: '/check?phone={phone}',
+                body: ''
+            }
+        };
+
         function custWaCheckLoadCfg() {
             try {
                 const raw = JSON.parse(localStorage.getItem(WA_CHECK_STORAGE_KEY) || '{}') || {};
+                const preset = Object.prototype.hasOwnProperty.call(RAPIDAPI_WA_PRESETS, raw.rapidPreset) ? raw.rapidPreset : 'whatsapp_checker4';
+                const pDef = RAPIDAPI_WA_PRESETS[preset];
                 return {
-                    provider: ['none', 'greenapi', 'whapi', 'custom'].includes(raw.provider) ? raw.provider : 'none',
+                    provider: ['none', 'rapidapi', 'greenapi', 'whapi', 'custom'].includes(raw.provider) ? raw.provider : 'none',
+                    rapidPreset: preset,
+                    rapidKey: String(raw.rapidKey || '').trim(),
+                    rapidHost: String(raw.rapidHost || pDef.host || '').trim(),
+                    rapidMethod: raw.rapidMethod === 'POST' ? 'POST' : (raw.rapidMethod === 'GET' ? 'GET' : pDef.method),
+                    rapidPath: String(raw.rapidPath || pDef.path || '').trim(),
+                    rapidBody: String(raw.rapidBody !== undefined ? raw.rapidBody : pDef.body),
                     greenApiUrl: String(raw.greenApiUrl || 'https://api.green-api.com').trim().replace(/\/+$/, ''),
                     greenInstance: String(raw.greenInstance || '').trim(),
                     greenToken: String(raw.greenToken || '').trim(),
@@ -8847,7 +8879,8 @@
                     customAuth: String(raw.customAuth || '').trim()
                 };
             } catch (e) {
-                return { provider: 'none', greenApiUrl: 'https://api.green-api.com', greenInstance: '', greenToken: '', whapiToken: '', customUrl: '', customAuth: '' };
+                const pDef = RAPIDAPI_WA_PRESETS.whatsapp_checker4;
+                return { provider: 'none', rapidPreset: 'whatsapp_checker4', rapidKey: '', rapidHost: pDef.host, rapidMethod: pDef.method, rapidPath: pDef.path, rapidBody: pDef.body, greenApiUrl: 'https://api.green-api.com', greenInstance: '', greenToken: '', whapiToken: '', customUrl: '', customAuth: '' };
             }
         }
         function custWaCheckSaveCfg(cfg) {
@@ -8855,24 +8888,177 @@
             custWaCheckCache.clear();
         }
         function custWaCheckHasApi(cfg = custWaCheckLoadCfg()) {
+            if (cfg.provider === 'rapidapi') return !!(cfg.rapidKey && cfg.rapidHost && cfg.rapidPath);
             if (cfg.provider === 'greenapi') return !!(cfg.greenInstance && cfg.greenToken);
             if (cfg.provider === 'whapi') return !!cfg.whapiToken;
             if (cfg.provider === 'custom') return !!cfg.customUrl;
             return false;
+        }
+        function waParseExistsFlag(data) {
+            if (typeof data === 'boolean') return data;
+            if (!data || typeof data !== 'object') return null;
+            const candidates = [data, data.data, data.result, Array.isArray(data.contacts) ? data.contacts[0] : null];
+            for (const obj of candidates) {
+                if (typeof obj === 'boolean') return obj;
+                if (!obj || typeof obj !== 'object') continue;
+                for (const k of ['isValid', 'existsWhatsapp', 'exists', 'valid', 'numberExists', 'hasWhatsapp', 'isRegistered', 'registered', 'is_whatsapp', 'on_whatsapp', 'whatsapp', 'isWAContact', 'isUser']) {
+                    if (typeof obj[k] === 'boolean') return obj[k];
+                    if (obj[k] === 'true' || obj[k] === 1) return true;
+                    if (obj[k] === 'false' || obj[k] === 0) return false;
+                }
+                if (typeof obj.status === 'string') {
+                    const st = obj.status.toLowerCase();
+                    if (['valid', 'exists', 'active', 'registered', 'yes'].includes(st)) return true;
+                    if (['invalid', 'not_exists', 'not_registered', 'inactive', 'no', 'none'].includes(st)) return false;
+                }
+            }
+            return null;
         }
         function custIsEgyptianLandline(cleaned) {
             if (!cleaned) return false;
             if (/^(010|011|012|015|2010|2011|2012|2015)/.test(cleaned)) return false;
             return /^(02|03|04[05678]|05[057]|06[245689]|08[2468]|09[23567])\d{6,8}$/.test(cleaned) || /^(16|19)\d{3}$/.test(cleaned);
         }
+        const CUST_PHONE_DIR_KEY = 'alrahma_phone_dir_v1';
+        function custLocalPhoneDirLoad() {
+            try { return JSON.parse(localStorage.getItem(CUST_PHONE_DIR_KEY) || '{}') || {}; } catch (e) { return {}; }
+        }
+        function custLocalPhoneDirSave(cleaned, type) {
+            if (!cleaned) return;
+            try {
+                const dir = custLocalPhoneDirLoad();
+                dir[cleaned] = { type: type === 'call' ? 'call' : 'whatsapp', at: Date.now() };
+                localStorage.setItem(CUST_PHONE_DIR_KEY, JSON.stringify(dir));
+            } catch (e) {}
+        }
         function custLookupHistoryPhoneType(cleaned) {
-            if (!cleaned || !appData || !Array.isArray(appData.custOrders)) return null;
-            for (let i = appData.custOrders.length - 1; i >= 0; i--) {
-                const phs = custPhonesOf(appData.custOrders[i]);
-                const hit = phs.find(x => x.phone === cleaned);
-                if (hit) return hit.type;
+            if (!cleaned) return null;
+            let bestType = null, bestAt = -1;
+            if (appData && Array.isArray(appData.custOrders)) {
+                for (let i = 0; i < appData.custOrders.length; i++) {
+                    const ord = appData.custOrders[i];
+                    const phs = custPhonesOf(ord);
+                    const hit = phs.find(x => x.phone === cleaned);
+                    if (hit) {
+                        const ts = Date.parse(ord.updatedAt || ord.createdAt || ord.date || '') || i;
+                        if (ts >= bestAt) { bestAt = ts; bestType = hit.type; }
+                    }
+                }
             }
-            return null;
+            const localDir = custLocalPhoneDirLoad();
+            const loc = localDir[cleaned];
+            if (loc && loc.type && (!bestType || (loc.at || 0) > bestAt)) {
+                return loc.type;
+            }
+            return bestType;
+        }
+        function custVerifyPhonePopup(btn) {
+            const row = btn ? btn.closest('[data-cust-phone-row]') : null;
+            const inp = row ? row.querySelector('input[name="custPhoneNum[]"]') : null;
+            const cleaned = custCleanPhone(inp ? inp.value : '');
+            if (cleaned.length < 10) return toast('اكتب الرقم كامل أولاً (10 إلى 12 رقم)', 'error');
+            const waNum = custWaPhone(cleaned);
+            const url = 'https://wa.me/' + waNum;
+            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+            if (isMobile) {
+                window.open(url, '_blank');
+            } else {
+                const w = 480, h = 640;
+                const left = Math.max(0, Math.round((screen.width - w) / 2));
+                const top = Math.max(0, Math.round((screen.height - h) / 2));
+                window.open(url, 'alrahmaWaVerify', `width=${w},height=${h},left=${left},top=${top},noopener`);
+            }
+            custSetPhoneRowStatus(row,
+                `<span class="text-slate-700">هل ظهر للرقم حساب على واتساب؟</span>
+                 <span class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" onclick="custConfirmRowVerify(this,'whatsapp')" class="px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer">✓ نعم واتساب</button>
+                    <button type="button" onclick="custConfirmRowVerify(this,'call')" class="px-2 py-0.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold cursor-pointer">✗ لا ← اتصال</button>
+                 </span>`,
+                'text-slate-700');
+        }
+        function custConfirmRowVerify(btn, type) {
+            const row = btn ? btn.closest('[data-cust-phone-row]') : null;
+            const inp = row ? row.querySelector('input[name="custPhoneNum[]"]') : null;
+            const cleaned = custCleanPhone(inp ? inp.value : '');
+            custApplyRowType(row, type);
+            if (cleaned) custLocalPhoneDirSave(cleaned, type);
+            custSetPhoneRowStatus(row,
+                type === 'call'
+                    ? '<span><i class="fa-solid fa-phone me-1"></i>✓ تم تأكيده كـ <b>اتصال</b> وسيتم تذكّره تلقائياً لاحقاً</span>'
+                    : '<span><i class="fa-brands fa-whatsapp me-1"></i>✓ تم تأكيده كـ <b>واتساب</b> وسيتم تذكّره تلقائياً لاحقاً</span>',
+                type === 'call' ? 'text-sky-700' : 'text-emerald-700');
+        }
+        function custFlipPhoneTypeEverywhere(orderId, phoneRaw, newType, reopenDetail = false) {
+            const cleaned = custCleanPhone(phoneRaw);
+            if (!cleaned) return;
+            const t = newType === 'call' ? 'call' : 'whatsapp';
+            custLocalPhoneDirSave(cleaned, t);
+            const fb = document.getElementById('custWaFeedbackBar');
+            if (fb) fb.remove();
+            if (!canCust('manage')) {
+                toast(`تم حفظ الرقم محلياً كـ «${t === 'call' ? 'اتصال' : 'واتساب'}» (تحديث الفاتورة لجميع الموظفين يحتاج صلاحية التعديل)`, 'info', null, 4500);
+                return;
+            }
+            let updatedCount = 0;
+            const nowIso = new Date().toISOString();
+            const byName = orderUserName();
+            (appData.custOrders || []).forEach(ord => {
+                const phs = custPhonesOf(ord);
+                let changed = false;
+                const nextPhs = phs.map(p => {
+                    if (p.phone === cleaned && p.type !== t) {
+                        changed = true;
+                        return { phone: p.phone, type: t };
+                    }
+                    return p;
+                });
+                if (changed) {
+                    ord.customerPhones = nextPhs;
+                    const waFirst = nextPhs.find(x => x.type === 'whatsapp');
+                    ord.customerPhone = waFirst ? waFirst.phone : (nextPhs[0] ? nextPhs[0].phone : '');
+                    ord.updatedAt = nowIso;
+                    ord.updatedBy = byName;
+                    updatedCount++;
+                }
+            });
+            if (updatedCount > 0) {
+                log('تحديث نوع رقم عميل', `${cleaned} ← ${t === 'call' ? 'اتصال' : 'واتساب'} (${updatedCount} فاتورة)`);
+                saveState();
+                render();
+                if (reopenDetail && orderId) openCustDetail(orderId);
+                toast(`✓ تم تحويل الرقم إلى «${t === 'call' ? 'اتصال' : 'واتساب'}» وحفظه لكل الفريق (${updatedCount} فاتورة)`, 'success', null, 4500);
+            } else {
+                toast(`الرقم مسجّل بالفعل كـ «${t === 'call' ? 'اتصال' : 'واتساب'}»`, 'info');
+            }
+        }
+        let _custWaFbTimer = null;
+        function showCustWaFeedbackBar(orderId, phoneRaw) {
+            const cleaned = custCleanPhone(phoneRaw);
+            if (!cleaned) return;
+            const old = document.getElementById('custWaFeedbackBar');
+            if (old) old.remove();
+            if (_custWaFbTimer) clearTimeout(_custWaFbTimer);
+            const bar = document.createElement('div');
+            bar.id = 'custWaFeedbackBar';
+            bar.setAttribute('dir', 'rtl');
+            bar.className = 'fixed bottom-3 inset-x-3 sm:inset-x-auto sm:end-4 sm:w-[26rem] z-[9990] rounded-2xl bg-slate-900 text-white p-3.5 shadow-2xl border border-white/15 flex flex-col gap-2';
+            bar.innerHTML = `
+                <div class="flex items-start justify-between gap-2">
+                    <div class="text-xs leading-relaxed">
+                        <p class="font-extrabold text-sm text-white">هل الرقم <span dir="ltr" class="font-mono text-emerald-300">${esc(cleaned)}</span> طلع غير مسجّل على واتساب؟</p>
+                        <p class="text-slate-300 mt-0.5">بضغطة واحدة يمكنك تحويله إلى «اتصال» ليُحفظ تلقائياً لكل الفريق.</p>
+                    </div>
+                    <button type="button" onclick="this.closest('#custWaFeedbackBar').remove()" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center shrink-0 cursor-pointer" aria-label="إغلاق"><i class="fa-solid fa-xmark text-xs"></i></button>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="custFlipPhoneTypeEverywhere('${esc(orderId)}','${esc(cleaned)}','call',false)" class="flex-1 px-3 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer">
+                        <i class="fa-solid fa-phone"></i> تحويله لاتصال وحفظه للجميع
+                    </button>
+                    <button type="button" onclick="this.closest('#custWaFeedbackBar').remove()" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer">تم الإرسال</button>
+                </div>
+            `;
+            document.body.appendChild(bar);
+            _custWaFbTimer = setTimeout(() => { const b = document.getElementById('custWaFeedbackBar'); if (b) b.remove(); }, 15000);
         }
         async function custCheckWaApi(rawPhone, overrideCfg = null) {
             const cfg = overrideCfg || custWaCheckLoadCfg();
@@ -8886,7 +9072,26 @@
             const timer = setTimeout(() => ctrl.abort(), 6000);
             try {
                 let exists = null;
-                if (cfg.provider === 'greenapi') {
+                if (cfg.provider === 'rapidapi') {
+                    const host = cfg.rapidHost.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                    const path = (cfg.rapidPath.startsWith('/') ? cfg.rapidPath : '/' + cfg.rapidPath)
+                        .replaceAll('{phone}', encodeURIComponent(waNum));
+                    const url = `https://${host}${path}`;
+                    const method = cfg.rapidMethod === 'POST' ? 'POST' : 'GET';
+                    const headers = {
+                        'x-rapidapi-key': cfg.rapidKey,
+                        'x-rapidapi-host': host
+                    };
+                    const opts = { method, headers, signal: ctrl.signal };
+                    if (method === 'POST') {
+                        headers['Content-Type'] = 'application/json';
+                        opts.body = (cfg.rapidBody || '{"phone":"{phone}"}').replaceAll('{phone}', waNum);
+                    }
+                    const res = await fetch(url, opts);
+                    if (!res.ok) return { ok: false, reason: 'http_' + res.status };
+                    const data = await res.json();
+                    exists = waParseExistsFlag(data);
+                } else if (cfg.provider === 'greenapi') {
                     const base = (cfg.greenApiUrl || 'https://api.green-api.com').replace(/\/+$/, '');
                     const url = `${base}/waInstance${encodeURIComponent(cfg.greenInstance)}/checkWhatsapp/${encodeURIComponent(cfg.greenToken)}`;
                     const res = await fetch(url, {
@@ -8918,8 +9123,7 @@
                     const res = await fetch(url, { method: 'GET', headers, signal: ctrl.signal });
                     if (!res.ok) return { ok: false, reason: 'http_' + res.status };
                     const data = await res.json();
-                    const flag = data?.existsWhatsapp ?? data?.exists ?? data?.valid ?? data?.hasWhatsapp ?? data?.isRegistered;
-                    if (typeof flag === 'boolean') exists = flag;
+                    exists = waParseExistsFlag(data);
                 }
                 if (typeof exists === 'boolean') {
                     custWaCheckCache.set(waNum, exists);
@@ -8998,21 +9202,20 @@
                 custSetPhoneRowStatus(row, `<span><i class="fa-solid fa-triangle-exclamation me-1"></i>تعذر الاتصال بخدمة الفحص (${esc(res.reason || 'خطأ')}) — يمكنك الاختيار يدوياً</span>`, 'text-rose-600');
                 return;
             }
-            // 2) No live API configured yet -> check saved invoice history & offer 1-click manual check
+            // 2) Smart Company Directory + 1-click WhatsApp Verify
             const hist = custLookupHistoryPhoneType(cleaned);
-            const waCheckUrl = 'https://wa.me/' + custWaPhone(cleaned);
             if (hist) {
                 custApplyRowType(row, hist);
                 custSetPhoneRowStatus(row,
-                    `<span><i class="fa-solid fa-clock-rotate-left me-1"></i>مسجّل سابقاً كـ <b>${hist === 'call' ? 'اتصال' : 'واتساب'}</b></span>
-                     <a href="${waCheckUrl}" target="_blank" rel="noopener" class="underline text-emerald-700 hover:text-emerald-800 shrink-0">فحص سريع</a>`,
+                    `<span><i class="fa-solid fa-clock-rotate-left me-1"></i>معروف من سجل الشركة: <b>${hist === 'call' ? 'اتصال 📞' : 'واتساب 🟢'}</b></span>
+                     <button type="button" onclick="custVerifyPhonePopup(this)" class="px-2 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-bold shrink-0 cursor-pointer"><i class="fa-brands fa-whatsapp me-1"></i>تحقق</button>`,
                     hist === 'call' ? 'text-sky-700' : 'text-emerald-700');
             } else {
                 custApplyRowType(row, 'whatsapp');
                 custSetPhoneRowStatus(row,
-                    `<span><i class="fa-solid fa-circle-info me-1"></i>للفحص التلقائي المباشر فعّل API من الإعدادات</span>
-                     <a href="${waCheckUrl}" target="_blank" rel="noopener" class="underline text-emerald-700 hover:text-emerald-800 shrink-0">فحص في واتساب</a>`,
-                    'text-slate-500');
+                    `<span><i class="fa-solid fa-sparkles me-1"></i>رقم جديد — اضغط «تحقق» للتأكد من وجود واتساب</span>
+                     <button type="button" onclick="custVerifyPhonePopup(this)" class="px-2.5 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"><i class="fa-brands fa-whatsapp me-1"></i>تحقق الآن</button>`,
+                    'text-slate-600');
             }
         }
 
@@ -9419,11 +9622,17 @@
                 ${row('أرقام تليفون العميل', (() => {
                     const phs = custPhonesOf(c);
                     if (!phs.length) return '—';
-                    return `<div class="flex flex-wrap justify-end gap-1.5">${phs.map(ph => ph.type === 'call'
-                        ? `<a href="tel:${esc(ph.phone)}" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-200 font-mono text-xs font-bold hover:bg-sky-100"><i class="fa-solid fa-phone"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">اتصال</span></a>`
-                        : (canCust('whatsapp')
-                            ? `<button type="button" onclick="custWhatsApp('${esc(c.id)}','${esc(ph.phone)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono text-xs font-bold hover:bg-emerald-100 cursor-pointer"><i class="fa-brands fa-whatsapp"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">واتساب</span></button>`
-                            : `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 font-mono text-xs font-bold"><i class="fa-brands fa-whatsapp"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">واتساب</span></span>`)).join('')}</div>`;
+                    return `<div class="flex flex-wrap justify-end gap-1.5">${phs.map(ph => {
+                        const swapBtn = canCust('manage')
+                            ? `<button type="button" onclick="custFlipPhoneTypeEverywhere('${esc(c.id)}','${esc(ph.phone)}','${ph.type === 'call' ? 'whatsapp' : 'call'}',true)" title="تبديل بين واتساب واتصال وحفظه لجميع الموظفين" class="w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-500 hover:text-brand-600 flex items-center justify-center text-[11px] cursor-pointer"><i class="fa-solid fa-right-left"></i></button>`
+                            : '';
+                        const badge = ph.type === 'call'
+                            ? `<a href="tel:${esc(ph.phone)}" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-200 font-mono text-xs font-bold hover:bg-sky-100"><i class="fa-solid fa-phone"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">اتصال</span></a>`
+                            : (canCust('whatsapp')
+                                ? `<button type="button" onclick="custWhatsApp('${esc(c.id)}','${esc(ph.phone)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono text-xs font-bold hover:bg-emerald-100 cursor-pointer"><i class="fa-brands fa-whatsapp"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">واتساب</span></button>`
+                                : `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 font-mono text-xs font-bold"><i class="fa-brands fa-whatsapp"></i><span dir="ltr">${esc(ph.phone)}</span><span class="font-sans text-[10px] opacity-80">واتساب</span></span>`);
+                        return `<span class="inline-flex items-center gap-1">${badge}${swapBtn}</span>`;
+                    }).join('')}</div>`;
                 })())}
                 ${row('المندوب', esc(c.repName || '—'))}
                 ${row('الصنف', esc(c.category || '—'))}
@@ -9562,6 +9771,7 @@
                 '— ' + (appData.settings.systemName || 'شركة الرحمة للسيراميك')
             ];
             window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n')), '_blank');
+            showCustWaFeedbackBar(c.id, chosenRaw);
         }
         function custWhatsAppStatement(customer, phoneRaw, repId) {
             if (!canCust('whatsapp')) return toast('ليس لديك صلاحية إرسال كشف الحساب عبر واتساب', 'error');
@@ -16423,25 +16633,63 @@
 
         function waCheckSettingsHtml() {
             const cfg = custWaCheckLoadCfg();
+            const isRapid = cfg.provider === 'rapidapi';
             const isGreen = cfg.provider === 'greenapi';
             const isWhapi = cfg.provider === 'whapi';
             const isCustom = cfg.provider === 'custom';
+            const presetOpts = Object.entries(RAPIDAPI_WA_PRESETS).map(([k, v]) => `<option value="${esc(k)}" ${cfg.rapidPreset === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
             return `<div class="space-y-4">
                 <section class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-4">
                     <div>
                         <h3 class="font-black text-lg text-slate-900 flex items-center gap-2"><i class="fa-brands fa-whatsapp text-emerald-600 text-xl"></i> فحص أرقام الواتساب تلقائياً في الفواتير</h3>
-                        <p class="text-xs text-slate-600 mt-1 leading-relaxed">شركة واتساب (Meta) لا تسمح للمتصفح بفحص الأرقام مباشرةً بدون بوابة API مرخّصة. اربط هنا حساب <b>Green-API</b> (يوجد باقة مطورين مجانية) أو <b>Whapi.cloud</b> أو سيرفرك الخاص، وسيقوم التطبيق تلقائياً بعد انتهاء كتابة أي رقم خلال ثانية واحدة بتحديد هل لديه واتساب (🟢 واتساب) أم لا (📞 اتصال).</p>
+                        <p class="text-xs text-slate-600 mt-1 leading-relaxed">اختر <b>RapidAPI (مجاناً — بدون ربط رقمك نهائياً وبـ API Key فقط)</b> أو <b>Green-API</b> أو <b>Whapi</b>. فور الانتهاء من كتابة أي رقم في فاتورة طلبيات العملاء، يتأكد الكود تلقائياً خلال أقل من ثانية ويضع علامة <b>🟢 واتساب</b> أو <b>📞 اتصال</b>.</p>
                     </div>
                     <div class="space-y-3">
                         <label class="block">
                             <span class="block text-xs font-bold text-slate-700 mb-1">مزود خدمة الفحص التلقائي</span>
                             <select id="waChkProvider" onchange="waCheckProviderToggle()" class="${INPUT_CLS}">
                                 <option value="none" ${cfg.provider === 'none' ? 'selected' : ''}>بدون API (فحص ذكي محلي: تمييز الأرضي وتذكر الأرقام السابقة)</option>
-                                <option value="greenapi" ${isGreen ? 'selected' : ''}>Green-API (مُوصى به — يوجد باقة مجانية)</option>
+                                <option value="rapidapi" ${isRapid ? 'selected' : ''}>RapidAPI — مجاني بـ API Key فقط (بدون ربط رقمك أو باركود)</option>
+                                <option value="greenapi" ${isGreen ? 'selected' : ''}>Green-API (يحتاج ربط شريحة بالباركود)</option>
                                 <option value="whapi" ${isWhapi ? 'selected' : ''}>Whapi.cloud</option>
                                 <option value="custom" ${isCustom ? 'selected' : ''}>رابط API مخصص (سيرفر خاص / Evolution API)</option>
                             </select>
                         </label>
+                        <div id="waChkRapidBox" class="${isRapid ? '' : 'hidden'} grid gap-3 sm:grid-cols-2 p-3.5 rounded-xl bg-violet-50/70 border border-violet-200">
+                            <label class="block sm:col-span-2">
+                                <span class="block text-xs font-bold text-slate-700 mb-1">اختر خدمة RapidAPI المشترك بها (الباقة المجانية Basic $0)</span>
+                                <select id="waChkRapidPreset" onchange="waCheckRapidPresetChanged()" class="${INPUT_CLS} text-xs">${presetOpts}</select>
+                            </label>
+                            <label class="block sm:col-span-2">
+                                <span class="block text-xs font-bold text-slate-700 mb-1">مفتاح RapidAPI Key (X-RapidAPI-Key) *</span>
+                                <input id="waChkRapidKey" type="password" dir="ltr" value="${esc(cfg.rapidKey)}" placeholder="الصق X-RapidAPI-Key هنا..." class="${INPUT_CLS} font-mono text-xs">
+                            </label>
+                            <label class="block">
+                                <span class="block text-xs font-bold text-slate-700 mb-1">X-RapidAPI-Host</span>
+                                <input id="waChkRapidHost" type="text" dir="ltr" value="${esc(cfg.rapidHost)}" placeholder="whatsapp-checker4.p.rapidapi.com" class="${INPUT_CLS} font-mono text-xs">
+                            </label>
+                            <label class="block">
+                                <span class="block text-xs font-bold text-slate-700 mb-1">طريقة الإرسال (Method)</span>
+                                <select id="waChkRapidMethod" class="${INPUT_CLS} text-xs">
+                                    <option value="POST" ${cfg.rapidMethod === 'POST' ? 'selected' : ''}>POST</option>
+                                    <option value="GET" ${cfg.rapidMethod === 'GET' ? 'selected' : ''}>GET</option>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="block text-xs font-bold text-slate-700 mb-1">المسار (Endpoint Path)</span>
+                                <input id="waChkRapidPath" type="text" dir="ltr" value="${esc(cfg.rapidPath)}" placeholder="/check" class="${INPUT_CLS} font-mono text-xs">
+                            </label>
+                            <label class="block">
+                                <span class="block text-xs font-bold text-slate-700 mb-1">بيانات JSON (في حالة POST — {phone} مكان الرقم)</span>
+                                <input id="waChkRapidBody" type="text" dir="ltr" value="${esc(cfg.rapidBody)}" placeholder='{"input":"+{phone}"}' class="${INPUT_CLS} font-mono text-xs">
+                            </label>
+                            <div class="sm:col-span-2 text-[11px] text-violet-950 bg-white/80 rounded-lg p-2.5 border border-violet-200 leading-relaxed">
+                                <b>🚀 خطوات التفعيل المجاني بدون رقم (في دقيقتين):</b><br>
+                                1. افتح <b>rapidapi.com</b> وسجّل حساباً مجانياً.<br>
+                                2. ابحث عن <b>WhatsApp Checker</b> (<code>whatsapp-checker4</code>) أو <b>WhatsApp Data</b> (<code>whatsapp-data10</code>) ← اضغط <b>Subscribe to Test</b> ← اختر الباقة المجانية <b>Basic ($0)</b>.<br>
+                                3. انسخ <b>X-RapidAPI-Key</b> والصقه بالأعلى ← اضغط <b>حفظ</b> ← جرّب الفحص بالأسفل!
+                            </div>
+                        </div>
                         <div id="waChkGreenBox" class="${isGreen ? '' : 'hidden'} grid gap-3 sm:grid-cols-2 p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200">
                             <label class="block sm:col-span-2">
                                 <span class="block text-xs font-bold text-slate-700 mb-1">رابط السيرفر (API URL)</span>
@@ -16490,8 +16738,19 @@
             </div>`;
         }
 
+        function waCheckRapidPresetChanged() {
+            const k = el('waChkRapidPreset')?.value || 'whatsapp_checker4';
+            const p = RAPIDAPI_WA_PRESETS[k];
+            if (!p) return;
+            if (el('waChkRapidHost')) el('waChkRapidHost').value = p.host;
+            if (el('waChkRapidMethod')) el('waChkRapidMethod').value = p.method;
+            if (el('waChkRapidPath')) el('waChkRapidPath').value = p.path;
+            if (el('waChkRapidBody')) el('waChkRapidBody').value = p.body;
+        }
+
         function waCheckProviderToggle() {
             const p = el('waChkProvider')?.value || 'none';
+            el('waChkRapidBox')?.classList.toggle('hidden', p !== 'rapidapi');
             el('waChkGreenBox')?.classList.toggle('hidden', p !== 'greenapi');
             el('waChkWhapiBox')?.classList.toggle('hidden', p !== 'whapi');
             el('waChkCustomBox')?.classList.toggle('hidden', p !== 'custom');
@@ -16500,6 +16759,12 @@
         function waCheckReadFormCfg() {
             return {
                 provider: el('waChkProvider')?.value || 'none',
+                rapidPreset: el('waChkRapidPreset')?.value || 'whatsapp_checker4',
+                rapidKey: (el('waChkRapidKey')?.value || '').trim(),
+                rapidHost: (el('waChkRapidHost')?.value || '').trim(),
+                rapidMethod: el('waChkRapidMethod')?.value === 'POST' ? 'POST' : 'GET',
+                rapidPath: (el('waChkRapidPath')?.value || '').trim(),
+                rapidBody: el('waChkRapidBody')?.value || '',
                 greenApiUrl: (el('waChkGreenUrl')?.value || 'https://api.green-api.com').trim().replace(/\/+$/, ''),
                 greenInstance: (el('waChkGreenId')?.value || '').trim(),
                 greenToken: (el('waChkGreenTok')?.value || '').trim(),
@@ -18245,5 +18510,5 @@
         };
 
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60a68b5afc6e181',t:'MTc5NTcxMjAwMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60a68b5afc6e181',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
