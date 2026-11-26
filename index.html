@@ -629,7 +629,7 @@
         </aside>
 
         <div class="flex-1 min-w-0 flex flex-col">
-            <header class="sticky top-0 z-30 bg-white/90 backdrop-blur-xl border-b border-slate-200/80">
+            <header class="sticky top-0 z-30 bg-white/95 md:backdrop-blur-md border-b border-slate-200/80">
                 <div class="flex items-center gap-2 sm:gap-3 px-3 sm:px-6 h-14 sm:h-16">
                     <button type="button" onclick="toggleSidebar(true)" class="lg:hidden w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="فتح القائمة">
                         <i class="fa-solid fa-bars text-lg"></i>
@@ -2381,6 +2381,8 @@
             storageCfgStop();
             annStop();
             appLiveUrlStop();
+            if (_cacheBurstTimer) { clearTimeout(_cacheBurstTimer); _cacheBurstTimer = null; }
+            _custCmtSeenCacheVal = null; _custCmtSeenCacheKey = ''; _custCmtIndexSrc = null; _custCmtIndex = new Map();
             fbCache = null;
             fbLoaded = {};
             fbSynced = false;
@@ -2468,7 +2470,36 @@
             }, 250);
         }
 
+        let _cacheBurstTimer = null;
+        function _fastBaselineSig() {
+            const parts = [];
+            if (fbBaseline && fbBaseline.size) {
+                const keys = [...fbBaseline.keys()].sort();
+                for (let i = 0; i < keys.length; i++) {
+                    const b = fbBaseline.get(keys[i]);
+                    parts.push(keys[i], b ? b.sig : '');
+                }
+            }
+            if (appData && appData.logs && appData.logs.length) {
+                parts.push('#L', String(appData.logs.length), String(appData.logs[0]?.id || ''));
+            }
+            if (userDirectoryMap && userDirectoryMap.size) {
+                parts.push('#D', String(userDirectoryMap.size));
+            }
+            return parts.join('\x1f');
+        }
         function onCacheChanged() {
+            if (!fbUser || !fbCache) return;
+            if (!fbLoaded.me || !fbLoaded.settings) return;
+            // After initial entry, coalesce burst Firebase snapshots (35ms) into ONE rebuild instead of 10+
+            if (appEntered) {
+                if (_cacheBurstTimer) return;
+                _cacheBurstTimer = setTimeout(() => { _cacheBurstTimer = null; _runOnCacheChanged(); }, 35);
+                return;
+            }
+            _runOnCacheChanged();
+        }
+        function _runOnCacheChanged() {
             if (!fbUser || !fbCache) return;
             if (!fbLoaded.me || !fbLoaded.settings) return;
             const rawMe = fbCache.users[fbUser.uid];
@@ -2477,8 +2508,8 @@
             if (!fbLoaded.myRole) return;
 
             sessionUserId = rawMe.id;
-            const sigOf = () => canon([...desiredDocs(appData).entries(), appData.users || [], appData.roles || {}, appData.settings || {}, appData.logs.map(l => l.id), [...userDirectoryMap.entries()]]);
-            const before = appData ? sigOf() : '';
+            const before = appData ? _fastBaselineSig() : '';
+            const beforeContent = appData ? _fastBaselineSig().split('\x1f#L\x1f')[0] : '';
             const previous = appData;
             buildFromCache();
             attachScopedListeners(fbUser.uid);
@@ -2490,8 +2521,9 @@
             if (needCompanies && !fbLoaded.companies) return;
             if (needLists && !fbLoaded.lists) return;
 
-            const contentOf = d => canon([[...desiredDocs(d).entries()], d.users || [], d.roles || {}, d.settings || {}]);
-            if (fbSynced && previous && contentOf(previous) === contentOf(appData)) {
+            const afterFull = _fastBaselineSig();
+            const afterContent = afterFull.split('\x1f#L\x1f')[0];
+            if (fbSynced && previous && beforeContent && beforeContent === afterContent) {
                 previous.logs = appData.logs;
                 appData = previous;
             }
@@ -2530,7 +2562,7 @@
                 enterApp();
                 return;
             }
-            if (sigOf() !== before) scheduleCacheRender();
+            if (afterFull !== before) scheduleCacheRender();
         }
 
         async function handleFbUser(user) {
@@ -5192,7 +5224,7 @@
                 .map(c => opt(f.factoryId, c.id, companyOptionLabel(c))).join('');
             return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="sm:col-span-2">${field('بحث', `<input type="search" value="${esc(f.q)}" oninput="ordersFilter.q = this.value; updateOrdersBody()" placeholder="رقم، عميل، مصنع / مورد، مرجع، كود صنف" class="${INPUT_CLS}">`)}</div>
+                    <div class="sm:col-span-2">${field('بحث', `<input type="search" value="${esc(f.q)}" oninput="ordersFilter.q = this.value; uiDebounce('ordQ', updateOrdersBody, 140)" placeholder="رقم، عميل، مصنع / مورد، مرجع، كود صنف" class="${INPUT_CLS}">`)}</div>
                     ${field('الحالة', `<select onchange="ordersFilter.status = this.value; updateOrdersBody()" class="${INPUT_CLS}">${opt(f.status, 'all', 'الكل')}${Object.entries(ORDER_STATUS).map(([k, v]) => opt(f.status, k, v)).join('')}</select>`)}
                     ${field('النوع', `<select onchange="ordersFilter.kind = this.value; updateOrdersBody()" class="${INPUT_CLS}">${opt(f.kind, 'all', 'الكل')}${Object.entries(ORDER_KIND).map(([k, v]) => opt(f.kind, k, v)).join('')}</select>`)}
                     ${field('المصنع / المورد', `<select onchange="ordersFilter.factoryId = this.value; updateOrdersBody()" class="${INPUT_CLS}"><option value="">كل المصانع</option>${factories}</select>`)}
@@ -6329,17 +6361,54 @@
                 if (parseRoute().name === 'customers') updateCustBody();
             }, err => console.error('custComments listener', err));
         }
-        const custCommentsFor = orderId => custComments.filter(x => x.orderId === orderId).sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+        let _custCmtIndexSrc = null;
+        let _custCmtIndex = new Map();
+        function _getCustCmtIndex() {
+            if (_custCmtIndexSrc === custComments) return _custCmtIndex;
+            const idx = new Map();
+            for (let i = 0; i < custComments.length; i++) {
+                const cm = custComments[i];
+                let arr = idx.get(cm.orderId);
+                if (!arr) { arr = []; idx.set(cm.orderId, arr); }
+                arr.push(cm);
+            }
+            idx.forEach(arr => { if (arr.length > 1) arr.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0)); });
+            _custCmtIndex = idx;
+            _custCmtIndexSrc = custComments;
+            return idx;
+        }
+        const custCommentsFor = orderId => _getCustCmtIndex().get(orderId) || [];
+        let _custCmtSeenCacheKey = '';
+        let _custCmtSeenCacheVal = null;
         function custCmtSeenMap() {
-            try { return JSON.parse(localStorage.getItem('cmtSeen:' + (fbUser?.uid || custCmtMe())) || '{}'); } catch (e) { return {}; }
+            const key = 'cmtSeen:' + (fbUser?.uid || custCmtMe());
+            if (_custCmtSeenCacheVal && _custCmtSeenCacheKey === key) return _custCmtSeenCacheVal;
+            try { _custCmtSeenCacheVal = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { _custCmtSeenCacheVal = {}; }
+            _custCmtSeenCacheKey = key;
+            return _custCmtSeenCacheVal;
         }
         function custMarkCmtSeen(orderId) {
             const m = custCmtSeenMap();
             m[orderId] = new Date().toISOString();
-            try { localStorage.setItem('cmtSeen:' + (fbUser?.uid || custCmtMe()), JSON.stringify(m)); } catch (e) { /* storage blocked */ }
+            const key = 'cmtSeen:' + (fbUser?.uid || custCmtMe());
+            _custCmtSeenCacheKey = key;
+            _custCmtSeenCacheVal = m;
+            try { localStorage.setItem(key, JSON.stringify(m)); } catch (e) { /* storage blocked */ }
         }
-        const custCmtUnseen = c => { const seen = custCmtSeenMap()[c.id] || ''; return custCommentsFor(c.id).filter(x => x.byId !== custCmtMe() && x.t > seen).length; };
-        const custCmtUnhandled = c => custCommentsFor(c.id).some(x => !x.handled);
+        const custCmtUnseen = c => {
+            const list = custCommentsFor(c.id);
+            if (!list.length) return 0;
+            const seen = custCmtSeenMap()[c.id] || '';
+            const me = custCmtMe();
+            let n = 0;
+            for (let i = 0; i < list.length; i++) if (list[i].byId !== me && list[i].t > seen) n++;
+            return n;
+        };
+        const custCmtUnhandled = c => {
+            const list = custCommentsFor(c.id);
+            for (let i = 0; i < list.length; i++) if (!list[i].handled) return true;
+            return false;
+        };
         const custCmtPendingCount = rows => rows.filter(custCmtUnhandled).length;
         function toggleCustCmtFilter() { custFilter.cmtPending = !custFilter.cmtPending; render(); }
         function custCmtSaveFailed(err) {
@@ -7940,7 +8009,7 @@
                     <select onchange="expFilter.status=this.value; expRenderBody()" class="${INPUT_CLS} !w-auto"><option value="">كل الحالات</option>${[EXP_PENDING, EXP_APPROVED, EXP_REJECTED, EXP_PAID, EXP_CANCELLED].map(x => `<option ${expFilter.status === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
                     <select onchange="expFilter.cat=this.value; expRenderBody()" class="${INPUT_CLS} !w-auto"><option value="">كل التصنيفات</option>${EXP_CATS.map(x => `<option ${expFilter.cat === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
                     <input type="month" value="${esc(expFilter.month)}" onchange="expFilter.month=this.value; expRenderBody()" class="${INPUT_CLS} !w-auto">
-                    <input value="${esc(expFilter.q)}" oninput="expFilter.q=this.value; expRenderBody()" placeholder="ابحث برقم الإذن أو البيان أو المستفيد..." class="${INPUT_CLS} !w-auto flex-1 min-w-[12rem]">
+                    <input value="${esc(expFilter.q)}" oninput="expFilter.q=this.value; uiDebounce('expQ', expRenderBody, 140)" placeholder="ابحث برقم الإذن أو البيان أو المستفيد..." class="${INPUT_CLS} !w-auto flex-1 min-w-[12rem]">
                 </div>` : ''}
                 ${rows.length ? `<div class="space-y-3">${rows.map(e => expCardHtml(e)).join('')}</div>` : '<p class="text-center text-slate-400 font-bold py-10">مفيش طلبات هنا</p>'}`;
         }
@@ -8276,9 +8345,54 @@
             </div>`;
         }
 
+        const _uiDebTimers = {};
+        function uiDebounce(key, fn, ms = 140) {
+            if (_uiDebTimers[key]) clearTimeout(_uiDebTimers[key]);
+            _uiDebTimers[key] = setTimeout(() => { delete _uiDebTimers[key]; fn(); }, ms);
+        }
+
+        let custVisibleLimit = 80;
+        let _custLastIsMobile = window.innerWidth < 768;
+        window.addEventListener('resize', () => {
+            const nowMob = window.innerWidth < 768;
+            if (nowMob !== _custLastIsMobile) {
+                _custLastIsMobile = nowMob;
+                if (parseRoute().name === 'customers' && el('custBody')) updateCustBody();
+            }
+        }, { passive: true });
+        function custLoadMore(all = false) {
+            custVisibleLimit = all ? 999999 : (custVisibleLimit + 80);
+            updateCustBody();
+        }
+        function custMoreFooterHtml(shownCount, totalCount) {
+            if (shownCount >= totalCount) return '';
+            const rem = totalCount - shownCount;
+            return `<div class="mt-3 flex flex-wrap items-center justify-center gap-2 p-3 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                <span class="text-xs font-bold text-slate-600">معروض ${fmtNumber(shownCount, 0)} من أصل ${fmtNumber(totalCount, 0)} فاتورة</span>
+                <button type="button" onclick="custLoadMore(false)" class="${BTN_PRIMARY} !py-1.5 !px-3 !text-xs"><i class="fa-solid fa-angles-down"></i> عرض ${Math.min(80, rem)} إضافية</button>
+                <button type="button" onclick="custLoadMore(true)" class="${BTN_SECONDARY} !py-1.5 !px-3 !text-xs">عرض الكل (${fmtNumber(totalCount, 0)})</button>
+            </div>`;
+        }
+
         function custTableHtml(rows) {
             if (!rows.length) return '<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-6 text-center text-slate-600 font-bold">مفيش طلبيات مطابقة للفلاتر</div>';
-            return `<div class="hidden md:block bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+            const slice = rows.length > custVisibleLimit ? rows.slice(0, custVisibleLimit) : rows;
+            const moreBar = custMoreFooterHtml(slice.length, rows.length);
+            // Render ONLY the active viewport layout (mobile cards OR desktop table) -> cuts DOM size by 50%!
+            if (window.innerWidth < 768) {
+                return `<div class="space-y-3">
+                    ${slice.map(c => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-1" style="content-visibility:auto;contain-intrinsic-size:180px">
+                        <div class="flex items-start justify-between gap-2"><p class="font-bold text-slate-800">${esc(c.customer)}</p>${custDeliveryBadge(c)}</div>
+                        <p class="text-sm font-mono">${custNoLabel(c)} · ${esc(fmtDateAr(c.date) || '—')}</p>
+                        <p class="text-sm">المندوب: ${esc(c.repName || '—')} · ${esc(c.category || '—')} · ${esc(c.completeness || '—')}</p>
+                        <p class="text-sm">المبلغ ${fmtMoney(numOr0(c.amount))} · المدفوع ${fmtMoney(numOr0(c.paid))} · <b class="${custRemaining(c) > 0 ? 'text-rose-700' : ''}">الباقي ${fmtMoney(custRemaining(c))}</b></p>
+                        ${c.validUntil ? `<p class="text-sm">مدة الطلبية حتى ${esc(fmtDateAr(c.validUntil))}</p>` : ''}
+                        <p class="text-sm">الشحن والنقل: ${c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل'} · طريقة الدفع: <b>${esc(c.payMethod || 'نقدي')}</b></p>
+                        <div class="flex justify-end">${custActionsHtml(c)}</div>
+                    </div>`).join('')}
+                </div>${moreBar}`;
+            }
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
                         <th class="py-3 px-3 text-start">الرقم</th><th class="py-3 px-3 text-start">التاريخ</th><th class="py-3 px-3 text-start">العميل</th>
@@ -8286,7 +8400,7 @@
                         <th class="py-3 px-3 text-start">المبلغ</th><th class="py-3 px-3 text-start">المدفوع</th><th class="py-3 px-3 text-start">الباقي</th>
                         <th class="py-3 px-3 text-start">مدة الطلبية</th><th class="py-3 px-3 text-start">التسليم</th><th class="py-3 px-3 text-start">الشحن والنقل</th><th class="py-3 px-3 text-start">طريقة الدفع</th>
                         <th class="py-3 px-3 text-center">إجراءات</th></tr></thead>
-                    <tbody class="divide-y divide-slate-200">${rows.map(c => `<tr class="hover:bg-slate-50">
+                    <tbody class="divide-y divide-slate-200">${slice.map(c => `<tr class="hover:bg-slate-50">
                         <td class="py-3 px-3 font-mono font-bold">${custNoLabel(c)}</td>
                         <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.date) || '—')}</td>
                         <td class="py-3 px-3 font-semibold">${esc(c.customer)}</td>
@@ -8303,24 +8417,14 @@
                         <td class="py-3 px-3">${custActionsHtml(c)}</td>
                     </tr>`).join('')}</tbody>
                 </table>
-            </div>
-            <div class="md:hidden space-y-3">
-                ${rows.map(c => `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-1">
-                    <div class="flex items-start justify-between gap-2"><p class="font-bold text-slate-800">${esc(c.customer)}</p>${custDeliveryBadge(c)}</div>
-                    <p class="text-sm font-mono">${custNoLabel(c)} · ${esc(fmtDateAr(c.date) || '—')}</p>
-                    <p class="text-sm">المندوب: ${esc(c.repName || '—')} · ${esc(c.category || '—')} · ${esc(c.completeness || '—')}</p>
-                    <p class="text-sm">المبلغ ${fmtMoney(numOr0(c.amount))} · المدفوع ${fmtMoney(numOr0(c.paid))} · <b class="${custRemaining(c) > 0 ? 'text-rose-700' : ''}">الباقي ${fmtMoney(custRemaining(c))}</b></p>
-                    ${c.validUntil ? `<p class="text-sm">مدة الطلبية حتى ${esc(fmtDateAr(c.validUntil))}</p>` : ''}
-                    <p class="text-sm">الشحن والنقل: ${c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل'} · طريقة الدفع: <b>${esc(c.payMethod || 'نقدي')}</b></p>
-                    <div class="flex justify-end">${custActionsHtml(c)}</div>
-                </div>`).join('')}
-            </div>`;
+            </div>${moreBar}`;
         }
 
         // the rep's own invoices as cards stacked one under another (his account view)
         function custRepInvoicesHtml(rows) {
             if (!rows.length) return '<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-6 text-center text-slate-600 font-bold">مفيش فواتير مطابقة للفلاتر دي</div>';
-            return `<div class="space-y-3">${rows.map(c => `<article class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-2">
+            const slice = rows.length > custVisibleLimit ? rows.slice(0, custVisibleLimit) : rows;
+            return `<div class="space-y-3">${slice.map(c => `<article class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-2" style="content-visibility:auto;contain-intrinsic-size:210px">
                     <div class="flex items-start justify-between gap-2">
                         <p class="font-mono font-black text-slate-800">فاتورة رقم ${custNoLabel(c)}</p>
                         ${custDeliveryBadge(c)}
@@ -8341,7 +8445,7 @@
                     <p class="text-sm text-slate-600">الشحن والنقل: ${c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل'} · طريقة الدفع: <b>${esc(c.payMethod || 'نقدي')}</b></p>
                     ${c.notes ? `<p class="text-sm text-slate-600 whitespace-pre-wrap">${esc(c.notes)}</p>` : ''}
                     <div class="flex justify-end">${custActionsHtml(c)}</div>
-                </article>`).join('')}</div>`;
+                </article>`).join('')}</div>${custMoreFooterHtml(slice.length, rows.length)}`;
         }
 
         function custBodyHtml() {
@@ -8377,7 +8481,7 @@
             const dels = CUST_DELIVERY.map(d => opt(f.delivery, d, d)).join('');
             return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg p-4 space-y-3">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="sm:col-span-2">${field('بحث', `<input type="search" value="${esc(f.q)}" oninput="custFilter.q = this.value; updateCustBody()" placeholder="اسم العميل، رقم الطلب، المندوب، الحجز" class="${INPUT_CLS}">`)}</div>
+                    <div class="sm:col-span-2">${field('بحث', `<input type="search" value="${esc(f.q)}" oninput="custFilter.q = this.value; custVisibleLimit = 80; uiDebounce('custQ', updateCustBody, 140)" placeholder="اسم العميل، رقم الطلب، المندوب، الحجز" class="${INPUT_CLS}">`)}</div>
                     ${(!isSystemAdmin() && visibleRepId()) ? '' : field('المندوب', `<select onchange="custFilter.rep = this.value; updateCustBody()" class="${INPUT_CLS}"><option value="">كل المندوبين</option>${reps}</select>`)}
                     ${field('الصنف', `<select onchange="custFilter.category = this.value; updateCustBody()" class="${INPUT_CLS}"><option value="">كل الأصناف</option>${cats}</select>`)}
                     ${field('حالة التسليم', `<select onchange="custFilter.delivery = this.value; updateCustBody()" class="${INPUT_CLS}"><option value="all" ${f.delivery === 'all' ? 'selected' : ''}>الكل</option>${dels}</select>`)}
@@ -11146,7 +11250,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
                     <div class="relative">
                         <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
-                        <input type="search" value="${esc(debtFilterQ)}" oninput="debtFilterQ=this.value; render()" placeholder="بحث بالعميل، التليفون، السبب..." class="${INPUT_CLS} pr-9">
+                        <input id="debtSearchInp" type="search" value="${esc(debtFilterQ)}" oninput="debtFilterQ=this.value; uiDebounce('debtQ', () => { const pos = this.selectionStart; render(); const el2 = document.getElementById('debtSearchInp'); if (el2) { el2.focus(); try { el2.setSelectionRange(pos, pos); } catch(e){} } }, 180)" placeholder="بحث بالعميل، التليفون، السبب..." class="${INPUT_CLS} pr-9">
                     </div>
                     <select onchange="debtFilterStage=this.value; render()" class="${INPUT_CLS}">${stageOpts}</select>
                     <select onchange="debtFilterSource=this.value; render()" class="${INPUT_CLS}">${srcOpts}</select>
@@ -15003,7 +15107,7 @@
                     <div class="bg-white p-3 sm:p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-3 sm:items-center">
                         <div class="relative w-full sm:w-96">
                             <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
-                            <input type="search" id="compSearch" oninput="renderCompanyGrid()" placeholder="ابحث باسم الشركة أو الوكيل..." class="${INPUT_CLS} pr-9">
+                            <input type="search" id="compSearch" oninput="uiDebounce('compQ', renderCompanyGrid, 140)" placeholder="ابحث باسم الشركة أو الوكيل..." class="${INPUT_CLS} pr-9">
                         </div>
                         <p id="compCount" class="text-xs text-slate-500 sm:ms-auto"></p>
                     </div>
@@ -15812,7 +15916,7 @@
                     <div class="bg-white p-3 sm:p-4 rounded-xl border border-slate-200">
                         <div class="relative w-full sm:w-96">
                             <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
-                            <input type="search" id="logSearch" oninput="renderLogs()" placeholder="بحث بالمستخدم أو الإجراء..." class="${INPUT_CLS} pr-9">
+                            <input type="search" id="logSearch" oninput="uiDebounce('logQ', renderLogs, 140)" placeholder="بحث بالمستخدم أو الإجراء..." class="${INPUT_CLS} pr-9">
                         </div>
                     </div>
                     <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -17248,18 +17352,30 @@
             bindTilt() {
                 if (this._tiltBound || this.level === 'lite' || !window.matchMedia('(pointer: fine)').matches) return;
                 this._tiltBound = true;
-                document.addEventListener('mousemove', e => {
-                    const card = e.target.closest && e.target.closest('[data-tilt]');
-                    document.querySelectorAll('[data-tilt].tilting').forEach(n => { if (n !== card) { n.classList.remove('tilting'); n.style.transform = ''; } });
+                let activeCard = null, rafId = 0, lastE = null;
+                const clearActive = () => {
+                    if (activeCard) { activeCard.classList.remove('tilting'); activeCard.style.transform = ''; activeCard = null; }
+                };
+                const apply = () => {
+                    rafId = 0;
+                    const e = lastE; if (!e) return;
+                    const card = e.target && e.target.closest ? e.target.closest('[data-tilt]') : null;
+                    if (card !== activeCard) clearActive();
                     if (!card) return;
+                    activeCard = card;
                     const r = card.getBoundingClientRect();
+                    if (!r.width || !r.height) return;
                     const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
                     card.classList.add('tilting');
                     card.style.setProperty('--mx', (x * 100) + '%'); card.style.setProperty('--my', (y * 100) + '%');
                     const max = this.level === 'cinematic' ? 6 : 3.5;
                     card.style.transform = `perspective(900px) rotateY(${(x - .5) * -max}deg) rotateX(${(y - .5) * max}deg) translateY(-2px)`;
+                };
+                document.addEventListener('mousemove', e => {
+                    lastE = e;
+                    if (!rafId) rafId = requestAnimationFrame(apply);
                 }, { passive: true });
-                document.addEventListener('mouseleave', () => {}, true);
+                document.addEventListener('mouseleave', clearActive, true);
             },
             tagTilt() {
                 document.querySelectorAll('.kpi, .home-card, #companyGrid article').forEach(n => {
@@ -17282,11 +17398,19 @@
                 this.canvas = canvas; this.ctx = ctx;
                 const fit = () => { const r = canvas.parentElement.getBoundingClientRect(); canvas.width = Math.max(50, r.width); canvas.height = Math.max(50, r.height); };
                 fit();
-                const n = count || (App.Motion.level === 'cinematic' ? 55 : 28);
+                const isTouch = window.matchMedia && !window.matchMedia('(pointer: fine)').matches;
+                const n = count || (isTouch ? 18 : (App.Motion.level === 'cinematic' ? 45 : 24));
+                const minFrameMs = isTouch ? 34 : 16; // ~30fps on phones, 60fps on desktop
                 this.parts = Array.from({ length: n }, () => ({ x: Math.random(), y: Math.random(), r: .8 + Math.random() * 1.9, vy: -(.008 + Math.random() * .03), vx: (Math.random() - .5) * .012, ph: Math.random() * Math.PI * 2, gold: Math.random() > .4 }));
                 const dark = document.documentElement.dataset.theme === 'dark';
+                let lastDraw = 0;
                 const step = (t) => {
                     if (!this.ctx) return;
+                    this.raf = requestAnimationFrame(step);
+                    if (document.hidden || (t - lastDraw) < minFrameMs) return;
+                    const rect = canvas.getBoundingClientRect();
+                    if (rect.bottom < 0 || rect.top > window.innerHeight) return;
+                    lastDraw = t;
                     const { width: W, height: H } = canvas;
                     ctx.clearRect(0, 0, W, H);
                     for (const pt of this.parts) {
@@ -17299,7 +17423,6 @@
                         ctx.fillStyle = pt.gold ? `rgba(201,169,97,${.5 * tw})` : (dark ? `rgba(125,211,252,${.4 * tw})` : `rgba(2,132,199,${.35 * tw})`);
                         ctx.fill();
                     }
-                    this.raf = requestAnimationFrame(step);
                 };
                 this.raf = requestAnimationFrame(step);
                 canvas._fit = fit;
@@ -17947,5 +18070,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60a71a709e3a65d',t:'MTc5NTcxMjM2OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60a71a709e3a65d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60a80a45a34e1d0',t:'MTc5NTcxMjk4Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60a80a45a34e1d0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
