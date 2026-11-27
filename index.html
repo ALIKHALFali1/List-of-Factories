@@ -801,8 +801,12 @@
             ] },
             { title: 'الإدارة المالية والخزينة (سري)', items: [
                 ['finance.access', 'الدخول لقسم الإدارة المالية والخزينة (سري ومقفول بكلمة سر وبصمة)'],
+                ['finance.vault.main', 'إظهار والعمل على الخزينة رقم 1 (الخزينة الرئيسية)'],
+                ['finance.vault.sub1', 'إظهار والعمل على الخزينة رقم 2 (الخزينة الفرعية 1)'],
+                ['finance.vault.sub2', 'إظهار والعمل على الخزينة رقم 3 (الخزينة الفرعية 2)'],
+                ['finance.vault.all', 'إظهار جميع الخزائن (بما فيها الخزائن الإضافية) والتنقل بينها'],
                 ['finance.manage', 'إدارة الخزائن واليومية والتحويلات بين الخزائن والجرد'],
-                ['finance.audit', 'تعديل أسعار الصرف وإعدادات الأمان والبصمة والتقارير الدولية IFRS']
+                ['finance.audit', 'الإدارة الشاملة وتقارير IFRS وأسعار الصرف وإعدادات الأمان والبصمة']
             ] }
         ];
         const ALL_PERMS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i[0]));
@@ -4548,6 +4552,7 @@
             if (name === 'complaints') return can('complaints.file') || can('complaints.manage');
             if (name === 'expenses') return can('expenses.request') || can('expenses.approve') || isSystemAdmin();
             if (name === 'debts') return can('debts.view') || can('debts.manage') || can('debts.delete');
+            if (name === 'finance') return typeof finCanAccess === 'function' ? finCanAccess() : (isSystemAdmin() || can('finance.access'));
             if (name === 'announcements') return true;
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
@@ -4862,7 +4867,10 @@
             }
             ensureHomePersonalPerm();
             if (!(parseRoute().name === 'shipping' && parseRoute().param === 'screen')) shipLeaveScreen();
-            if (parseRoute().name !== 'finance' && typeof finOnLeaveRoute === 'function') finOnLeaveRoute();
+            if (parseRoute().name !== 'finance') {
+                if (typeof finPrevRoute !== 'undefined') finPrevRoute = location.hash || '#/home';
+                if (typeof finOnLeaveRoute === 'function') finOnLeaveRoute();
+            }
             if (parseRoute().name !== 'home') { debtPopupUnmount(); annPopupUnmount(); }
             let { name, param } = parseRoute();
 
@@ -13113,6 +13121,13 @@
         let finUnlockedVaults = new Set();
         let finPrivacyBlur = false;
         let finTab = 'dashboard';
+        let finPrevRoute = '#/home';
+        let finViewMode = 'selector'; // 'selector' | 'vault' | 'executive'
+        let finActiveVaultId = '';
+        let finActiveVaultTab = 'journal'; // 'journal' | 'audit' | 'settings'
+        let finPendingVaultId = '';
+        let finPortalBusy = false;
+        let finVaultFilter = { currency: '', type: '', from: '', q: '' };
         let finLastActivity = Date.now();
         let finIdleTimer = null;
         let finJournalFilter = { vault: '', currency: '', type: '', ias7: '', from: '', to: '', q: '' };
@@ -13120,9 +13135,29 @@
         let finIfrsTo = '';
         let finAuditDraft = { vaultId: '', currency: 'EGP', counts: {} };
 
-        function finCanAccess() { return isSystemAdmin() || can('finance.access'); }
+        function finCanAccess() { return isSystemAdmin() || can('finance.access') || can('finance.vault.main') || can('finance.vault.sub1') || can('finance.vault.sub2') || can('finance.vault.all'); }
         function finCanManage() { return isSystemAdmin() || can('finance.manage') || can('finance.access'); }
-        function finCanAudit()  { return isSystemAdmin() || can('finance.audit') || can('finance.access'); }
+        function finCanAudit()  { return isSystemAdmin() || can('finance.audit'); }
+        function finCanExecutiveView() { return isSystemAdmin() || can('finance.audit'); }
+        function finVaultNumber(v, idx = 0) {
+            if (!v) return idx + 1;
+            if (v.id === 'V-MAIN') return 1;
+            if (v.id === 'V-SUB1') return 2;
+            if (v.id === 'V-SUB2') return 3;
+            return Number(v.order) || (idx + 1);
+        }
+        function finCanSeeVault(v) {
+            if (!v) return false;
+            if (isSystemAdmin() || can('finance.vault.all')) return true;
+            if (v.id === 'V-MAIN') return can('finance.vault.main');
+            if (v.id === 'V-SUB1') return can('finance.vault.sub1');
+            if (v.id === 'V-SUB2') return can('finance.vault.sub2');
+            if (Array.isArray(v.allowedUids) && v.allowedUids.includes(sessionUserId)) return true;
+            return false;
+        }
+        function finVisibleVaults() {
+            return finVaults.filter(finCanSeeVault);
+        }
 
         function finRateOf(curr) {
             const c = String(curr || 'EGP').toUpperCase();
@@ -13339,6 +13374,10 @@
             const wasOpen = finMasterUnlocked || finUnlockedVaults.size > 0;
             finMasterUnlocked = false;
             finUnlockedVaults.clear();
+            finViewMode = 'selector';
+            finActiveVaultId = '';
+            finPendingVaultId = '';
+            finPortalBusy = false;
             if (finIdleTimer) { clearInterval(finIdleTimer); finIdleTimer = null; }
             if (wasOpen && !silent) {
                 finSecLog('قفل الإدارة المالية', reason, 'info');
@@ -13347,6 +13386,8 @@
             if (parseRoute().name === 'finance') finRepaint();
         }
         function finOnLeaveRoute() {
+            finPendingVaultId = '';
+            finPortalBusy = false;
             if (!finMasterUnlocked && !finUnlockedVaults.size) return;
             if (!finCfg || finCfg.lockOnLeave !== false) {
                 finLockNow(true, 'قفل تلقائي عند مغادرة القسم');
@@ -13634,13 +13675,17 @@
 
         function openFinTxnModal(type = 'in', preVaultId = '') {
             if (!finCanManage()) return toast('ليس لديك صلاحية تسجيل الحركات المالية', 'error');
-            const targetId = preVaultId || (finVaults.find(v => finUnlockedVaults.has(v.id))?.id) || (finVaults[0]?.id || '');
+            const pool = (finViewMode === 'vault' && finActiveVaultId)
+                ? finVaults.filter(v => v.id === finActiveVaultId)
+                : finVisibleVaults();
+            const targetId = preVaultId || (pool.find(v => finUnlockedVaults.has(v.id))?.id) || (pool[0]?.id || '');
+            if (!targetId) return toast('لا توجد خزينة مصرح بها لحسابك', 'error');
             if (targetId && !finUnlockedVaults.has(targetId)) {
                 return openFinUnlockVault(targetId, () => openFinTxnModal(type, targetId));
             }
             const isIn = type === 'in';
             const cats = isIn ? FIN_IN_CATS : FIN_OUT_CATS;
-            const vaultOpts = finVaults.map(v => `<option value="${esc(v.id)}" ${v.id === targetId ? 'selected' : ''}>${finUnlockedVaults.has(v.id) ? '🔓' : '🔒'} ${esc(v.name)}</option>`).join('');
+            const vaultOpts = pool.map(v => `<option value="${esc(v.id)}" ${v.id === targetId ? 'selected' : ''}>${finUnlockedVaults.has(v.id) ? '🔓' : '🔒'} ${esc(v.name)}</option>`).join('');
             const currOpts = FIN_CURR_LIST.map(c => `<option value="${c}">${FIN_CURRENCIES[c].flag} ${FIN_CURRENCIES[c].name} (${c}) — سعر ${finRateOf(c)}</option>`).join('');
             openModal({
                 title: isIn ? '🟢 سند قبض / توريد للخزينة' : '🔴 سند صرف / سحب من الخزينة',
@@ -13704,13 +13749,22 @@
         function openFinTransferModal(preFromId = '') {
             if (!finCanManage()) return toast('ليس لديك صلاحية التحويل بين الخزائن', 'error');
             if (finVaults.length < 2) return toast('تحتاج خزينتين على الأقل للتحويل', 'error');
-            const fromId = preFromId || (finVaults.find(v => finUnlockedVaults.has(v.id))?.id) || finVaults[0].id;
+            const fromPool = (finViewMode === 'vault' && finActiveVaultId)
+                ? finVaults.filter(v => v.id === finActiveVaultId)
+                : finVisibleVaults();
+            const fromId = preFromId || (fromPool.find(v => finUnlockedVaults.has(v.id))?.id) || (fromPool[0]?.id || '');
+            if (!fromId) return toast('لا توجد خزينة مصرح بها للتحويل', 'error');
             if (!finUnlockedVaults.has(fromId)) {
                 return openFinUnlockVault(fromId, () => openFinTransferModal(fromId));
             }
-            const toDefault = (finVaults.find(v => v.id !== fromId) || finVaults[0]).id;
+            const toPool = finVaults.filter(v => v.id !== fromId);
+            const toDefault = (toPool.find(v => v.id === 'V-MAIN') || toPool[0] || finVaults[0]).id;
             const bals = finComputeBalances().byVault;
-            const opts = sel => finVaults.map(v => `<option value="${esc(v.id)}" ${v.id === sel ? 'selected' : ''}>${finUnlockedVaults.has(v.id) ? '🔓' : '🔒'} ${esc(v.name)} (${finFmtCurr(bals[v.id]?.totalEgp || 0, 'EGP')})</option>`).join('');
+            const optsFrom = sel => fromPool.map(v => `<option value="${esc(v.id)}" ${v.id === sel ? 'selected' : ''}>🔓 ${esc(v.name)} (${finFmtCurr(bals[v.id]?.totalEgp || 0, 'EGP')})</option>`).join('');
+            const optsTo = sel => toPool.map(v => {
+                const showBal = finCanSeeVault(v) && finUnlockedVaults.has(v.id);
+                return `<option value="${esc(v.id)}" ${v.id === sel ? 'selected' : ''}>${showBal ? '🔓' : '🏛'} خزينة ${finVaultNumber(v)} — ${esc(v.name)}${showBal ? ' (' + finFmtCurr(bals[v.id]?.totalEgp || 0, 'EGP') + ')' : ''}</option>`;
+            }).join('');
             const currOpts = FIN_CURR_LIST.map(c => `<option value="${c}">${FIN_CURRENCIES[c].flag} ${FIN_CURRENCIES[c].name} (${c})</option>`).join('');
             openModal({
                 title: '🔁 تحويل نقدي بين الخزائن (قيد مزدوج آمن)',
@@ -13721,8 +13775,8 @@
                         يتم الخصم آلياً من <b>الخزينة المُحوِّلة</b> والإضافة في نفس اللحظة إلى <b>الخزينة المستلمة</b> برقم تحويل موحّد، دون تضخيم إيرادات أو مصروفات قائمة التدفقات الدولية (IAS 7).
                     </div>
                     <div class="grid sm:grid-cols-2 gap-3">
-                        ${field('من خزينة (المُحوِّلة) *', `<select name="fromId" required class="${INPUT_CLS}">${opts(fromId)}</select>`)}
-                        ${field('إلى خزينة (المستلمة) *', `<select name="toId" required class="${INPUT_CLS}">${opts(toDefault)}</select>`)}
+                        ${field('من خزينة (المُحوِّلة) *', `<select name="fromId" required class="${INPUT_CLS}">${optsFrom(fromId)}</select>`)}
+                        ${field('إلى خزينة (المستلمة) *', `<select name="toId" required class="${INPUT_CLS}">${optsTo(toDefault)}</select>`)}
                         ${field('العملة *', `<select name="currency" required class="${INPUT_CLS}">${currOpts}</select>`)}
                         ${field('المبلغ *', `<input name="amount" type="number" step="0.01" min="0.01" required dir="ltr" placeholder="0.00" class="${INPUT_CLS} font-mono font-bold">`)}
                         ${field('التاريخ *', `<input name="date" type="date" required value="${todayISO()}" class="${INPUT_CLS}">`)}
@@ -13764,11 +13818,15 @@
 
         function openFinFxModal(preVaultId = '') {
             if (!finCanManage()) return toast('ليس لديك صلاحية تبديل العملات', 'error');
-            const vId = preVaultId || (finVaults.find(v => finUnlockedVaults.has(v.id))?.id) || (finVaults[0]?.id || '');
+            const pool = (finViewMode === 'vault' && finActiveVaultId)
+                ? finVaults.filter(v => v.id === finActiveVaultId)
+                : finVisibleVaults();
+            const vId = preVaultId || (pool.find(v => finUnlockedVaults.has(v.id))?.id) || (pool[0]?.id || '');
+            if (!vId) return toast('لا توجد خزينة مصرح بها لحسابك', 'error');
             if (vId && !finUnlockedVaults.has(vId)) {
                 return openFinUnlockVault(vId, () => openFinFxModal(vId));
             }
-            const vaultOpts = finVaults.map(v => `<option value="${esc(v.id)}" ${v.id === vId ? 'selected' : ''}>${finUnlockedVaults.has(v.id) ? '🔓' : '🔒'} ${esc(v.name)}</option>`).join('');
+            const vaultOpts = pool.map(v => `<option value="${esc(v.id)}" ${v.id === vId ? 'selected' : ''}>${finUnlockedVaults.has(v.id) ? '🔓' : '🔒'} ${esc(v.name)}</option>`).join('');
             const cOpts = def => FIN_CURR_LIST.map(c => `<option value="${c}" ${c === def ? 'selected' : ''}>${FIN_CURRENCIES[c].flag} ${c} — ${FIN_CURRENCIES[c].name}</option>`).join('');
             openModal({
                 title: '💱 صرف وتبديل عملة داخل الخزينة (IAS 21)',
@@ -14052,25 +14110,131 @@
         }
 
         const FIN_STYLES = `<style id="finLuxuryCss">
-            .fin-shell{background:linear-gradient(155deg,#070b14 0%,#0f172a 52%,#111827 100%);color:#e2e8f0;border-radius:1.5rem;border:1px solid rgba(212,175,55,.28);box-shadow:0 24px 60px -18px rgba(2,6,23,.75);overflow:hidden}
-            .fin-gold{color:#f5d073}
-            .fin-card{background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.18);border-radius:1.15rem}
-            .fin-card-gold{background:linear-gradient(135deg,rgba(212,175,55,.16),rgba(15,23,42,.85));border:1px solid rgba(212,175,55,.42);border-radius:1.15rem}
-            .fin-inp{background:rgba(2,6,23,.65);border:1px solid rgba(148,163,184,.28);color:#f8fafc;border-radius:.75rem;padding:.55rem .8rem;width:100%;font-size:.875rem;outline:none}
-            .fin-inp:focus{border-color:#eab308;box-shadow:0 0 0 2px rgba(234,179,8,.22)}
+            .fin-shell{background:linear-gradient(155deg,#050914 0%,#0c1426 52%,#0a1020 100%);color:#e2e8f0;border-radius:1.5rem;border:1px solid rgba(212,175,55,.26);box-shadow:0 24px 60px -18px rgba(2,6,23,.82);overflow:hidden;animation:finFadeIn .38s cubic-bezier(.22,1,.36,1) both}
+            .fin-gold{color:#e6c46d}
+            .fin-card{background:rgba(13,21,38,.74);border:1px solid rgba(148,163,184,.16);border-radius:1.15rem}
+            .fin-card-gold{background:linear-gradient(135deg,rgba(212,175,55,.15),rgba(13,21,38,.88));border:1px solid rgba(212,175,55,.38);border-radius:1.15rem}
+            .fin-inp{background:rgba(4,9,20,.72);border:1px solid rgba(148,163,184,.24);color:#f8fafc;border-radius:.75rem;padding:.55rem .8rem;width:100%;font-size:.875rem;outline:none;transition:border-color .22s ease,box-shadow .22s ease}
+            .fin-inp:focus{border-color:rgba(212,175,55,.68);box-shadow:0 0 0 3px rgba(212,175,55,.14)}
             .fin-blur{filter:blur(7px);transition:filter .2s}
             .fin-blur:hover{filter:none}
-            .fin-tab{padding:.55rem .95rem;border-radius:.85rem;font-size:.8rem;font-weight:800;display:inline-flex;align-items:center;gap:.45rem;transition:all .15s;cursor:pointer;white-space:nowrap}
-            .fin-tab-on{background:linear-gradient(135deg,#d97706,#eab308);color:#0f172a;box-shadow:0 6px 18px -4px rgba(234,179,8,.45)}
-            .fin-tab-off{background:rgba(255,255,255,.06);color:#cbd5e1;border:1px solid rgba(255,255,255,.09)}
-            .fin-tab-off:hover{background:rgba(255,255,255,.12);color:#fff}
+            .fin-tab{padding:.55rem .95rem;border-radius:.85rem;font-size:.8rem;font-weight:800;display:inline-flex;align-items:center;gap:.45rem;transition:transform .16s ease,background-color .18s ease,color .18s ease;cursor:pointer;white-space:nowrap}
+            .fin-tab-on{background:linear-gradient(135deg,#c99a32,#e5c158);color:#090e1a;box-shadow:0 6px 18px -4px rgba(212,175,55,.42)}
+            .fin-tab-off{background:rgba(255,255,255,.055);color:#cbd5e1;border:1px solid rgba(255,255,255,.08)}
+            .fin-tab-off:hover{background:rgba(255,255,255,.11);color:#fff}
+
+            /* ===== Premium Cinematic Dark Vault Portal (Pure CSS, GPU-Composited) ===== */
+            .fin-portal{position:fixed;inset:0;z-index:95;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;background:radial-gradient(900px 560px at 50% 16%,rgba(212,175,55,.085),transparent 62%),radial-gradient(720px 540px at 18% 92%,rgba(148,163,184,.07),transparent 58%),rgba(2,6,18,.93);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:finBackdropIn .38s cubic-bezier(.22,1,.36,1) both}
+            .fin-portal::before{content:'';position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);background-size:48px 48px;mask-image:radial-gradient(ellipse at 50% 42%,#000 18%,transparent 74%)}
+            .fin-portal.is-leaving{animation:finBackdropOut .36s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
+            .fin-portal-inner{position:relative;width:100%;max-width:27.5rem;margin:auto;z-index:2;display:flex;flex-direction:column;align-items:center}
+            .fin-portal-inner.is-wide{max-width:52rem}
+
+            /* Metallic 3D-feel CSS Vault Door & Lock Wheel */
+            .fin-vault-stage{position:relative;width:7.5rem;height:7.5rem;margin-bottom:1.15rem;display:flex;align-items:center;justify-content:center;animation:finVaultEnter .62s cubic-bezier(.22,1,.36,1) both}
+            .fin-vault-stage.is-compact{width:5.25rem;height:5.25rem;margin-bottom:.85rem}
+            .fin-vault-glow{position:absolute;inset:-14px;border-radius:9999px;background:radial-gradient(circle,rgba(212,175,55,.22) 0%,rgba(203,213,225,.08) 42%,transparent 72%);opacity:.65;transition:opacity .35s ease,transform .45s ease;pointer-events:none}
+            .fin-vault-door{position:relative;width:100%;height:100%;border-radius:9999px;background:radial-gradient(circle at 32% 26%,#3b465c 0%,#1a2234 45%,#0b101d 100%);border:2px solid rgba(203,213,225,.28);box-shadow:inset 0 2px 5px rgba(255,255,255,.18),inset 0 -8px 16px rgba(0,0,0,.78),0 18px 40px -10px rgba(0,0,0,.88),0 0 0 5px rgba(15,23,42,.92),0 0 0 6px rgba(212,175,55,.22);display:flex;align-items:center;justify-content:center;transition:border-color .35s ease,box-shadow .35s ease}
+            .fin-vault-door::before{content:'';position:absolute;inset:7px;border-radius:9999px;border:1px solid rgba(212,175,55,.28);background:conic-gradient(from 210deg,rgba(255,255,255,.11),transparent 24%,rgba(212,175,55,.16) 50%,transparent 74%,rgba(255,255,255,.08));pointer-events:none}
+            .fin-vault-door::after{content:'';position:absolute;inset:14px;border-radius:9999px;background:radial-gradient(circle at 35% 30%,#1e293b 0%,#0b1220 72%,#050914 100%);box-shadow:inset 0 3px 8px rgba(0,0,0,.85),0 1px 0 rgba(255,255,255,.12);pointer-events:none}
+
+            /* 4 Metallic Retractable Locking Bolts */
+            .fin-bolt{position:absolute;background:linear-gradient(135deg,#e2e8f0,#64748b);border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,.7);z-index:2;transition:transform .46s cubic-bezier(.22,1,.36,1),background .35s ease}
+            .fin-bolt-t{top:3px;left:50%;width:9px;height:13px;transform:translateX(-50%)}
+            .fin-bolt-b{bottom:3px;left:50%;width:9px;height:13px;transform:translateX(-50%)}
+            .fin-bolt-l{left:3px;top:50%;width:13px;height:9px;transform:translateY(-50%)}
+            .fin-bolt-r{right:3px;top:50%;width:13px;height:9px;transform:translateY(-50%)}
+
+            /* 6-Spoke Rotating Metallic Handwheel */
+            .fin-vault-wheel{position:relative;z-index:3;width:62%;height:62%;border-radius:9999px;border:4px solid #94a3b8;box-shadow:inset 0 1px 2px rgba(255,255,255,.45),0 4px 12px rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;will-change:transform;animation:finWheelSettle .72s cubic-bezier(.22,1,.36,1) .08s both;transition:border-color .35s ease}
+            .fin-spoke{position:absolute;width:86%;height:3px;background:linear-gradient(90deg,#cbd5e1,#64748b,#cbd5e1);border-radius:999px;box-shadow:0 1px 2px rgba(0,0,0,.6)}
+            .fin-spoke-2{transform:rotate(60deg)}
+            .fin-spoke-3{transform:rotate(120deg)}
+            .fin-vault-hub{position:relative;z-index:4;width:28px;height:28px;border-radius:9999px;background:radial-gradient(circle at 32% 28%,#f7dfa0 0%,#c79c3a 58%,#735314 100%);border:1.5px solid rgba(255,244,209,.65);box-shadow:0 2px 8px rgba(0,0,0,.7),inset 0 1px 2px rgba(255,255,255,.55);display:flex;align-items:center;justify-content:center;color:#0a0f1c;font-size:.66rem}
+            .fin-vault-stage.is-compact .fin-vault-hub{width:22px;height:22px;font-size:.55rem}
+
+            /* Interactive States on Vault Stage */
+            .fin-portal.is-typing .fin-vault-glow{opacity:.95;transform:scale(1.06)}
+            .fin-portal.is-typing .fin-vault-door{border-color:rgba(212,175,55,.48)}
+            .fin-portal.is-verifying .fin-vault-wheel{animation:finWheelVerify .55s cubic-bezier(.45,.05,.55,.95) infinite}
+            .fin-portal.is-unlocked .fin-vault-glow{opacity:1;transform:scale(1.18);background:radial-gradient(circle,rgba(52,211,153,.3) 0%,rgba(212,175,55,.22) 45%,transparent 72%)}
+            .fin-portal.is-unlocked .fin-vault-door{border-color:rgba(212,175,55,.78);box-shadow:inset 0 2px 6px rgba(255,255,255,.22),inset 0 -8px 16px rgba(0,0,0,.75),0 0 36px -4px rgba(212,175,55,.35),0 0 0 5px rgba(15,23,42,.92),0 0 0 6px rgba(52,211,153,.5)}
+            .fin-portal.is-unlocked .fin-vault-wheel{border-color:#e5c158;animation:finWheelUnlock .58s cubic-bezier(.22,1,.36,1) forwards}
+            .fin-portal.is-unlocked .fin-bolt-t{transform:translate(-50%,9px);background:linear-gradient(135deg,#fde68a,#ca8a04)}
+            .fin-portal.is-unlocked .fin-bolt-b{transform:translate(-50%,-9px);background:linear-gradient(135deg,#fde68a,#ca8a04)}
+            .fin-portal.is-unlocked .fin-bolt-l{transform:translate(9px,-50%);background:linear-gradient(135deg,#fde68a,#ca8a04)}
+            .fin-portal.is-unlocked .fin-bolt-r{transform:translate(-9px,-50%);background:linear-gradient(135deg,#fde68a,#ca8a04)}
+            .fin-portal.is-unlocked .fin-auth-card{animation:finCardExit .44s cubic-bezier(.4,0,.2,1) .2s forwards}
+
+            /* Auth Panel */
+            .fin-auth-card{width:100%;background:linear-gradient(165deg,rgba(15,23,42,.86) 0%,rgba(7,12,25,.92) 100%);border:1px solid rgba(148,163,184,.2);border-radius:1.45rem;padding:1.65rem 1.5rem 1.45rem;box-shadow:0 28px 65px -20px rgba(0,0,0,.85),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transition:border-color .3s ease,box-shadow .3s ease;animation:finSlideUp .48s cubic-bezier(.22,1,.36,1) .12s both}
+            .fin-auth-card:focus-within{border-color:rgba(212,175,55,.46);box-shadow:0 28px 65px -20px rgba(0,0,0,.85),0 0 38px -10px rgba(212,175,55,.22),inset 0 1px 0 rgba(255,235,175,.14)}
+            .fin-seq-1{animation:finSlideUp .42s cubic-bezier(.22,1,.36,1) .16s both}
+            .fin-seq-2{animation:finSlideUp .42s cubic-bezier(.22,1,.36,1) .24s both}
+            .fin-seq-3{animation:finSlideUp .42s cubic-bezier(.22,1,.36,1) .32s both}
+
+            .fin-pass-wrap{position:relative;display:flex;align-items:center;background:rgba(3,7,18,.78);border:1px solid rgba(148,163,184,.25);border-radius:.95rem;transition:border-color .24s ease,box-shadow .24s ease}
+            .fin-pass-wrap:focus-within{border-color:rgba(212,175,55,.68);box-shadow:0 0 0 3px rgba(212,175,55,.13)}
+            .fin-pass-wrap.is-error{border-color:rgba(244,63,94,.72);box-shadow:0 0 0 3px rgba(244,63,94,.16);animation:finShake .36s ease-in-out}
+            .fin-pass-input{width:100%;background:transparent;border:0;outline:none;color:#f8fafc;padding:.85rem 2.75rem;font-size:1.05rem;letter-spacing:.18em;text-align:center}
+            .fin-pass-input::placeholder{letter-spacing:.08em;color:rgba(148,163,184,.5);font-size:.82rem}
+            .fin-pass-lock{position:absolute;inset-inline-start:.95rem;color:#94a3b8;font-size:.95rem;transition:color .22s ease,transform .22s ease;pointer-events:none}
+            .fin-pass-lock.is-active{color:#e6c46d;transform:scale(1.08)}
+            .fin-pass-lock.is-open{color:#34d399;transform:scale(1.12)}
+            .fin-pass-eye{position:absolute;inset-inline-end:.65rem;width:2rem;height:2rem;border-radius:.6rem;display:flex;align-items:center;justify-content:center;color:#94a3b8;background:transparent;border:0;cursor:pointer;transition:color .18s ease,background-color .18s ease}
+            .fin-pass-eye:hover{color:#f8fafc;background:rgba(255,255,255,.07)}
+
+            .fin-btn-gold{position:relative;overflow:hidden;width:100%;padding:.85rem 1.2rem;border-radius:.95rem;border:1px solid rgba(253,230,138,.45);background:linear-gradient(135deg,#b88928 0%,#dfb855 52%,#c49430 100%);color:#070b14;font-weight:900;font-size:.9rem;cursor:pointer;box-shadow:0 12px 28px -10px rgba(212,175,55,.45);transition:transform .16s ease,box-shadow .22s ease,filter .2s ease}
+            .fin-btn-gold:hover:not(:disabled){filter:brightness(1.07);box-shadow:0 16px 34px -10px rgba(212,175,55,.58);transform:translateY(-1px)}
+            .fin-btn-gold:active:not(:disabled){transform:scale(.985)}
+            .fin-btn-gold:disabled{opacity:.45;cursor:not-allowed}
+
+            /* Vault Picker Cards */
+            .fin-vpick{position:relative;text-align:start;padding:1.15rem;border-radius:1.2rem;background:linear-gradient(155deg,rgba(18,28,50,.88),rgba(8,14,28,.94));border:1px solid rgba(148,163,184,.2);transition:transform .2s cubic-bezier(.22,1,.36,1),border-color .22s ease,box-shadow .22s ease;cursor:pointer;width:100%}
+            .fin-vpick:hover{transform:translateY(-3px);border-color:rgba(212,175,55,.58);box-shadow:0 18px 36px -14px rgba(0,0,0,.78),0 0 24px -8px rgba(212,175,55,.22)}
+            .fin-vpick:active{transform:scale(.988)}
+            .fin-vpick-main{border-color:rgba(212,175,55,.35);background:linear-gradient(155deg,rgba(35,30,18,.55),rgba(10,16,32,.95))}
+            .fin-vnum{width:2.5rem;height:2.5rem;border-radius:.85rem;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.05rem;flex:none}
+
+            @keyframes finBackdropIn{from{opacity:0}to{opacity:1}}
+            @keyframes finBackdropOut{from{opacity:1}to{opacity:0}}
+            @keyframes finFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+            @keyframes finVaultEnter{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:scale(1)}}
+            @keyframes finWheelSettle{from{transform:rotate(-52deg)}to{transform:rotate(0deg)}}
+            @keyframes finWheelVerify{0%{transform:rotate(0deg)}50%{transform:rotate(95deg)}100%{transform:rotate(180deg)}}
+            @keyframes finWheelUnlock{from{transform:rotate(0deg)}to{transform:rotate(125deg)}}
+            @keyframes finSlideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+            @keyframes finCardExit{from{opacity:1;transform:none}to{opacity:0;transform:translateY(-14px) scale(.97)}}
+            @keyframes finShake{0%,100%{transform:translateX(0)}22%{transform:translateX(-6px)}46%{transform:translateX(6px)}70%{transform:translateX(-4px)}86%{transform:translateX(3px)}}
+
+            @media (prefers-reduced-motion:reduce){
+                .fin-shell,.fin-portal,.fin-vault-stage,.fin-vault-wheel,.fin-auth-card,.fin-seq-1,.fin-seq-2,.fin-seq-3,.fin-pass-wrap.is-error{animation:none!important;transition-duration:.05s!important}
+            }
         </style>`;
+
+        function finVaultEmblemHtml(compact = false, hubIcon = 'fa-shield-halved') {
+            return `<div class="fin-vault-stage ${compact ? 'is-compact' : ''}">
+                <div class="fin-vault-glow"></div>
+                <div class="fin-vault-door">
+                    <span class="fin-bolt fin-bolt-t"></span>
+                    <span class="fin-bolt fin-bolt-b"></span>
+                    <span class="fin-bolt fin-bolt-l"></span>
+                    <span class="fin-bolt fin-bolt-r"></span>
+                    <div class="fin-vault-wheel">
+                        <span class="fin-spoke"></span>
+                        <span class="fin-spoke fin-spoke-2"></span>
+                        <span class="fin-spoke fin-spoke-3"></span>
+                        <div class="fin-vault-hub"><i class="fa-solid ${hubIcon}"></i></div>
+                    </div>
+                </div>
+            </div>`;
+        }
 
         function finSetupScreenHtml() {
             return `${FIN_STYLES}
             <div class="fin-shell p-5 sm:p-8 max-w-3xl mx-auto">
                 <div class="text-center space-y-2 mb-6">
-                    <div class="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-600 text-slate-950 flex items-center justify-center shadow-lg"><i class="fa-solid fa-vault text-3xl"></i></div>
+                    <div class="flex justify-center">${finVaultEmblemHtml(true, 'fa-vault')}</div>
                     <h2 class="text-2xl font-black text-white">تأسيس نظام الإدارة المالية والخزينة السري</h2>
                     <p class="text-xs text-slate-300 max-w-xl mx-auto">برنامج مالي مستقل بالكامل داخل النظام — مشفّر بتقنية <b class="fin-gold">PBKDF2-SHA256</b>، يدعم البصمة الحيوية وتعدد العملات وجرد الخزائن وتقارير <b class="fin-gold">IFRS / IAS 7</b> الدولية.</p>
                 </div>
@@ -14085,12 +14249,12 @@
                     <div class="fin-card p-4 space-y-3">
                         <h3 class="font-extrabold text-sm text-white"><i class="fa-solid fa-vault text-amber-400 me-1.5"></i>2. تأسيس الخزائن الثلاث (لكل خزينة كلمة سر مستقلة)</h3>
                         <div class="grid sm:grid-cols-2 gap-2.5">
-                            <input name="nameMain" value="الخزينة الرئيسية" required class="fin-inp font-bold" placeholder="اسم الخزينة الرئيسية">
-                            <input name="passMain" type="password" required minlength="4" dir="ltr" class="fin-inp font-mono" placeholder="كلمة سر الخزينة الرئيسية *">
-                            <input name="nameSub1" value="الخزينة الفرعية 1" required class="fin-inp font-bold" placeholder="اسم الخزينة الفرعية 1">
-                            <input name="passSub1" type="password" required minlength="4" dir="ltr" class="fin-inp font-mono" placeholder="كلمة سر الخزينة الفرعية 1 *">
-                            <input name="nameSub2" value="الخزينة الفرعية 2" required class="fin-inp font-bold" placeholder="اسم الخزينة الفرعية 2">
-                            <input name="passSub2" type="password" required minlength="4" dir="ltr" class="fin-inp font-mono" placeholder="كلمة سر الخزينة الفرعية 2 *">
+                            <input name="nameMain" value="الخزينة الرئيسية" required class="fin-inp font-bold" placeholder="اسم الخزينة 1">
+                            <input name="passMain" type="password" required minlength="4" dir="ltr" class="fin-inp font-mono" placeholder="الرقم السري لخزينة 1 *">
+                            <input name="nameSub1" value="الخزينة الفرعية 1" required class="fin-inp font-bold" placeholder="اسم الخزينة 2">
+                            <input name="passSub1" type="password" required minlength="4" dir="ltr" class="fin-inp font-mono" placeholder="الرقم السري لخزينة 2 *">
+                            <input name="nameSub2" value="الخزينة الفرعية 2" required class="fin-inp font-bold" placeholder="اسم الخزينة 3">
+                            <input name="passSub2" type="password" required minlength="4" dir="ltr" class="fin-inp font-mono" placeholder="الرقم السري لخزينة 3 *">
                         </div>
                     </div>
                     <div class="fin-card p-4 space-y-3">
@@ -14101,42 +14265,696 @@
                             <label class="block"><span class="text-xs text-slate-300 block mb-1">🇸🇦 الريال (SAR)</span><input name="rateSAR" type="number" step="0.01" value="13.3" required dir="ltr" class="fin-inp font-mono"></label>
                         </div>
                     </div>
-                    <button type="submit" class="w-full py-3.5 rounded-xl bg-gradient-to-l from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-sm shadow-lg cursor-pointer"><i class="fa-solid fa-shield-halved me-1.5"></i> تشفير وتأسيس الإدارة المالية</button>
+                    <button type="submit" class="fin-btn-gold"><i class="fa-solid fa-shield-halved me-1.5"></i> تشفير وتأسيس الإدارة المالية</button>
                 </form>
             </div>`;
+        }
+
+        function finPortalCancel() {
+            const portal = el('finVaultPortal');
+            const dest = (finPrevRoute && !finPrevRoute.startsWith('#/finance')) ? finPrevRoute : '#/home';
+            finPendingVaultId = '';
+            finPortalBusy = false;
+            if (portal) {
+                portal.classList.add('is-leaving');
+                setTimeout(() => { location.hash = dest; }, 320);
+            } else {
+                location.hash = dest;
+            }
+        }
+
+        function finPortalPassInput(inp) {
+            const portal = el('finVaultPortal');
+            const lockIco = el('finPortalLockIco');
+            const wrap = el('finPortalPassWrap');
+            const errBox = el('finPortalErr');
+            const hasVal = String(inp?.value || '').length > 0;
+            if (portal) portal.classList.toggle('is-typing', hasVal);
+            if (wrap) wrap.classList.remove('is-error');
+            if (errBox) { errBox.textContent = ''; errBox.classList.add('hidden'); }
+            if (lockIco) {
+                lockIco.className = hasVal
+                    ? 'fa-solid fa-key fin-pass-lock is-active'
+                    : 'fa-solid fa-lock fin-pass-lock';
+            }
+        }
+
+        function finTogglePortalPass() {
+            const inp = el('finPortalPassInp');
+            const ico = el('finPortalEyeIco');
+            if (!inp) return;
+            const show = inp.type === 'password';
+            inp.type = show ? 'text' : 'password';
+            if (ico) ico.className = show ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+            inp.focus();
+        }
+
+        function finPortalShowError(msg) {
+            const portal = el('finVaultPortal');
+            const wrap = el('finPortalPassWrap');
+            const errBox = el('finPortalErr');
+            const lockIco = el('finPortalLockIco');
+            if (portal) portal.classList.remove('is-verifying');
+            if (lockIco) lockIco.className = 'fa-solid fa-lock fin-pass-lock';
+            if (errBox) { errBox.textContent = msg; errBox.classList.remove('hidden'); }
+            if (wrap) {
+                wrap.classList.remove('is-error');
+                void wrap.offsetWidth;
+                wrap.classList.add('is-error');
+            }
+            const inp = el('finPortalPassInp');
+            if (inp) { inp.select(); inp.focus(); }
+        }
+
+        function finPortalAnimateSuccess(onDone) {
+            const portal = el('finVaultPortal');
+            const lockIco = el('finPortalLockIco');
+            if (lockIco) lockIco.className = 'fa-solid fa-lock-open fin-pass-lock is-open';
+            if (portal) {
+                portal.classList.remove('is-verifying');
+                portal.classList.add('is-unlocked');
+            }
+            const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            setTimeout(() => {
+                finPortalBusy = false;
+                if (onDone) onDone();
+            }, reduced ? 80 : 620);
+        }
+
+        async function finPortalSubmitMaster(ev) {
+            ev.preventDefault();
+            if (finPortalBusy) return;
+            const wait = finBruteRemainingSec('master');
+            if (wait > 0) return finPortalShowError(`البوابة مقفولة أمنياً للحماية — حاول بعد ${wait} ثانية`);
+            const inp = el('finPortalPassInp');
+            const pass = String(inp?.value || '');
+            if (!pass) return finPortalShowError('أدخل كلمة المرور للمتابعة');
+
+            finPortalBusy = true;
+            const portal = el('finVaultPortal');
+            const lockIco = el('finPortalLockIco');
+            const btnEl = el('finPortalSubmitBtn');
+            if (portal) portal.classList.add('is-verifying');
+            if (lockIco) lockIco.className = 'fa-solid fa-circle-notch fa-spin fin-pass-lock is-active';
+            if (btnEl) btnEl.disabled = true;
+
+            const t0 = Date.now();
+            const ok = await finVerifyPassword(pass, finCfg?.masterHash, finCfg?.masterSalt);
+            const elapsed = Date.now() - t0;
+            if (elapsed < 340) await new Promise(r => setTimeout(r, 340 - elapsed));
+
+            if (!ok) {
+                finPortalBusy = false;
+                if (btnEl) btnEl.disabled = false;
+                const rec = finBruteFail('master');
+                const w2 = finBruteRemainingSec('master');
+                return finPortalShowError(w2 > 0
+                    ? `تم قفل البوابة 5 دقائق بسبب 5 محاولات خاطئة`
+                    : `كلمة المرور غير صحيحة — المحاولة ${rec.fails} من 5`);
+            }
+
+            finBruteClear('master');
+            finMasterUnlocked = true;
+            finViewMode = 'selector';
+            finPendingVaultId = '';
+            finTouchActivity();
+            finSecLog('دخول الإدارة المالية', 'تم التحقق من كلمة السر الرئيسية بنجاح', 'info');
+            finPortalAnimateSuccess(() => finRepaint());
+        }
+
+        async function finPortalBioMaster() {
+            if (finPortalBusy) return;
+            const wait = finBruteRemainingSec('master');
+            if (wait > 0) return finPortalShowError(`البوابة مقفولة أمنياً — حاول بعد ${wait} ثانية`);
+            finPortalBusy = true;
+            const portal = el('finVaultPortal');
+            if (portal) portal.classList.add('is-verifying');
+            const ok = await finBioVerifyPrompt();
+            if (!ok) {
+                finPortalBusy = false;
+                return finPortalShowError('فشل التحقق بالبصمة — استخدم كلمة المرور الرئيسية');
+            }
+            finBruteClear('master');
+            finMasterUnlocked = true;
+            finViewMode = 'selector';
+            finPendingVaultId = '';
+            finTouchActivity();
+            finSecLog('فتح بالبصمة الحيوية', 'تم فتح بوابة الإدارة المالية عبر بصمة الجهاز', 'info');
+            finPortalAnimateSuccess(() => finRepaint());
+        }
+
+        async function finPortalSubmitVault(ev, vaultId) {
+            ev.preventDefault();
+            if (finPortalBusy) return;
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v || !finCanSeeVault(v)) return finPortalShowError('غير مصرح لك بالوصول إلى هذه الخزينة');
+            const wait = finBruteRemainingSec('vault:' + vaultId);
+            if (wait > 0) return finPortalShowError(`الخزينة مقفولة أمنياً — حاول بعد ${wait} ثانية`);
+            const inp = el('finPortalPassInp');
+            const pass = String(inp?.value || '');
+            if (!pass) return finPortalShowError('أدخل الرقم السري الخاص بهذه الخزينة');
+
+            finPortalBusy = true;
+            const portal = el('finVaultPortal');
+            const lockIco = el('finPortalLockIco');
+            const btnEl = el('finPortalSubmitBtn');
+            if (portal) portal.classList.add('is-verifying');
+            if (lockIco) lockIco.className = 'fa-solid fa-circle-notch fa-spin fin-pass-lock is-active';
+            if (btnEl) btnEl.disabled = true;
+
+            const t0 = Date.now();
+            const ok = await finVerifyPassword(pass, v.passHash, v.passSalt);
+            const elapsed = Date.now() - t0;
+            if (elapsed < 340) await new Promise(r => setTimeout(r, 340 - elapsed));
+
+            if (!ok) {
+                finPortalBusy = false;
+                if (btnEl) btnEl.disabled = false;
+                const rec = finBruteFail('vault:' + vaultId);
+                const w2 = finBruteRemainingSec('vault:' + vaultId);
+                return finPortalShowError(w2 > 0
+                    ? `تم قفل الخزينة 5 دقائق بعد 5 محاولات خاطئة`
+                    : `الرقم السري للخزينة غير صحيح — المحاولة ${rec.fails} من 5`);
+            }
+
+            finBruteClear('vault:' + vaultId);
+            finUnlockedVaults.add(vaultId);
+            finTouchActivity();
+            finSecLog('فتح خزينة مستقلة', `تم فتح «${v.name}» بكلمة سرها الخاصة`, 'info');
+            finPortalAnimateSuccess(() => {
+                const portalEl = el('finVaultPortal');
+                if (portalEl) portalEl.classList.add('is-leaving');
+                setTimeout(() => finEnterVaultWorkspace(vaultId), 200);
+            });
+        }
+
+        async function finPortalBioVault(vaultId) {
+            if (finPortalBusy) return;
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v || !finCanSeeVault(v)) return;
+            finPortalBusy = true;
+            const portal = el('finVaultPortal');
+            if (portal) portal.classList.add('is-verifying');
+            const ok = await finBioVerifyPrompt();
+            if (!ok) {
+                finPortalBusy = false;
+                return finPortalShowError('فشل التحقق بالبصمة — أدخل الرقم السري للخزينة');
+            }
+            finBruteClear('vault:' + vaultId);
+            finUnlockedVaults.add(vaultId);
+            finTouchActivity();
+            finSecLog('فتح خزينة بالبصمة', `تم فتح «${v.name}» عبر بصمة الجهاز`, 'info');
+            finPortalAnimateSuccess(() => finEnterVaultWorkspace(vaultId));
+        }
+
+        function finSelectVault(vaultId) {
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v || !finCanSeeVault(v)) return toast('غير مصرح لك بالوصول لهذه الخزينة', 'error');
+            finTouchActivity();
+            if (finUnlockedVaults.has(vaultId)) {
+                finEnterVaultWorkspace(vaultId);
+            } else {
+                finPendingVaultId = vaultId;
+                finViewMode = 'selector';
+                finRepaint();
+                setTimeout(() => { const i = el('finPortalPassInp'); if (i) i.focus(); }, 180);
+            }
+        }
+
+        function finEnterVaultWorkspace(vaultId) {
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v || !finCanSeeVault(v)) return;
+            finActiveVaultId = vaultId;
+            finPendingVaultId = '';
+            finViewMode = 'vault';
+            finActiveVaultTab = 'journal';
+            finAuditDraft.vaultId = vaultId;
+            finAuditDraft.counts = {};
+            finVaultFilter = { currency: '', type: '', from: '', q: '' };
+            finTouchActivity();
+            finRepaint();
+        }
+
+        function finSwitchVaultPicker() {
+            finPendingVaultId = '';
+            finViewMode = 'selector';
+            finTouchActivity();
+            finRepaint();
+        }
+
+        function finEnterExecutive() {
+            if (!finCanExecutiveView()) return toast('الإدارة الشاملة وتقارير IFRS متاحة للمدير المالي أو مدير النظام فقط', 'error');
+            finPendingVaultId = '';
+            finViewMode = 'executive';
+            finTouchActivity();
+            finRepaint();
+        }
+
+        function finLockActiveVault() {
+            if (!finActiveVaultId) return;
+            const v = finVaults.find(x => x.id === finActiveVaultId);
+            finUnlockedVaults.delete(finActiveVaultId);
+            finActiveVaultId = '';
+            finViewMode = 'selector';
+            if (v) {
+                finSecLog('قفل خزينة', `تم قفل «${v.name}» يدوياً`, 'info');
+                toast(`🔒 تم قفل «${v.name}»`, 'info');
+            }
+            finRepaint();
         }
 
         function finLockGateHtml() {
             const wait = finBruteRemainingSec('master');
-            const bioStored = finBioGetStored();
-            const bioCan = !!(finBioSupported() && bioStored);
+            const bioCan = !!(finBioSupported() && finBioGetStored());
             return `${FIN_STYLES}
-            <div class="fin-shell p-6 sm:p-10 max-w-lg mx-auto text-center space-y-6">
-                <div class="space-y-2">
-                    <div class="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-br from-amber-400/20 to-yellow-600/20 border-2 border-amber-400/50 text-amber-400 flex items-center justify-center shadow-xl">
-                        <i class="fa-solid fa-shield-halved text-4xl"></i>
+            <div id="finVaultPortal" class="fin-portal" role="dialog" aria-modal="true" aria-label="بوابة الإدارة المالية المشفّرة">
+                <div class="fin-portal-inner">
+                    ${finVaultEmblemHtml(false, 'fa-shield-halved')}
+                    <div class="fin-auth-card">
+                        <div class="text-center space-y-1.5 mb-5">
+                            <span class="fin-seq-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-400/30 text-[11px] font-extrabold fin-gold">
+                                <i class="fa-solid fa-shield-halved text-[10px]"></i>
+                                تشفير PBKDF2-SHA256
+                            </span>
+                            <h2 class="fin-seq-1 text-2xl font-black text-white tracking-tight">الإدارة المالية</h2>
+                            <p class="fin-seq-2 text-xs text-slate-400 font-semibold">منطقة مالية مشفّرة — دخول مصرح فقط</p>
+                        </div>
+
+                        <div id="finPortalErr" class="${wait > 0 ? '' : 'hidden '}mb-3.5 px-3.5 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-200 text-xs font-bold text-center">${wait > 0 ? `تم القفل الأمني المؤقت — حاول بعد ${wait} ثانية` : ''}</div>
+
+                        <form onsubmit="finPortalSubmitMaster(event)" class="fin-seq-3 space-y-3.5">
+                            <div id="finPortalPassWrap" class="fin-pass-wrap">
+                                <i id="finPortalLockIco" class="fa-solid fa-lock fin-pass-lock"></i>
+                                <input id="finPortalPassInp" name="masterPass" type="password" required autocomplete="off" autofocus dir="ltr" placeholder="أدخل كلمة المرور الرئيسية" oninput="finPortalPassInput(this)" class="fin-pass-input font-mono">
+                                <button type="button" onclick="finTogglePortalPass()" class="fin-pass-eye" title="إظهار أو إخفاء كلمة المرور" aria-label="إظهار أو إخفاء كلمة المرور"><i id="finPortalEyeIco" class="fa-solid fa-eye"></i></button>
+                            </div>
+                            <button id="finPortalSubmitBtn" type="submit" ${wait > 0 ? 'disabled' : ''} class="fin-btn-gold flex items-center justify-center gap-2">
+                                <i class="fa-solid fa-unlock-keyhole"></i>
+                                <span>دخول الإدارة المالية</span>
+                            </button>
+                        </form>
+
+                        ${bioCan ? `<div class="fin-seq-3 mt-3">
+                            <button type="button" onclick="finPortalBioMaster()" class="w-full py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-200 font-extrabold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                                <i class="fa-solid fa-fingerprint text-base text-emerald-300"></i>
+                                <span>الدخول بالبصمة / Face ID</span>
+                            </button>
+                        </div>` : ''}
+
+                        <div class="fin-seq-3 mt-4 pt-3.5 border-t border-white/10 flex items-center justify-between gap-2">
+                            <button type="button" onclick="finPortalCancel()" class="w-full py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                                <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                                <span>إلغاء والعودة إلى النظام</span>
+                            </button>
+                        </div>
                     </div>
-                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/35 text-[11px] font-extrabold fin-gold"><i class="fa-solid fa-lock"></i> منطقة مالية سرية ومشفّرة</span>
-                    <h2 class="text-2xl font-black text-white">بوابة الإدارة المالية والخزينة</h2>
-                    <p class="text-xs text-slate-400">محمية بتشفير PBKDF2-SHA256 · قفل تلقائي · سجل تدقيق أمني · بصمة الجهاز</p>
                 </div>
-                ${wait > 0 ? `<div class="p-3.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-xs font-extrabold"><i class="fa-solid fa-ban me-1"></i> تم القفل الأمني المؤقت بسبب محاولات خاطئة — حاول بعد ${wait} ثانية</div>` : ''}
-                <form onsubmit="finSubmitMasterUnlock(event)" class="space-y-3 text-start">
-                    <label class="block">
-                        <span class="text-xs font-bold text-slate-300 block mb-1.5">كلمة السر الرئيسية للإدارة المالية</span>
-                        <input name="masterPass" type="password" required autocomplete="off" autofocus dir="ltr" placeholder="••••••••••" class="fin-inp font-mono text-center text-lg tracking-widest !py-3">
-                    </label>
-                    <button type="submit" ${wait > 0 ? 'disabled' : ''} class="w-full py-3 rounded-xl bg-gradient-to-l from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-sm shadow-lg cursor-pointer disabled:opacity-40"><i class="fa-solid fa-unlock-keyhole me-1.5"></i> فتح بوابة الإدارة المالية</button>
-                </form>
-                ${bioCan ? `<div class="pt-2 border-t border-white/10">
-                    <button type="button" onclick="finBioUnlockMaster()" class="w-full py-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 font-extrabold text-sm flex items-center justify-center gap-2 cursor-pointer">
-                        <i class="fa-solid fa-fingerprint text-xl text-emerald-300"></i> الدخول بالبصمة / Face ID
-                    </button>
-                </div>` : `<p class="text-[11px] text-slate-500"><i class="fa-solid fa-fingerprint me-1"></i>يمكنك تفعيل بصمة الإصبع / Face ID من داخل تبويب «الأمان والبصمة» فور الدخول.</p>`}
+            </div>`;
+        }
+
+        function finVaultPinPortalHtml(vaultId) {
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v) { finPendingVaultId = ''; return finVaultSelectorPortalHtml(); }
+            const vNum = finVaultNumber(v, finVaults.indexOf(v));
+            const wait = finBruteRemainingSec('vault:' + vaultId);
+            const bioCan = !!(finBioSupported() && finBioGetStored());
+            return `${FIN_STYLES}
+            <div id="finVaultPortal" class="fin-portal" role="dialog" aria-modal="true" aria-label="فتح ${esc(v.name)}">
+                <div class="fin-portal-inner">
+                    ${finVaultEmblemHtml(false, 'fa-vault')}
+                    <div class="fin-auth-card">
+                        <div class="text-center space-y-1.5 mb-5">
+                            <span class="fin-seq-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-400/35 text-[11px] font-black fin-gold">
+                                <i class="fa-solid fa-vault text-[10px]"></i>
+                                خزينة رقم ${vNum} · ${v.type === 'main' ? 'رئيسية' : 'فرعية'}
+                            </span>
+                            <h2 class="fin-seq-1 text-2xl font-black text-white tracking-tight">${esc(v.name)}</h2>
+                            <p class="fin-seq-2 text-xs text-slate-400 font-semibold">أدخل الرقم السري الخاص بهذه الخزينة للدخول إلى صفحتها المستقلة</p>
+                        </div>
+
+                        <div id="finPortalErr" class="${wait > 0 ? '' : 'hidden '}mb-3.5 px-3.5 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-200 text-xs font-bold text-center">${wait > 0 ? `الخزينة مقفولة أمنياً — حاول بعد ${wait} ثانية` : ''}</div>
+
+                        <form onsubmit="finPortalSubmitVault(event,'${esc(vaultId)}')" class="fin-seq-3 space-y-3.5">
+                            <div id="finPortalPassWrap" class="fin-pass-wrap">
+                                <i id="finPortalLockIco" class="fa-solid fa-lock fin-pass-lock"></i>
+                                <input id="finPortalPassInp" name="vaultPass" type="password" required autocomplete="off" autofocus dir="ltr" placeholder="الرقم السري لخزينة رقم ${vNum}" oninput="finPortalPassInput(this)" class="fin-pass-input font-mono">
+                                <button type="button" onclick="finTogglePortalPass()" class="fin-pass-eye" title="إظهار أو إخفاء الرقم السري"><i id="finPortalEyeIco" class="fa-solid fa-eye"></i></button>
+                            </div>
+                            <button id="finPortalSubmitBtn" type="submit" ${wait > 0 ? 'disabled' : ''} class="fin-btn-gold flex items-center justify-center gap-2">
+                                <i class="fa-solid fa-unlock-keyhole"></i>
+                                <span>فتح خزينة رقم ${vNum}</span>
+                            </button>
+                        </form>
+
+                        ${bioCan ? `<div class="fin-seq-3 mt-3">
+                            <button type="button" onclick="finPortalBioVault('${esc(vaultId)}')" class="w-full py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-200 font-extrabold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                                <i class="fa-solid fa-fingerprint text-base text-emerald-300"></i>
+                                <span>فتح سريع بالبصمة / Face ID</span>
+                            </button>
+                        </div>` : ''}
+
+                        <div class="fin-seq-3 mt-4 pt-3.5 border-t border-white/10 grid grid-cols-2 gap-2">
+                            <button type="button" onclick="finSwitchVaultPicker()" class="py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                                <i class="fa-solid fa-arrow-right"></i>
+                                <span>اختيار خزينة أخرى</span>
+                            </button>
+                            <button type="button" onclick="finPortalCancel()" class="py-2 rounded-xl bg-white/5 hover:bg-rose-500/20 text-slate-300 hover:text-rose-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                                <i class="fa-solid fa-xmark"></i>
+                                <span>العودة للنظام</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function finVaultSelectorPortalHtml() {
+            const visible = finVisibleVaults();
+            const canExec = finCanExecutiveView();
+            return `${FIN_STYLES}
+            <div id="finVaultPortal" class="fin-portal" role="dialog" aria-modal="true" aria-label="اختيار الخزينة">
+                <div class="fin-portal-inner is-wide">
+                    ${finVaultEmblemHtml(true, 'fa-vault')}
+                    <div class="fin-auth-card !p-5 sm:!p-7">
+                        <div class="text-center space-y-1.5 mb-6">
+                            <span class="fin-seq-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/35 text-[11px] font-extrabold text-emerald-300">
+                                <i class="fa-solid fa-shield-check"></i> تم التحقق من البوابة الرئيسية
+                            </span>
+                            <h2 class="fin-seq-1 text-xl sm:text-2xl font-black text-white">اختر الخزينة التي ستعمل عليها الآن</h2>
+                            <p class="fin-seq-2 text-xs text-slate-400">كل خزينة مستقلة بصفحة خاصة بها وأرصدتها وحركاتها وجردها ورقمها السري المنفصل</p>
+                        </div>
+
+                        ${visible.length ? `
+                        <div class="fin-seq-2 grid grid-cols-1 ${visible.length === 1 ? 'max-w-md mx-auto' : visible.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'} gap-3.5">
+                            ${visible.map((v, idx) => {
+                                const vNum = finVaultNumber(v, idx);
+                                const isOpen = finUnlockedVaults.has(v.id);
+                                return `<button type="button" onclick="finSelectVault('${esc(v.id)}')" class="fin-vpick ${v.type === 'main' ? 'fin-vpick-main' : ''}">
+                                    <div class="flex items-start justify-between gap-2 mb-3">
+                                        <div class="fin-vnum ${v.type === 'main' ? 'bg-gradient-to-br from-amber-300 to-yellow-600 text-slate-950 shadow-lg' : 'bg-slate-800 border border-slate-600/60 text-amber-300'}">${vNum}</div>
+                                        <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold ${isOpen ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/35' : 'bg-white/5 text-slate-300 border border-white/10'}">
+                                            <i class="fa-solid ${isOpen ? 'fa-lock-open' : 'fa-lock'} me-1"></i>${isOpen ? 'مفتوحة' : 'مطلوب رقم سري'}
+                                        </span>
+                                    </div>
+                                    <div class="text-[11px] font-bold fin-gold mb-0.5">خزينة رقم ${vNum} · ${v.type === 'main' ? 'خزينة رئيسية' : 'خزينة فرعية'}</div>
+                                    <h3 class="text-base font-black text-white mb-1">${esc(v.name)}</h3>
+                                    <p class="text-[11px] text-slate-400 line-clamp-2 mb-3">${esc(v.desc || 'صفحة مستقلة لليومية والجرد والتحويلات')}</p>
+                                    <div class="pt-2.5 border-t border-white/10 flex items-center justify-between text-xs font-extrabold ${isOpen ? 'text-emerald-300' : 'fin-gold'}">
+                                        <span>${isOpen ? 'دخول مباشر لصفحة الخزينة' : 'إدخال الرقم السري والدخول'}</span>
+                                        <i class="fa-solid fa-arrow-left text-[11px]"></i>
+                                    </div>
+                                </button>`;
+                            }).join('')}
+                        </div>` : `
+                        <div class="p-6 rounded-2xl bg-amber-500/10 border border-amber-400/30 text-center space-y-2">
+                            <i class="fa-solid fa-vault text-3xl text-amber-400"></i>
+                            <p class="text-sm font-extrabold text-white">لم يتم تخصيص أي خزينة لحسابك بعد</p>
+                            <p class="text-xs text-slate-300">اطلب من مدير النظام تفعيل صلاحية الخزينة المطلوبة (خزينة 1 أو 2 أو 3) من صفحة «المستخدمون والصلاحيات».</p>
+                        </div>`}
+
+                        <div class="fin-seq-3 mt-6 pt-4 border-t border-white/10 flex flex-wrap items-center justify-between gap-2.5">
+                            ${canExec ? `<button type="button" onclick="finEnterExecutive()" class="flex-1 min-w-[220px] py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-amber-200 text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                                <i class="fa-solid fa-chart-pie"></i>
+                                <span>الإدارة الشاملة (لوحة CFO · تقارير IFRS · الأمان والصرف)</span>
+                            </button>` : '<div></div>'}
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="finLockNow(false,'قفل يدوي من شاشة اختيار الخزينة')" class="py-2.5 px-3.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-200 text-xs font-extrabold cursor-pointer transition-colors"><i class="fa-solid fa-lock me-1"></i>قفل</button>
+                                <button type="button" onclick="finPortalCancel()" class="py-2.5 px-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-bold cursor-pointer transition-colors"><i class="fa-solid fa-arrow-right-from-bracket me-1"></i>العودة للنظام</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function finPrintSingleVault(vaultId) {
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v || !finCanSeeVault(v) || !finUnlockedVaults.has(vaultId)) return toast('افتح الخزينة أولاً لطباعة كشفها', 'error');
+            const vNum = finVaultNumber(v, finVaults.indexOf(v));
+            const vb = finComputeBalances().byVault[vaultId] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
+            const vMap = Object.fromEntries(finVaults.map(x => [x.id, x.name]));
+            const rows = finTxns.filter(tx => tx.vaultId === vaultId || tx.toVaultId === vaultId);
+            const body = `<style>@page{size:A4 portrait;margin:10mm} h2{font-size:12pt;margin:12px 0 6px;border-bottom:2px solid #0f172a;padding-bottom:4px}</style>
+                <div class="header">
+                    <div>
+                        <p class="sub">${esc(appData?.settings?.systemName || 'شركة الرحمة')}</p>
+                        <h1>كشف حركة وأرصدة خزينة رقم ${vNum} — ${esc(v.name)}</h1>
+                        <p class="sub">تاريخ الطباعة: ${esc(fmtDateTime(new Date().toISOString()))} · بواسطة: ${esc(currentUser()?.name || '—')}</p>
+                    </div>
+                </div>
+                <h2>1. الأرصدة الحالية للخزينة</h2>
+                <table><thead><tr><th>العملة</th><th>الرصيد الفعلي</th><th>سعر الصرف</th><th>المعادل بالجنيه (EGP)</th></tr></thead><tbody>
+                    ${FIN_CURR_LIST.map(c => `<tr><td><b>${FIN_CURRENCIES[c].name} (${c})</b></td><td>${finFmtCurr(vb[c] || 0, c)}</td><td>${finRateOf(c)}</td><td><b>${finFmtCurr(r2((vb[c] || 0) * finRateOf(c)), 'EGP')}</b></td></tr>`).join('')}
+                    <tr style="background:#f8fafc"><td colspan="3"><b>إجمالي رصيد الخزينة المجمّع (EGP)</b></td><td><b>${finFmtCurr(vb.totalEgp, 'EGP')}</b></td></tr>
+                </tbody></table>
+                <h2>2. سجل حركات الخزينة (${rows.length})</h2>
+                <table><thead><tr><th>التاريخ / المرجع</th><th>الحركة</th><th>المبلغ</th><th>البند / الطرف</th><th>ملاحظات</th></tr></thead><tbody>
+                    ${rows.slice(0, 200).map(tx => {
+                        const isTrfIn = tx.type === 'transfer' && tx.toVaultId === vaultId;
+                        const lbl = tx.type === 'in' ? 'قبض' : tx.type === 'out' ? 'صرف' : tx.type === 'fx' ? 'تبديل عملة' : (isTrfIn ? 'تحويل وارد من ' + (vMap[tx.vaultId] || '') : 'تحويل صادر إلى ' + (vMap[tx.toVaultId] || ''));
+                        return `<tr><td><b>${esc(tx.refNo || '—')}</b><br><small>${esc(fmtDateAr(tx.date))}</small></td><td>${esc(lbl)}</td><td><b>${finFmtCurr(tx.amount, tx.currency)}</b></td><td>${esc(tx.category || '')}${tx.party ? ' · ' + esc(tx.party) : ''}</td><td>${esc(tx.notes || '—')}</td></tr>`;
+                    }).join('') || '<tr><td colspan="5" style="text-align:center">لا توجد حركات مسجّلة</td></tr>'}
+                </tbody></table>`;
+            printHtml(`كشف خزينة ${vNum} - ${v.name}`, body);
+        }
+
+        function finExportSingleVaultExcel(vaultId) {
+            if (typeof XLSX === 'undefined') return toast('مكتبة Excel غير محمّلة', 'error');
+            const v = finVaults.find(x => x.id === vaultId);
+            if (!v || !finCanSeeVault(v) || !finUnlockedVaults.has(vaultId)) return toast('افتح الخزينة أولاً', 'error');
+            const vb = finComputeBalances().byVault[vaultId] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
+            const vMap = Object.fromEntries(finVaults.map(x => [x.id, x.name]));
+            const rows = finTxns.filter(tx => tx.vaultId === vaultId || tx.toVaultId === vaultId);
+            const wb = XLSX.utils.book_new();
+            const s1 = [['العملة', 'الرصيد', 'سعر الصرف', 'المعادل EGP'],
+                ...FIN_CURR_LIST.map(c => [c, vb[c] || 0, finRateOf(c), r2((vb[c] || 0) * finRateOf(c))]),
+                ['الإجمالي المجمّع (EGP)', '', '', vb.totalEgp]
+            ];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s1), 'أرصدة الخزينة');
+            const s2 = [['التاريخ', 'المرجع', 'الحركة', 'العملة', 'المبلغ', 'المعادل EGP', 'البند', 'الطرف', 'الملاحظات', 'بواسطة'],
+                ...rows.map(tx => {
+                    const isTrfIn = tx.type === 'transfer' && tx.toVaultId === vaultId;
+                    const lbl = tx.type === 'in' ? 'قبض' : tx.type === 'out' ? 'صرف' : tx.type === 'fx' ? 'تبديل عملة' : (isTrfIn ? 'تحويل وارد من ' + (vMap[tx.vaultId] || '') : 'تحويل صادر إلى ' + (vMap[tx.toVaultId] || ''));
+                    return [tx.date, tx.refNo || '', lbl, tx.currency, tx.amount, tx.amountEgp, tx.category || '', tx.party || '', tx.notes || '', tx.byName || ''];
+                })
+            ];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s2), 'يومية الخزينة');
+            XLSX.writeFile(wb, `Vault_${finVaultNumber(v)}_${todayISO()}.xlsx`);
+            toast(`✓ تم تصدير كشف «${v.name}» إلى Excel`, 'success');
+        }
+
+        function finVaultWorkspaceHtml(v) {
+            const vNum = finVaultNumber(v, finVaults.indexOf(v));
+            const vb = finComputeBalances().byVault[v.id] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
+            const vMap = Object.fromEntries(finVaults.map(x => [x.id, x.name]));
+            const visibleCount = finVisibleVaults().length;
+            const canExec = finCanExecutiveView();
+
+            // Filtered transactions belonging ONLY to this vault
+            const f = finVaultFilter;
+            const vTxns = finTxns.filter(tx => {
+                if (tx.vaultId !== v.id && tx.toVaultId !== v.id) return false;
+                if (f.currency && tx.currency !== f.currency && tx.toCurrency !== f.currency) return false;
+                if (f.type && tx.type !== f.type) return false;
+                if (f.from && tx.date < f.from) return false;
+                if (f.q) {
+                    const q = f.q.toLowerCase();
+                    if (!`${tx.refNo || ''} ${tx.category || ''} ${tx.party || ''} ${tx.notes || ''}`.toLowerCase().includes(q)) return false;
+                }
+                return true;
+            });
+
+            let vInEgp = 0, vOutEgp = 0;
+            vTxns.forEach(tx => {
+                const egp = numOr0(tx.amountEgp) || r2(numOr0(tx.amount) * finRateOf(tx.currency));
+                if (tx.type === 'in' || (tx.type === 'transfer' && tx.toVaultId === v.id)) vInEgp = r2(vInEgp + egp);
+                else if (tx.type === 'out' || (tx.type === 'transfer' && tx.vaultId === v.id)) vOutEgp = r2(vOutEgp + egp);
+            });
+
+            const typeBadge = tx => {
+                if (tx.type === 'in') return '<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-extrabold">↓ قبض</span>';
+                if (tx.type === 'out') return '<span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[11px] font-extrabold">↑ صرف</span>';
+                if (tx.type === 'transfer') {
+                    return tx.toVaultId === v.id
+                        ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200 text-[11px] font-extrabold">↙ وارد من ${esc(vMap[tx.vaultId] || 'خزينة')}</span>`
+                        : `<span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 text-[11px] font-extrabold">↗ صادر إلى ${esc(vMap[tx.toVaultId] || 'خزينة')}</span>`;
+                }
+                return '<span class="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[11px] font-extrabold">💱 صرف عملة</span>';
+            };
+
+            let subBody = '';
+            if (finActiveVaultTab === 'audit') {
+                finAuditDraft.vaultId = v.id;
+                const cur = finAuditDraft.currency || 'EGP';
+                const cInfo = FIN_CURRENCIES[cur] || FIN_CURRENCIES.EGP;
+                const book = vb[cur] || 0;
+                const actual = finAuditCalcActual();
+                const diff = r2(actual - book);
+                const myAudits = finAudits.filter(a => a.vaultId === v.id);
+                subBody = `<div class="space-y-4">
+                    <div class="fin-card p-4 space-y-4">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <h3 class="font-extrabold text-sm text-white"><i class="fa-solid fa-clipboard-check text-amber-400 me-1.5"></i>الجرد الفعلي لـ ${esc(v.name)} (فئة بفئة)</h3>
+                            <select onchange="finAuditDraft.currency=this.value;finAuditDraft.counts={};finRepaint()" class="fin-inp !w-auto text-xs">${FIN_CURR_LIST.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${FIN_CURRENCIES[c].flag} ${c}</option>`).join('')}</select>
+                        </div>
+                        <form onsubmit="finSubmitAudit(event)" class="space-y-4">
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                                ${cInfo.denoms.map(d => `<label class="p-2.5 rounded-xl bg-black/30 border border-white/10 block">
+                                    <span class="text-[11px] font-bold text-amber-300 block mb-1">فئة ${d} ${cInfo.sym}</span>
+                                    <input type="number" min="0" step="1" value="${finAuditDraft.counts[d] || ''}" oninput="finAuditSetDenom(${d},this.value)" placeholder="العدد" dir="ltr" class="fin-inp font-mono !py-1.5 text-center">
+                                </label>`).join('')}
+                                <label class="p-2.5 rounded-xl bg-black/30 border border-white/10 block">
+                                    <span class="text-[11px] font-bold text-slate-300 block mb-1">فكة / كسور (${cInfo.sym})</span>
+                                    <input type="number" min="0" step="0.01" value="${finAuditDraft.counts.coins || ''}" oninput="finAuditSetDenom('coins',this.value)" placeholder="المبلغ" dir="ltr" class="fin-inp font-mono !py-1.5 text-center">
+                                </label>
+                            </div>
+                            <div class="grid sm:grid-cols-3 gap-3 p-4 rounded-xl bg-black/40 border border-amber-500/30">
+                                <div><span class="text-[11px] text-slate-400 block">الرصيد الدفتري للخزينة</span><b class="text-xl font-black text-white">${finMask(finFmtCurr(book, cur))}</b></div>
+                                <div><span class="text-[11px] text-slate-400 block">إجمالي الجرد الفعلي</span><b id="finAudActual" class="text-xl font-black text-amber-300">${finFmtCurr(actual, cur)}</b></div>
+                                <div><span class="text-[11px] text-slate-400 block">الفرق (عجز / فائض)</span><b id="finAudDiff" class="text-xl font-black ${Math.abs(diff) < 0.01 ? 'text-emerald-400' : diff < 0 ? 'text-rose-400' : 'text-amber-300'}">${(diff > 0 ? '+' : '') + finFmtCurr(diff, cur)}</b><div id="finAudBadge" class="mt-1"></div></div>
+                            </div>
+                            <div class="grid sm:grid-cols-2 gap-3 items-center">
+                                <input name="auditNotes" maxlength="400" placeholder="ملاحظات الجرد..." class="fin-inp text-xs">
+                                <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" name="autoAdjust" class="w-4 h-4 accent-amber-500"> <span>ترحيل قيد تسوية تلقائي بالفرق إن وُجد</span></label>
+                            </div>
+                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-gradient-to-l from-amber-500 to-yellow-500 text-slate-950 font-black text-xs cursor-pointer"><i class="fa-solid fa-stamp me-1"></i> اعتماد وحفظ محضر جرد الخزينة</button>
+                        </form>
+                    </div>
+                    <div class="fin-card overflow-x-auto">
+                        <div class="p-3.5 border-b border-white/10 font-extrabold text-sm text-white">محاضر جرد «${esc(v.name)}» (${myAudits.length})</div>
+                        <table class="w-full text-xs">
+                            <thead class="bg-white/5 text-slate-300"><tr><th class="py-2 px-3 text-start">التاريخ</th><th class="py-2 px-3 text-start">العملة</th><th class="py-2 px-3 text-start">الدفتري</th><th class="py-2 px-3 text-start">الفعلي</th><th class="py-2 px-3 text-start">الفرق</th><th class="py-2 px-3 text-start">النتيجة</th><th class="py-2 px-3 text-center">طباعة</th></tr></thead>
+                            <tbody class="divide-y divide-white/5">
+                                ${myAudits.slice(0, 30).map(a => `<tr>
+                                    <td class="py-2 px-3 whitespace-nowrap">${esc(fmtDateAr(a.date))}<span class="block text-[10px] text-slate-400">${esc(a.byName || '')}</span></td>
+                                    <td class="py-2 px-3 font-bold">${a.currency}</td>
+                                    <td class="py-2 px-3 font-mono">${finMask(finFmtCurr(a.bookBalance, a.currency))}</td>
+                                    <td class="py-2 px-3 font-mono">${finMask(finFmtCurr(a.actualBalance, a.currency))}</td>
+                                    <td class="py-2 px-3 font-mono font-bold ${a.diff < 0 ? 'text-rose-400' : a.diff > 0 ? 'text-amber-300' : 'text-emerald-400'}">${(a.diff > 0 ? '+' : '') + finFmtCurr(a.diff, a.currency)}</td>
+                                    <td class="py-2 px-3">${a.status === 'match' ? '<span class="text-emerald-300 font-bold">✓ مطابق</span>' : a.status === 'shortage' ? '<span class="text-rose-400 font-bold">🔴 عجز</span>' : '<span class="text-amber-300 font-bold">🟢 فائض</span>'}</td>
+                                    <td class="py-2 px-3 text-center"><button type="button" onclick="printFinAuditCert('${esc(a.id)}')" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"><i class="fa-solid fa-print"></i></button></td>
+                                </tr>`).join('') || '<tr><td colspan="7" class="py-6 text-center text-slate-400">لا توجد محاضر جرد لهذه الخزينة بعد</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`;
+            } else {
+                subBody = `<div class="space-y-4">
+                    <div class="fin-card p-3 flex flex-wrap items-center justify-between gap-2.5">
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" onclick="openFinTxnModal('in','${esc(v.id)}')" class="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black cursor-pointer"><i class="fa-solid fa-arrow-down me-1"></i>سند قبض</button>
+                            <button type="button" onclick="openFinTxnModal('out','${esc(v.id)}')" class="px-3.5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-arrow-up me-1"></i>سند صرف</button>
+                            <button type="button" onclick="openFinTransferModal('${esc(v.id)}')" class="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black cursor-pointer"><i class="fa-solid fa-right-left me-1"></i>تحويل / تغذية</button>
+                            <button type="button" onclick="openFinFxModal('${esc(v.id)}')" class="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black cursor-pointer"><i class="fa-solid fa-coins me-1"></i>تبديل عملة</button>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" onclick="finPrintSingleVault('${esc(v.id)}')" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-100 text-xs font-bold cursor-pointer"><i class="fa-solid fa-print me-1"></i>طباعة كشف الخزينة</button>
+                            <button type="button" onclick="finExportSingleVaultExcel('${esc(v.id)}')" class="px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-emerald-200 text-xs font-bold cursor-pointer"><i class="fa-solid fa-file-excel me-1"></i>Excel</button>
+                        </div>
+                    </div>
+
+                    <div class="fin-card p-3 grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        <input type="search" value="${esc(f.q)}" oninput="finVaultFilter.q=this.value;uiDebounce('finVQ',finRepaint,160)" placeholder="بحث في حركات هذه الخزينة..." class="fin-inp col-span-2 text-xs">
+                        <select onchange="finVaultFilter.currency=this.value;finRepaint()" class="fin-inp text-xs"><option value="">كل العملات</option>${FIN_CURR_LIST.map(c => `<option value="${c}" ${f.currency === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
+                        <select onchange="finVaultFilter.type=this.value;finRepaint()" class="fin-inp text-xs">
+                            <option value="">كل الحركات</option>
+                            <option value="in" ${f.type === 'in' ? 'selected' : ''}>قبض</option>
+                            <option value="out" ${f.type === 'out' ? 'selected' : ''}>صرف</option>
+                            <option value="transfer" ${f.type === 'transfer' ? 'selected' : ''}>تحويلات</option>
+                            <option value="fx" ${f.type === 'fx' ? 'selected' : ''}>تبديل عملة</option>
+                        </select>
+                        <input type="date" value="${esc(f.from)}" onchange="finVaultFilter.from=this.value;finRepaint()" class="fin-inp text-xs" title="من تاريخ">
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-2.5 text-xs">
+                        <div class="fin-card p-3"><span class="text-[10px] text-slate-400 block">عدد حركات الخزينة</span><b class="text-base text-white">${vTxns.length}</b></div>
+                        <div class="fin-card p-3"><span class="text-[10px] text-slate-400 block">إجمالي الوارد (EGP)</span><b class="text-base text-emerald-300 font-mono">${finMask(finFmtCurr(vInEgp, 'EGP'))}</b></div>
+                        <div class="fin-card p-3"><span class="text-[10px] text-slate-400 block">إجمالي الصادر (EGP)</span><b class="text-base text-rose-300 font-mono">${finMask(finFmtCurr(vOutEgp, 'EGP'))}</b></div>
+                    </div>
+
+                    <div class="fin-card overflow-x-auto">
+                        <table class="w-full text-xs">
+                            <thead class="bg-white/5 text-slate-300 font-extrabold border-b border-white/10"><tr>
+                                <th class="py-2.5 px-3 text-start">التاريخ / المرجع</th><th class="py-2.5 px-3 text-start">الحركة</th><th class="py-2.5 px-3 text-start">المبلغ</th>
+                                <th class="py-2.5 px-3 text-start">البند / IAS 7</th><th class="py-2.5 px-3 text-start">الطرف والبيان</th><th class="py-2.5 px-3 text-center">إجراء</th>
+                            </tr></thead>
+                            <tbody class="divide-y divide-white/5">
+                                ${vTxns.slice(0, 120).map(tx => {
+                                    const isPlus = tx.type === 'in' || (tx.type === 'transfer' && tx.toVaultId === v.id);
+                                    return `<tr class="hover:bg-white/5">
+                                        <td class="py-2.5 px-3 whitespace-nowrap"><b class="font-mono text-amber-300">${esc(tx.refNo || '—')}</b><span class="block text-[10px] text-slate-400">${esc(fmtDateAr(tx.date))}</span></td>
+                                        <td class="py-2.5 px-3 whitespace-nowrap">${typeBadge(tx)}</td>
+                                        <td class="py-2.5 px-3 whitespace-nowrap font-mono font-black ${isPlus ? 'text-emerald-300' : tx.type === 'fx' ? 'text-cyan-300' : 'text-rose-300'}">${finMask(finFmtCurr(tx.amount, tx.currency))}<span class="block text-[10px] font-normal text-slate-400">≈ ${finMask(finFmtCurr(tx.amountEgp, 'EGP'))}</span></td>
+                                        <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full text-[10px] border ${FIN_IAS7[tx.ias7]?.cls || ''}">${esc(FIN_IAS7[tx.ias7]?.short || '')}</span><span class="block text-[11px] text-slate-200 mt-0.5">${esc(tx.category || '')}</span></td>
+                                        <td class="py-2.5 px-3"><b class="text-slate-100">${esc(tx.party || '—')}</b>${tx.notes ? `<span class="block text-[10px] text-slate-400 truncate max-w-[14rem]">${esc(tx.notes)}</span>` : ''}</td>
+                                        <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                                            <button type="button" onclick="printFinVoucher('${esc(tx.id)}')" class="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 cursor-pointer" title="طباعة السند"><i class="fa-solid fa-print"></i></button>
+                                            ${finCanAudit() ? `<button type="button" onclick="finDeleteTxn('${esc(tx.id)}')" class="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 cursor-pointer ms-1" title="حذف القيد"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                                        </td>
+                                    </tr>`;
+                                }).join('') || '<tr><td colspan="6" class="py-8 text-center text-slate-400">لا توجد حركات مسجّلة على هذه الخزينة بعد — ابدأ بتسجيل سند قبض أو صرف.</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`;
+            }
+
+            return `${FIN_STYLES}
+            <div class="fin-shell" onclick="finTouchActivity()">
+                <div class="p-4 sm:p-5 border-b border-amber-500/25 bg-black/40 flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 rounded-2xl ${v.type === 'main' ? 'bg-gradient-to-br from-amber-300 to-yellow-600 text-slate-950' : 'bg-slate-800 border border-amber-400/40 text-amber-300'} flex items-center justify-center font-black text-xl shadow-lg shrink-0">${vNum}</div>
+                        <div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[10px] font-black border border-amber-400/35">خزينة رقم ${vNum} · مستقلة</span>
+                                <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-extrabold"><i class="fa-solid fa-lock-open me-1"></i>مفتوحة</span>
+                            </div>
+                            <h2 class="font-black text-base sm:text-xl text-white mt-0.5">${esc(v.name)}</h2>
+                            <p class="text-[11px] text-slate-400">${esc(v.desc || 'صفحة عمل مستقلة ومشفرة بالكامل لهذه الخزينة فقط')}</p>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        ${visibleCount > 1 ? `<button type="button" onclick="finSwitchVaultPicker()" class="px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-amber-200 text-xs font-extrabold cursor-pointer"><i class="fa-solid fa-vault me-1"></i>تبديل الخزينة</button>` : ''}
+                        ${canExec ? `<button type="button" onclick="finEnterExecutive()" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-100 text-xs font-extrabold cursor-pointer"><i class="fa-solid fa-chart-pie me-1"></i>الإدارة الشاملة / IFRS</button>` : ''}
+                        <button type="button" onclick="finTogglePrivacy()" class="px-3 py-2 rounded-xl ${finPrivacyBlur ? 'bg-amber-400 text-slate-950' : 'bg-white/10 text-slate-200 hover:bg-white/20'} text-xs font-extrabold cursor-pointer"><i class="fa-solid ${finPrivacyBlur ? 'fa-eye' : 'fa-eye-slash'} me-1"></i>${finPrivacyBlur ? 'إظهار' : 'إخفاء'}</button>
+                        <button type="button" onclick="finLockActiveVault()" class="px-3 py-2 rounded-xl bg-rose-600/85 hover:bg-rose-500 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-lock me-1"></i>قفل الخزينة</button>
+                    </div>
+                </div>
+
+                <div class="p-4 sm:p-5 space-y-5">
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-3.5">
+                        <div class="lg:col-span-4 fin-card-gold p-4 flex flex-col justify-between">
+                            <span class="text-[11px] font-extrabold fin-gold">إجمالي رصيد خزينة رقم ${vNum} (مُقيّم بـ EGP)</span>
+                            <p class="text-2xl sm:text-3xl font-black text-white mt-2 tracking-tight">${finMask(finFmtCurr(vb.totalEgp, 'EGP'))}</p>
+                            <p class="text-[10px] text-slate-300 mt-1">أرصدة هذه الخزينة فقط · معزولة تماماً عن باقي الخزائن</p>
+                        </div>
+                        <div class="lg:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                            ${FIN_CURR_LIST.map(c => {
+                                const info = FIN_CURRENCIES[c], val = vb[c] || 0, eq = r2(val * finRateOf(c));
+                                return `<div class="fin-card p-3 flex flex-col justify-between">
+                                    <div class="flex items-center justify-between"><span class="text-base">${info.flag}</span><span class="text-[11px] font-mono font-bold text-slate-400">${c}</span></div>
+                                    <p class="text-base font-black text-white mt-1.5 break-all">${finMask(finFmtCurr(val, c))}</p>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">${c === 'EGP' ? 'العملة الأساسية' : '≈ ' + finMask(finFmtCurr(eq, 'EGP'))}</p>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                        <div class="flex gap-2">
+                            <button type="button" onclick="finActiveVaultTab='journal';finRepaint()" class="fin-tab ${finActiveVaultTab === 'journal' ? 'fin-tab-on' : 'fin-tab-off'}"><i class="fa-solid fa-book"></i>يومية وحركات الخزينة</button>
+                            <button type="button" onclick="finActiveVaultTab='audit';finAuditDraft.vaultId='${esc(v.id)}';finRepaint()" class="fin-tab ${finActiveVaultTab === 'audit' ? 'fin-tab-on' : 'fin-tab-off'}"><i class="fa-solid fa-clipboard-check"></i>جرد الخزينة بالفئات</button>
+                        </div>
+                        ${finCanManage() ? `<button type="button" onclick="openFinVaultModal('${esc(v.id)}')" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 text-xs font-bold cursor-pointer"><i class="fa-solid fa-key me-1"></i>تعديل اسم / كلمة سر الخزينة</button>` : ''}
+                    </div>
+
+                    ${subBody}
+                </div>
             </div>`;
         }
 
         function finDashboardTabHtml() {
+            const visibleVaults = finVisibleVaults();
             const bal = finComputeBalances();
             const rep = finComputeIfrs('', '');
             const opRatio = rep.totalIn > 0 ? ((rep.buckets.operating.inEgp / rep.totalIn) * 100).toFixed(0) : '0';
@@ -14163,7 +14981,7 @@
                     <div class="lg:col-span-5 fin-card-gold p-5 flex flex-col justify-between">
                         <div class="flex items-center justify-between gap-2">
                             <span class="text-xs font-extrabold fin-gold uppercase tracking-wider">إجمالي السيولة المجمّعة (IFRS Valuation)</span>
-                            <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black">${finVaults.length} خزائن</span>
+                            <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black">${visibleVaults.length} خزائن</span>
                         </div>
                         <p class="text-3xl sm:text-4xl font-black text-white mt-2 tracking-tight">${finMask(finFmtCurr(bal.totalEgp, 'EGP'))}</p>
                         <p class="text-[11px] text-slate-300 mt-1">مُقيّمة بالجنيه المصري وفق أسعار الصرف الرسمية (USD=${finRateOf('USD')} · EUR=${finRateOf('EUR')} · SAR=${finRateOf('SAR')})</p>
@@ -14193,23 +15011,24 @@
 
                 <div>
                     <div class="flex items-center justify-between mb-2.5">
-                        <h3 class="font-extrabold text-sm text-white"><i class="fa-solid fa-vault text-amber-400 me-1.5"></i>الخزائن وحالة الأمان (${finVaults.length})</h3>
-                        <button type="button" onclick="finSetTab('vaults')" class="text-xs fin-gold hover:underline cursor-pointer">إدارة الخزائن والتحويلات ←</button>
+                        <h3 class="font-extrabold text-sm text-white"><i class="fa-solid fa-vault text-amber-400 me-1.5"></i>الخزائن المصرح بها وحالة الأمان (${visibleVaults.length})</h3>
+                        <button type="button" onclick="finSwitchVaultPicker()" class="text-xs fin-gold hover:underline cursor-pointer">فتح شاشة اختيار الخزينة المستقلة (1 / 2 / 3) ←</button>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-                        ${finVaults.map(v => {
+                        ${visibleVaults.map((v, idx) => {
+                            const vNum = finVaultNumber(v, idx);
                             const unlocked = finUnlockedVaults.has(v.id);
                             const vb = bal.byVault[v.id] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
                             const share = bal.totalEgp > 0 ? Math.round((vb.totalEgp / bal.totalEgp) * 100) : 0;
                             return `<div class="${v.type === 'main' ? 'fin-card-gold' : 'fin-card'} p-4 space-y-3">
                                 <div class="flex items-start justify-between gap-2">
                                     <div>
-                                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${v.type === 'main' ? 'bg-amber-400/20 text-amber-300' : 'bg-sky-500/20 text-sky-300'}">${v.type === 'main' ? '👑 رئيسية' : '🏛 فرعية'}</span>
+                                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${v.type === 'main' ? 'bg-amber-400/20 text-amber-300' : 'bg-sky-500/20 text-sky-300'}">خزينة ${vNum} · ${v.type === 'main' ? '👑 رئيسية' : '🏛 فرعية'}</span>
                                         <h4 class="font-black text-base text-white mt-1">${esc(v.name)}</h4>
                                     </div>
                                     ${unlocked
                                         ? `<button type="button" onclick="finLockVault('${esc(v.id)}')" class="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 text-[11px] font-extrabold cursor-pointer" title="اضغط لقفل الخزينة"><i class="fa-solid fa-lock-open me-1"></i>مفتوحة</button>`
-                                        : `<button type="button" onclick="openFinUnlockVault('${esc(v.id)}')" class="px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-200 border border-rose-500/40 text-[11px] font-extrabold cursor-pointer"><i class="fa-solid fa-lock me-1"></i>افتح بكلمة سر</button>`}
+                                        : `<button type="button" onclick="finSelectVault('${esc(v.id)}')" class="px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-200 border border-rose-500/40 text-[11px] font-extrabold cursor-pointer"><i class="fa-solid fa-lock me-1"></i>افتح بكلمة سر</button>`}
                                 </div>
                                 ${unlocked ? `
                                     <div class="text-xl font-black text-white">${finMask(finFmtCurr(vb.totalEgp, 'EGP'))} <span class="text-[11px] font-normal text-slate-400">(${share}%)</span></div>
@@ -14217,6 +15036,7 @@
                                         ${FIN_CURR_LIST.map(c => `<div class="px-2 py-1 rounded-lg bg-black/30 flex justify-between"><span class="text-slate-400">${FIN_CURRENCIES[c].flag} ${c}</span><b class="text-slate-100 font-mono">${finMask(fmtNumber(vb[c] || 0, 2))}</b></div>`).join('')}
                                     </div>
                                     <div class="flex flex-wrap gap-1.5 pt-1">
+                                        <button type="button" onclick="finEnterVaultWorkspace('${esc(v.id)}')" class="w-full py-2 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/35 text-amber-200 text-xs font-black cursor-pointer mb-1">فتح صفحة الخزينة المستقلة ←</button>
                                         <button type="button" onclick="openFinTxnModal('in','${esc(v.id)}')" class="flex-1 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 text-[11px] font-bold cursor-pointer">+ قبض</button>
                                         <button type="button" onclick="openFinTxnModal('out','${esc(v.id)}')" class="flex-1 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-[11px] font-bold cursor-pointer">- صرف</button>
                                         <button type="button" onclick="openFinTransferModal('${esc(v.id)}')" class="flex-1 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[11px] font-bold cursor-pointer">⇄ تحويل</button>
@@ -14225,7 +15045,7 @@
                                     <div class="py-5 text-center rounded-xl bg-black/30 border border-white/5 space-y-2">
                                         <i class="fa-solid fa-shield-halved text-2xl text-amber-400/70"></i>
                                         <p class="text-xs text-slate-400">الأرصدة محمية بكلمة سر الخزينة المستقلة</p>
-                                        <button type="button" onclick="openFinUnlockVault('${esc(v.id)}')" class="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black cursor-pointer">🔓 إدخال كلمة سر الخزينة</button>
+                                        <button type="button" onclick="finSelectVault('${esc(v.id)}')" class="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black cursor-pointer">🔓 دخول صفحة خزينة رقم ${vNum}</button>
                                     </div>
                                 `}
                             </div>`;
@@ -14259,23 +15079,27 @@
         }
 
         function finVaultsTabHtml() {
+            const visibleVaults = finVisibleVaults();
             const bal = finComputeBalances();
             return `<div class="space-y-4">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <h3 class="font-extrabold text-base text-white"><i class="fa-solid fa-vault text-amber-400 me-1.5"></i>إدارة الخزائن والتحويلات البينية وتبديل العملات</h3>
                     <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="finSwitchVaultPicker()" class="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/35 text-amber-200 text-xs font-black cursor-pointer"><i class="fa-solid fa-door-open me-1"></i>بوابة اختيار الخزينة (1 / 2 / 3)</button>
                         <button type="button" onclick="openFinTransferModal()" class="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black cursor-pointer"><i class="fa-solid fa-right-left me-1"></i>تحويل بين الخزائن</button>
                         <button type="button" onclick="openFinFxModal()" class="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black cursor-pointer"><i class="fa-solid fa-coins me-1"></i>تبديل عملة (IAS 21)</button>
                         <button type="button" onclick="openFinVaultModal()" class="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 text-xs font-extrabold cursor-pointer"><i class="fa-solid fa-plus me-1"></i>خزينة جديدة</button>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    ${finVaults.map(v => {
+                    ${visibleVaults.map((v, idx) => {
+                        const vNum = finVaultNumber(v, idx);
                         const unlocked = finUnlockedVaults.has(v.id);
                         const vb = bal.byVault[v.id] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
                         return `<div class="${v.type === 'main' ? 'fin-card-gold' : 'fin-card'} p-4 space-y-3">
                             <div class="flex items-start justify-between gap-2">
                                 <div>
+                                    <span class="text-[10px] font-extrabold fin-gold">خزينة رقم ${vNum}</span>
                                     <h4 class="font-black text-white">${esc(v.name)}</h4>
                                     <p class="text-[11px] text-slate-400">${esc(v.desc || (v.type === 'main' ? 'خزينة رئيسية' : 'خزينة فرعية'))}</p>
                                 </div>
@@ -14287,11 +15111,12 @@
                                     ${FIN_CURR_LIST.map(c => `<div class="flex justify-between text-xs border-t border-white/5 pt-1"><span>${FIN_CURRENCIES[c].flag} ${FIN_CURRENCIES[c].name}</span><b class="font-mono">${finMask(finFmtCurr(vb[c] || 0, c))}</b></div>`).join('')}
                                 </div>
                                 <div class="flex flex-wrap gap-1.5">
+                                    <button type="button" onclick="finEnterVaultWorkspace('${esc(v.id)}')" class="w-full py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black cursor-pointer">فتح صفحة الخزينة المستقلة ←</button>
                                     <button type="button" onclick="openFinTransferModal('${esc(v.id)}')" class="flex-1 py-2 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 text-xs font-extrabold cursor-pointer">⇄ سحب / تحويل</button>
                                     <button type="button" onclick="finAuditDraft.vaultId='${esc(v.id)}';finSetTab('audit')" class="flex-1 py-2 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 text-xs font-extrabold cursor-pointer">📋 جرد</button>
                                     <button type="button" onclick="finLockVault('${esc(v.id)}')" class="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 text-xs cursor-pointer" title="قفل الخزينة"><i class="fa-solid fa-lock"></i></button>
                                 </div>
-                            ` : `<button type="button" onclick="openFinUnlockVault('${esc(v.id)}')" class="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer"><i class="fa-solid fa-lock me-1"></i> فتح الخزينة بكلمة سرها</button>`}
+                            ` : `<button type="button" onclick="finSelectVault('${esc(v.id)}')" class="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer"><i class="fa-solid fa-lock me-1"></i> فتح خزينة رقم ${vNum} بكلمة سرها</button>`}
                         </div>`;
                     }).join('')}
                 </div>
@@ -14562,10 +15387,23 @@
                 return `<div class="bg-white rounded-2xl border p-8 text-center"><i class="fa-solid fa-lock text-4xl text-slate-300 mb-3"></i><p class="font-bold text-slate-700">هذا القسم سري ومغلق بالكامل — غير مصرح لك بالدخول.</p></div>`;
             }
             if (!finLoaded) {
-                return `${FIN_STYLES}<div class="fin-shell p-10 text-center text-slate-300"><i class="fa-solid fa-spinner fa-spin text-2xl text-amber-400 mb-2"></i><p class="text-sm font-bold">جاري تحميل البوابة المالية المشفّرة...</p></div>`;
+                return `${FIN_STYLES}<div class="fin-portal"><div class="fin-portal-inner">${finVaultEmblemHtml(true, 'fa-shield-halved')}<p class="text-sm font-extrabold text-slate-200 mt-2">جاري تجهيز البوابة المالية المشفّرة...</p></div></div>`;
             }
             if (!finCfg || !finCfg.masterHash) return finSetupScreenHtml();
             if (!finMasterUnlocked) return finLockGateHtml();
+            if (finPendingVaultId) return finVaultPinPortalHtml(finPendingVaultId);
+
+            if (finViewMode === 'vault') {
+                const av = finVaults.find(x => x.id === finActiveVaultId);
+                if (av && finCanSeeVault(av) && finUnlockedVaults.has(av.id)) {
+                    return finVaultWorkspaceHtml(av);
+                }
+                finViewMode = 'selector';
+                finActiveVaultId = '';
+            }
+            if (finViewMode !== 'executive' || !finCanExecutiveView()) {
+                return finVaultSelectorPortalHtml();
+            }
 
             const tabs = [
                 ['dashboard', 'لوحة القيادة CFO', 'fa-chart-pie'],
@@ -14583,17 +15421,19 @@
             else if (finTab === 'security') body = finSecurityTabHtml();
             else body = finDashboardTabHtml();
 
+            const visCount = finVisibleVaults().length;
             return `${FIN_STYLES}
             <div class="fin-shell" onclick="finTouchActivity()">
                 <div class="p-4 sm:p-5 border-b border-amber-500/25 bg-black/35 flex flex-wrap items-center justify-between gap-3">
                     <div class="flex items-center gap-3">
                         <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-600 text-slate-950 flex items-center justify-center shadow-lg shrink-0"><i class="fa-solid fa-vault text-xl"></i></div>
                         <div>
-                            <h2 class="font-black text-base sm:text-lg text-white flex items-center gap-2">الإدارة المالية والخزينة <span class="px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[10px] font-black border border-amber-400/35">IFRS · سري</span></h2>
-                            <p class="text-[11px] text-slate-400">الخزائن المفتوحة: <b class="text-emerald-300">${finUnlockedVaults.size}/${finVaults.length}</b> · قفل تلقائي بعد ${Number(finCfg?.autoLockMin) || 5} د</p>
+                            <h2 class="font-black text-base sm:text-lg text-white flex items-center gap-2">الإدارة المالية الشاملة <span class="px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[10px] font-black border border-amber-400/35">IFRS · سري</span></h2>
+                            <p class="text-[11px] text-slate-400">الخزائن المفتوحة: <b class="text-emerald-300">${finUnlockedVaults.size}/${visCount}</b> · قفل تلقائي بعد ${Number(finCfg?.autoLockMin) || 5} د</p>
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
+                        <button type="button" onclick="finSwitchVaultPicker()" class="px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-amber-200 text-xs font-extrabold cursor-pointer"><i class="fa-solid fa-vault me-1"></i>اختيار خزينة (1 / 2 / 3)</button>
                         <button type="button" onclick="finTogglePrivacy()" class="px-3 py-2 rounded-xl ${finPrivacyBlur ? 'bg-amber-400 text-slate-950' : 'bg-white/10 text-slate-200 hover:bg-white/20'} text-xs font-extrabold cursor-pointer" title="إخفاء أو إظهار الأرقام"><i class="fa-solid ${finPrivacyBlur ? 'fa-eye' : 'fa-eye-slash'} me-1"></i>${finPrivacyBlur ? 'إظهار الأرقام' : 'إخفاء الأرقام'}</button>
                         <button type="button" onclick="finLockNow(false,'قفل فوري من الزر العلوي')" class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black cursor-pointer shadow"><i class="fa-solid fa-lock me-1"></i> قفل فوري</button>
                     </div>
@@ -14608,7 +15448,14 @@
         function finRepaint() {
             const box = el('finAppHost');
             if (box) box.innerHTML = finInnerHtml();
+            setTimeout(() => { const p = el('finPortalPassInp'); if (p && document.activeElement !== p) p.focus(); }, 160);
         }
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && el('finVaultPortal') && !el('modalHost')?.innerHTML.trim()) {
+                if (finPendingVaultId) finSwitchVaultPicker();
+                else finPortalCancel();
+            }
+        });
 
         function viewFinance(param = '') {
             if (!finCanAccess()) {
