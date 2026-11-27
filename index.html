@@ -1991,11 +1991,11 @@
             return ['fa-bell', 'bg-slate-100 text-slate-500'];
         }
 
-        // Only direct personal notifications explicitly addressed to the current user (no other users' broadcast activity)
+        // Only direct personal notifications explicitly addressed to the current user (plus self system alerts like expired customer orders)
         function visibleNotifs() {
             const me = fbUser?.uid;
             if (!me) return [];
-            return notifs.filter(n => n.to === me && n.uid !== me);
+            return notifs.filter(n => n.to === me && (n.uid !== me || n.selfAlert === true));
         }
 
         function renderNotifs() {
@@ -2373,6 +2373,8 @@
             annStop();
             appLiveUrlStop();
             if (_cacheBurstTimer) { clearTimeout(_cacheBurstTimer); _cacheBurstTimer = null; }
+            if (typeof _custExpCheckTimer !== 'undefined' && _custExpCheckTimer) { clearTimeout(_custExpCheckTimer); _custExpCheckTimer = null; }
+            if (typeof _custExpSessionToasted !== 'undefined') _custExpSessionToasted = false;
             _custCmtSeenCacheVal = null; _custCmtSeenCacheKey = ''; _custCmtIndexSrc = null; _custCmtIndex = new Map();
             fbCache = null;
             fbLoaded = {};
@@ -8241,6 +8243,7 @@
                     custOrderSnapshots[key] = mapDocs(snap);
                     fbCache.custOrders = Object.assign({}, ...Object.values(custOrderSnapshots));
                     onCacheChanged();
+                    if (typeof custScheduleExpiryCheck === 'function') custScheduleExpiryCheck();
                 };
                 const subOrders = (key, ref) => {
                     if (fbCustSubKeys.has(key)) return;
@@ -8492,21 +8495,490 @@
             render();
         }
 
-        // customer orders has its own dashboard: list, schedule (by delivery status) and reports
+        // customer orders has its own dashboard: list, schedule (by delivery status), deadlines and reports
         let custTab = 'list';
+        let custDeadlineFilter = 'all_open'; // all_open | urgent | expired | today | soon | active | nodate | delivered
+        let custDeadlineSort = 'soonest';    // soonest | overdue | remaining
+
+        function custDeadlineInfo(c) {
+            const delivered = c.delivery === 'تم التسليم';
+            const rem = Math.max(0, custRemaining(c));
+            const payDue = rem > 0 ? custBalanceDueDate(c) : '';
+            const payDaysLeft = payDue ? daysBetween(todayISO(), payDue) : null;
+            const vu = /^\d{4}-\d{2}-\d{2}$/.test(String(c.validUntil || '')) ? String(c.validUntil) : '';
+            if (delivered) {
+                return { status: 'delivered', daysLeft: vu ? daysBetween(todayISO(), vu) : null, progressPct: 100, label: 'تم التسليم ✓', cls: 'bg-emerald-100 text-emerald-800 border-emerald-200', barCls: 'bg-emerald-500', rank: 5, payDue, payDaysLeft };
+            }
+            if (!vu) {
+                return { status: 'nodate', daysLeft: null, progressPct: 0, label: 'بدون تاريخ انتهاء', cls: 'bg-slate-100 text-slate-600 border-slate-200', barCls: 'bg-slate-300', rank: 4, payDue, payDaysLeft };
+            }
+            const today = todayISO();
+            const daysLeft = daysBetween(today, vu);
+            const startDate = custHoldDate(c) || today;
+            const span = Math.max(1, daysBetween(startDate, vu));
+            const elapsed = Math.max(0, daysBetween(startDate, today));
+            const progressPct = daysLeft <= 0 ? 100 : Math.min(99, Math.max(5, Math.round((elapsed / span) * 100)));
+            if (daysLeft < 0) {
+                const over = Math.abs(daysLeft);
+                return { status: 'expired', daysLeft, overdueDays: over, progressPct: 100, label: `منتهي منذ ${over} ${over === 1 ? 'يوم' : over === 2 ? 'يومين' : over <= 10 ? 'أيام' : 'يوم'}`, cls: 'bg-rose-100 text-rose-800 border-rose-300', barCls: 'bg-rose-600', rank: 0, payDue, payDaysLeft };
+            }
+            if (daysLeft === 0) {
+                return { status: 'today', daysLeft: 0, overdueDays: 0, progressPct: 100, label: 'ينتهي اليوم!', cls: 'bg-orange-100 text-orange-800 border-orange-300', barCls: 'bg-orange-500', rank: 1, payDue, payDaysLeft };
+            }
+            if (daysLeft <= 3) {
+                return { status: 'soon', daysLeft, overdueDays: 0, progressPct, label: `فاضل ${daysLeft} ${daysLeft === 1 ? 'يوم' : daysLeft === 2 ? 'يومين' : 'أيام'}`, cls: 'bg-amber-100 text-amber-800 border-amber-300', barCls: 'bg-amber-500', rank: 2, payDue, payDaysLeft };
+            }
+            return { status: 'active', daysLeft, overdueDays: 0, progressPct, label: `فاضل ${daysLeft} ${daysLeft <= 10 ? 'أيام' : 'يوم'}`, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', barCls: 'bg-emerald-500', rank: 3, payDue, payDaysLeft };
+        }
+
+        function custDeadlineStats(rows) {
+            const st = { expired: 0, today: 0, soon: 0, active: 0, nodate: 0, delivered: 0, expiredAmt: 0, todayAmt: 0, soonAmt: 0, activeAmt: 0 };
+            for (let i = 0; i < rows.length; i++) {
+                const c = rows[i], d = custDeadlineInfo(c), amt = numOr0(c.amount);
+                st[d.status]++;
+                if (d.status === 'expired') st.expiredAmt = r2(st.expiredAmt + amt);
+                else if (d.status === 'today') st.todayAmt = r2(st.todayAmt + amt);
+                else if (d.status === 'soon') st.soonAmt = r2(st.soonAmt + amt);
+                else if (d.status === 'active') st.activeAmt = r2(st.activeAmt + amt);
+            }
+            st.urgent = st.expired + st.today;
+            return st;
+        }
+
+        function custManagerUids() {
+            const roles = (appData && appData.roles) || {};
+            const out = new Set();
+            (appData?.users || []).forEach(u => {
+                if (!u || !u.id || u.active === false) return;
+                const r = roles[u.roleId];
+                const perms = (r && r.permissions) || [];
+                const isAdmin = u.roleId === 'admin' || !!(r && r.locked);
+                const isCustMgr = isAdmin || (perms.includes('custorders.manage') && !u.repId);
+                if (isCustMgr) out.add(u.id);
+            });
+            // Also include current user if they are admin or have custorders.manage (even if users list isn't loaded for them)
+            if (fbUser && canCust('manage') && (isSystemAdmin() || !currentRepId())) out.add(fbUser.uid);
+            return [...out];
+        }
+
+        function custRepUidForOrder(c) {
+            if (!c) return '';
+            const users = appData?.users || [];
+            if (c.repId) {
+                const byId = users.find(u => u && u.active !== false && u.repId === c.repId);
+                if (byId) return byId.id;
+            }
+            const rName = String(c.repName || '').trim();
+            if (rName) {
+                const byName = users.find(u => u && u.active !== false && String(u.name || '').trim() === rName);
+                if (byName) return byName.id;
+            }
+            if (fbUser && currentRepId() && custBelongsToCurrentRep(c)) return fbUser.uid;
+            return '';
+        }
+
+        function custWriteExpiryNotif(toUid, c, info, manual = false) {
+            if (!rtdb || !fbUser || !toUid || !c) return;
+            const today = todayISO();
+            const isSelf = toUid === fbUser.uid;
+            const nid = manual
+                ? ('CUSTEXPM-' + c.id + '-' + Date.now())
+                : ('CUSTEXP-' + c.id + '-' + today);
+            const rem = Math.max(0, custRemaining(c));
+            const whenTxt = info.status === 'expired'
+                ? `انتهت منذ ${info.overdueDays} ${info.overdueDays === 1 ? 'يوم' : 'أيام'}`
+                : (info.status === 'today' ? 'تنتهي اليوم' : info.label);
+            const detail = `فاتورة ${custNoLabel(c)} · العميل: ${c.customer || '—'} · المندوب: ${c.repName || '—'} · تاريخ الانتهاء: ${fmtDateAr(c.validUntil) || '—'} (${whenTxt})${rem > 0 ? ' · المتبقي: ' + fmtMoney(rem) : ''}`;
+            const payload = {
+                id: nid,
+                t: new Date().toISOString(),
+                uid: fbUser.uid,
+                user: manual ? (currentUser()?.name || 'إدارة طلبيات العملاء') : 'تنبيه مواعيد الطلبيات',
+                verb: info.status === 'expired' ? 'انتهت مدة' : 'تنتهي اليوم',
+                kind: 'طلبية عميل',
+                detail,
+                target: { col: 'custOrders', id: c.id },
+                to: toUid,
+                ...(isSelf ? { selfAlert: true } : {})
+            };
+            const ref = rtdb.ref('userNotifications/' + toUid + '/' + nid);
+            if (manual) {
+                ref.set(payload).catch(() => {});
+            } else {
+                // Only create once per day per order per user (never duplicates!)
+                ref.once('value').then(snap => {
+                    if (!snap.exists()) ref.set(payload).catch(() => {});
+                }).catch(() => {});
+            }
+        }
+
+        const CUST_EXP_ALERT_KEY = 'alrahma_cust_exp_sent_v1';
+        let _custExpSessionToasted = false;
+        let _custExpCheckTimer = null;
+        function custScheduleExpiryCheck() {
+            if (_custExpCheckTimer) clearTimeout(_custExpCheckTimer);
+            _custExpCheckTimer = setTimeout(custCheckExpiryAlerts, 1200);
+        }
+        function custCheckExpiryAlerts() {
+            if (!fbUser || !appData || !Array.isArray(appData.custOrders) || !canCust('view')) return;
+            const today = todayISO();
+            let sentMap = {};
+            try { sentMap = JSON.parse(localStorage.getItem(CUST_EXP_ALERT_KEY) || '{}') || {}; } catch (e) { sentMap = {}; }
+            // Keep only today's keys so localStorage stays tiny
+            Object.keys(sentMap).forEach(k => { if (!k.endsWith('|' + today)) delete sentMap[k]; });
+            const meUid = fbUser.uid;
+            const mgrUids = custManagerUids();
+            const isMgr = canCust('manage') && (isSystemAdmin() || !currentRepId());
+            const myRep = !isSystemAdmin() ? currentRepId() : '';
+            let myExpiredCount = 0, myTodayCount = 0, changed = false;
+
+            for (let i = 0; i < appData.custOrders.length; i++) {
+                const c = appData.custOrders[i];
+                const info = custDeadlineInfo(c);
+                if (info.status !== 'expired' && info.status !== 'today') continue;
+                const belongsToMe = isMgr || (myRep && custBelongsToCurrentRep(c));
+                if (belongsToMe) {
+                    if (info.status === 'expired') myExpiredCount++;
+                    else myTodayCount++;
+                }
+                // Determine recipients: Customer Orders Managers + Order's Sales Rep
+                const recipients = new Set();
+                if (isMgr) {
+                    mgrUids.forEach(uid => recipients.add(uid));
+                    const repUid = custRepUidForOrder(c);
+                    if (repUid) recipients.add(repUid);
+                } else if (myRep && custBelongsToCurrentRep(c)) {
+                    recipients.add(meUid);
+                    mgrUids.forEach(uid => recipients.add(uid));
+                }
+                recipients.forEach(toUid => {
+                    const key = `${c.id}|${toUid}|${today}`;
+                    if (sentMap[key]) return;
+                    sentMap[key] = 1;
+                    changed = true;
+                    custWriteExpiryNotif(toUid, c, info, false);
+                });
+            }
+            if (changed) {
+                try { localStorage.setItem(CUST_EXP_ALERT_KEY, JSON.stringify(sentMap)); } catch (e) {}
+            }
+            if (!_custExpSessionToasted && (myExpiredCount + myTodayCount) > 0) {
+                _custExpSessionToasted = true;
+                const parts = [];
+                if (myExpiredCount) parts.push(`${myExpiredCount} طلبية منتهية`);
+                if (myTodayCount) parts.push(`${myTodayCount} تنتهي اليوم`);
+                toast(`⏰ تنبيه مواعيد طلبيات العملاء: ${parts.join(' و ')} لم تُسلّم بعد!`, 'error', null, 7000);
+            }
+        }
+
+        function custSendExpiryAlertOne(orderId) {
+            if (!canCust('manage')) return toast('إرسال التنبيهات متاح لمدير طلبيات العملاء فقط', 'error');
+            const c = (appData.custOrders || []).find(x => x.id === orderId);
+            if (!c) return;
+            const info = custDeadlineInfo(c);
+            const repUid = custRepUidForOrder(c);
+            const mgrs = custManagerUids();
+            let sent = 0;
+            if (repUid) { custWriteExpiryNotif(repUid, c, info, true); sent++; }
+            mgrs.forEach(uid => { if (uid !== fbUser?.uid) { custWriteExpiryNotif(uid, c, info, true); sent++; } });
+            if (sent > 0) {
+                toast(`✓ تم إرسال رسالة تنبيه فورية ${repUid ? 'للمندوب (' + esc(c.repName || '') + ') والإدارة' : 'للإدارة'}`, 'success');
+            } else {
+                toast('لا يوجد حساب دخول مربوط بهذا المندوب حالياً — اربط حسابه من «المستخدمون والصلاحيات»', 'info', null, 5000);
+            }
+        }
+
+        function custNotifyAllExpiredReps() {
+            if (!canCust('manage')) return toast('إرسال التنبيهات متاح لمدير طلبيات العملاء فقط', 'error');
+            const rows = filteredCustOrders().filter(c => {
+                const st = custDeadlineInfo(c).status;
+                return st === 'expired' || st === 'today';
+            });
+            if (!rows.length) return toast('مفيش طلبيات منتهية أو تنتهي اليوم حالياً', 'info');
+            let sentOrders = 0, noAccount = 0;
+            rows.forEach(c => {
+                const info = custDeadlineInfo(c);
+                const repUid = custRepUidForOrder(c);
+                if (repUid) { custWriteExpiryNotif(repUid, c, info, true); sentOrders++; }
+                else noAccount++;
+            });
+            toast(`✓ تم إرسال تنبيهات لـ ${sentOrders} طلبية منتهية${noAccount ? ` (${noAccount} بدون حساب مندوب مربوط)` : ''}`, 'success', null, 5000);
+        }
+
+        function custExpiryAlertBannerHtml() {
+            const rows = filteredCustOrders();
+            const st = custDeadlineStats(rows);
+            if (!st.expired && !st.today && !st.soon) return '';
+            const urgent = st.expired + st.today;
+            const isCrit = urgent > 0;
+            return `<div class="rounded-2xl border-2 ${isCrit ? 'border-rose-300 bg-gradient-to-l from-rose-50 via-red-50 to-orange-50' : 'border-amber-300 bg-amber-50/90'} p-3.5 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                    <span class="w-10 h-10 rounded-xl ${isCrit ? 'bg-rose-600 text-white' : 'bg-amber-500 text-white'} flex items-center justify-center shrink-0 shadow-sm"><i class="fa-solid ${isCrit ? 'fa-bell-exclamation fa-bell' : 'fa-hourglass-half'} text-lg"></i></span>
+                    <div class="text-sm min-w-0">
+                        <p class="font-extrabold ${isCrit ? 'text-rose-900' : 'text-amber-900'}">
+                            ${isCrit ? '🚨 تنبيه انتهاء مواعيد طلبيات العملاء!' : '⏳ طلبيات قاربت على الانتهاء'}
+                        </p>
+                        <p class="text-xs ${isCrit ? 'text-rose-800' : 'text-amber-800'} mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                            ${st.expired ? `<span>🔴 <b>${fmtNumber(st.expired, 0)}</b> طلبية منتهية (${fmtMoney(st.expiredAmt)})</span>` : ''}
+                            ${st.today ? `<span>🟠 <b>${fmtNumber(st.today, 0)}</b> تنتهي اليوم</span>` : ''}
+                            ${st.soon ? `<span>🟡 <b>${fmtNumber(st.soon, 0)}</b> خلال 3 أيام</span>` : ''}
+                        </p>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 shrink-0">
+                    ${custTab !== 'deadlines' ? `<button type="button" onclick="navigate('customers/deadlines')" class="px-3.5 py-2 rounded-xl ${isCrit ? 'bg-rose-600 hover:bg-rose-700' : 'bg-amber-600 hover:bg-amber-700'} text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm cursor-pointer"><i class="fa-solid fa-hourglass-half"></i> عرض تقرير المواعيد</button>` : ''}
+                    ${canCust('manage') && isCrit ? `<button type="button" onclick="custNotifyAllExpiredReps()" class="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"><i class="fa-solid fa-paper-plane"></i> تنبيه المندوبين الآن</button>` : ''}
+                </div>
+            </div>`;
+        }
+
         function custTabsBar() {
-            const tabBtn = (route, label, icon, key) => `<button type="button" onclick="navigate('${route}')" class="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 ${custTab === key ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 border-2 border-slate-300 hover:bg-slate-50'}"><i class="fa-solid ${icon}"></i>${label}</button>`;
+            const st = custDeadlineStats(filteredCustOrders());
+            const badge = st.urgent > 0
+                ? `<span class="ms-1 px-1.5 py-0.5 rounded-full text-[11px] font-black leading-none ${custTab === 'deadlines' ? 'bg-white text-rose-700' : 'bg-rose-600 text-white'}">${st.urgent}</span>`
+                : (st.soon > 0 ? `<span class="ms-1 px-1.5 py-0.5 rounded-full text-[11px] font-black leading-none ${custTab === 'deadlines' ? 'bg-white text-amber-700' : 'bg-amber-500 text-white'}">${st.soon}</span>` : '');
+            const tabBtn = (route, label, icon, key, extra = '') => `<button type="button" onclick="navigate('${route}')" class="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 cursor-pointer ${custTab === key ? 'bg-brand-600 text-white shadow-sm' : 'bg-white text-slate-700 border-2 border-slate-300 hover:bg-slate-50'}"><i class="fa-solid ${icon}"></i>${label}${extra}</button>`;
             return `<div class="flex flex-wrap gap-2">
                 ${tabBtn('customers', 'الطلبيات', 'fa-list', 'list')}
+                ${tabBtn('customers/deadlines', 'تقارير المواعيد والانتهاء', 'fa-hourglass-half', 'deadlines', badge)}
                 ${tabBtn('customers/schedule', 'لوحة الجدولة', 'fa-calendar-days', 'schedule')}
-                ${tabBtn('customers/reports', 'التقارير', 'fa-chart-column', 'reports')}
+                ${tabBtn('customers/reports', 'التقارير المالية', 'fa-chart-column', 'reports')}
             </div>`;
         }
 
         function custTabBody() {
+            if (custTab === 'deadlines') return custDeadlinesHtml();
             if (custTab === 'schedule') return custScheduleHtml();
             if (custTab === 'reports') return custReportsHtml();
             return custBodyHtml();
+        }
+
+        function setCustDeadlineFilter(k) { custDeadlineFilter = k; updateCustBody(); }
+        function setCustDeadlineSort(s) { custDeadlineSort = s; updateCustBody(); }
+
+        function custDeadlineFilteredRows() {
+            const base = filteredCustOrders().map(c => ({ c, d: custDeadlineInfo(c) }));
+            const filtered = base.filter(({ d }) => {
+                if (custDeadlineFilter === 'all_open') return d.status !== 'delivered';
+                if (custDeadlineFilter === 'urgent') return d.status === 'expired' || d.status === 'today' || d.status === 'soon';
+                return d.status === custDeadlineFilter;
+            });
+            filtered.sort((a, b) => {
+                if (custDeadlineSort === 'overdue') {
+                    const da = a.d.daysLeft === null ? 99999 : a.d.daysLeft;
+                    const db = b.d.daysLeft === null ? 99999 : b.d.daysLeft;
+                    return da - db;
+                }
+                if (custDeadlineSort === 'remaining') {
+                    return custRemaining(b.c) - custRemaining(a.c);
+                }
+                // soonest: rank first (expired -> today -> soon -> active -> nodate -> delivered), then daysLeft ascending
+                if (a.d.rank !== b.d.rank) return a.d.rank - b.d.rank;
+                const da = a.d.daysLeft === null ? 99999 : a.d.daysLeft;
+                const db = b.d.daysLeft === null ? 99999 : b.d.daysLeft;
+                return da - db;
+            });
+            return filtered;
+        }
+
+        function custDeadlinesHtml() {
+            const allRows = filteredCustOrders();
+            const st = custDeadlineStats(allRows);
+            const list = custDeadlineFilteredRows();
+            const kpiCard = (key, title, count, sub, cls, activeCls, icon) => {
+                const on = custDeadlineFilter === key;
+                return `<button type="button" onclick="setCustDeadlineFilter('${key}')" class="text-start rounded-2xl border-2 p-3.5 transition cursor-pointer ${on ? activeCls + ' ring-2 ring-offset-1 shadow-md' : cls + ' hover:shadow-sm'}">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-xs font-extrabold">${title}</span>
+                        <i class="fa-solid ${icon} text-sm opacity-80"></i>
+                    </div>
+                    <p class="text-2xl font-black mt-1">${fmtNumber(count, 0)}</p>
+                    <p class="text-[11px] font-bold opacity-80 mt-0.5 truncate">${sub}</p>
+                </button>`;
+            };
+
+            const kpis = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+                ${kpiCard('expired', 'منتهية الصلاحية', st.expired, fmtMoney(st.expiredAmt), 'bg-rose-50/80 border-rose-200 text-rose-800', 'bg-rose-600 border-rose-700 text-white ring-rose-400', 'fa-circle-exclamation')}
+                ${kpiCard('today', 'تنتهي اليوم', st.today, fmtMoney(st.todayAmt), 'bg-orange-50/80 border-orange-200 text-orange-800', 'bg-orange-500 border-orange-600 text-white ring-orange-400', 'fa-bolt')}
+                ${kpiCard('soon', 'قريبة (1–3 أيام)', st.soon, fmtMoney(st.soonAmt), 'bg-amber-50/80 border-amber-200 text-amber-800', 'bg-amber-500 border-amber-600 text-white ring-amber-400', 'fa-hourglass-half')}
+                ${kpiCard('active', 'سارية بأمان', st.active, fmtMoney(st.activeAmt), 'bg-emerald-50/80 border-emerald-200 text-emerald-800', 'bg-emerald-600 border-emerald-700 text-white ring-emerald-400', 'fa-circle-check')}
+                ${kpiCard('nodate', 'بدون تاريخ انتهاء', st.nodate, 'يُفضّل تحديد الموعد', 'bg-slate-50 border-slate-200 text-slate-700', 'bg-slate-700 border-slate-800 text-white ring-slate-400', 'fa-calendar-xmark')}
+            </div>`;
+
+            const filterPills = `<div class="flex flex-wrap items-center justify-between gap-2 bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
+                <div class="flex flex-wrap items-center gap-1.5">
+                    ${[['all_open', `كل الجارية (${allRows.length - st.delivered})`], ['urgent', `الطارئة فقط (${st.expired + st.today + st.soon})`], ['delivered', `المسلّمة (${st.delivered})`]].map(([k, lbl]) =>
+                        `<button type="button" onclick="setCustDeadlineFilter('${k}')" class="px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer ${custDeadlineFilter === k ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">${lbl}</button>`
+                    ).join('')}
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <select onchange="setCustDeadlineSort(this.value)" class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold bg-white">
+                        <option value="soonest" ${custDeadlineSort === 'soonest' ? 'selected' : ''}>ترتيب: الأهم والأقرب انتهاءً</option>
+                        <option value="overdue" ${custDeadlineSort === 'overdue' ? 'selected' : ''}>ترتيب: الأكثر تأخيراً أولاً</option>
+                        <option value="remaining" ${custDeadlineSort === 'remaining' ? 'selected' : ''}>ترتيب: الأعلى متبقي مالي</option>
+                    </select>
+                    ${canCust('manage') && (st.expired + st.today) > 0 ? btn('custNotifyAllExpiredReps()', 'تنبيه المندوبين بالمنتهي', 'fa-paper-plane', 'px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer') : ''}
+                    ${btn('printCustDeadlinesReport()', 'طباعة التقرير', 'fa-print', BTN_SECONDARY + ' !py-1.5 !text-xs')}
+                    ${btn('exportCustDeadlinesXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY + ' !py-1.5 !text-xs')}
+                </div>
+            </div>`;
+
+            // Rep breakdown (only for manager/admin who sees multiple reps)
+            let repSummaryHtml = '';
+            if (isSystemAdmin() || !visibleRepId()) {
+                const byRep = new Map();
+                allRows.forEach(c => {
+                    const info = custDeadlineInfo(c);
+                    if (info.status === 'delivered') return;
+                    const key = c.repId || ('__name__' + (c.repName || 'بدون مندوب'));
+                    if (!byRep.has(key)) byRep.set(key, { repId: c.repId || '', name: c.repName || 'بدون مندوب', expired: 0, today: 0, soon: 0, active: 0, rem: 0 });
+                    const g = byRep.get(key);
+                    if (info.status === 'expired') g.expired++;
+                    else if (info.status === 'today') g.today++;
+                    else if (info.status === 'soon') g.soon++;
+                    else if (info.status === 'active') g.active++;
+                    g.rem = r2(g.rem + Math.max(0, custRemaining(c)));
+                });
+                const repList = [...byRep.values()].sort((a, b) => ((b.expired * 10 + b.today * 5 + b.soon) - (a.expired * 10 + a.today * 5 + a.soon)));
+                if (repList.length) {
+                    repSummaryHtml = `<div class="bg-white rounded-2xl border-2 border-slate-200 p-4 shadow-sm space-y-2.5">
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="font-extrabold text-sm text-slate-800"><i class="fa-solid fa-user-tie text-brand-600 me-1.5"></i>ملخص مواعيد الانتهاء حسب المندوب (الطلبيات الجارية)</h3>
+                            <span class="text-[11px] text-slate-500">اضغط على أي مندوب لتصفية طلبياته</span>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            ${repList.map(g => `<button type="button" onclick="custFilter.rep='${esc(g.repId)}'; updateCustBody()" class="text-start p-2.5 rounded-xl border ${(g.expired + g.today) > 0 ? 'border-rose-200 bg-rose-50/40 hover:bg-rose-50' : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100'} transition cursor-pointer flex items-center justify-between gap-2">
+                                <div class="min-w-0">
+                                    <p class="font-extrabold text-sm text-slate-800 truncate">${esc(g.name)}</p>
+                                    <p class="text-[11px] text-slate-500 mt-0.5">المتبقي: <b class="${g.rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${fmtMoney(g.rem)}</b></p>
+                                </div>
+                                <div class="flex items-center gap-1 shrink-0 text-[11px] font-black">
+                                    ${g.expired ? `<span class="px-2 py-0.5 rounded-full bg-rose-600 text-white" title="منتهي">🔴 ${g.expired}</span>` : ''}
+                                    ${g.today ? `<span class="px-2 py-0.5 rounded-full bg-orange-500 text-white" title="اليوم">🟠 ${g.today}</span>` : ''}
+                                    ${g.soon ? `<span class="px-2 py-0.5 rounded-full bg-amber-500 text-white" title="قريب">🟡 ${g.soon}</span>` : ''}
+                                    ${g.active ? `<span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800" title="ساري">🟢 ${g.active}</span>` : ''}
+                                </div>
+                            </button>`).join('')}
+                        </div>
+                    </div>`;
+                }
+            }
+
+            const rowBtns = (c, d) => {
+                const id = esc(c.id);
+                return `<div class="flex items-center justify-center gap-1">
+                    <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" class="${BTN_ICON} text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
+                    ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل / تمديد الموعد" class="${BTN_ICON} text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-calendar-plus"></i></button>` : ''}
+                    ${canCust('manage') && (d.status === 'expired' || d.status === 'today' || d.status === 'soon') ? `<button type="button" onclick="custSendExpiryAlertOne('${id}')" title="إرسال رسالة تنبيه فورية للمندوب والإدارة" class="${BTN_ICON} text-rose-600 hover:text-rose-700 hover:bg-rose-50"><i class="fa-solid fa-bell"></i></button>` : ''}
+                    ${canCust('whatsapp') && custPhonesOf(c).length ? `<button type="button" onclick="custWhatsApp('${id}')" title="إرسال واتساب للعميل" class="${BTN_ICON} text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
+                </div>`;
+            };
+
+            let listHtml = '';
+            if (!list.length) {
+                listHtml = `<div class="bg-white rounded-2xl border-2 border-slate-200 p-10 text-center text-slate-500 font-bold">
+                    <i class="fa-solid fa-calendar-check text-3xl text-emerald-400 mb-2 block"></i>
+                    لا توجد طلبيات في هذا التصنيف حالياً
+                </div>`;
+            } else if (window.innerWidth < 768) {
+                listHtml = `<div class="space-y-2.5">${list.map(({ c, d }) => {
+                    const rem = Math.max(0, custRemaining(c));
+                    return `<article class="bg-white rounded-2xl border-2 ${d.status === 'expired' ? 'border-rose-300' : d.status === 'today' ? 'border-orange-300' : d.status === 'soon' ? 'border-amber-300' : 'border-slate-200'} p-3.5 shadow-sm space-y-2" style="content-visibility:auto;contain-intrinsic-size:190px">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <p class="font-extrabold text-slate-900 truncate">${esc(c.customer || '—')}</p>
+                                <p class="text-xs text-slate-500 font-mono">${custNoLabel(c)} · ${esc(c.repName || 'بدون مندوب')}</p>
+                            </div>
+                            <span class="px-2.5 py-1 rounded-full text-xs font-extrabold border shrink-0 ${d.cls}">${esc(d.label)}</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 rounded-xl p-2 border border-slate-100">
+                            <div><span class="text-slate-400 block">تاريخ الطلب</span><b class="text-slate-700">${esc(fmtDateAr(c.date) || '—')}</b></div>
+                            <div><span class="text-slate-400 block">تاريخ الانتهاء</span><b class="${d.status === 'expired' ? 'text-rose-700' : 'text-slate-800'}">${esc(fmtDateAr(c.validUntil) || 'غير محدد')}</b></div>
+                        </div>
+                        ${c.validUntil ? `<div class="w-full h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full ${d.barCls}" style="width:${d.progressPct}%"></div></div>` : ''}
+                        <div class="flex items-center justify-between gap-2 text-xs">
+                            <span>الإجمالي: <b>${fmtMoney(numOr0(c.amount))}</b> · المتبقي: <b class="${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${fmtMoney(rem)}</b></span>
+                            ${custDeliveryBadge(c)}
+                        </div>
+                        ${d.payDue ? `<p class="text-[11px] ${d.payDaysLeft < 0 ? 'text-rose-700 font-bold' : 'text-slate-500'}"><i class="fa-solid fa-coins me-1"></i>مهلة سداد الباقي (7 أيام): ${esc(fmtDateAr(d.payDue))} ${d.payDaysLeft < 0 ? `(متأخر ${Math.abs(d.payDaysLeft)} يوم)` : d.payDaysLeft === 0 ? '(تنتهي اليوم)' : `(فاضل ${d.payDaysLeft} يوم)`}</p>` : ''}
+                        <div class="flex justify-end pt-1 border-t border-slate-100">${rowBtns(c, d)}</div>
+                    </article>`;
+                }).join('')}</div>`;
+            } else {
+                listHtml = `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                            <th class="py-3 px-3 text-start">الرقم</th>
+                            <th class="py-3 px-3 text-start">العميل</th>
+                            <th class="py-3 px-3 text-start">المندوب</th>
+                            <th class="py-3 px-3 text-start">تاريخ الطلب</th>
+                            <th class="py-3 px-3 text-start">تاريخ الانتهاء</th>
+                            <th class="py-3 px-3 text-start min-w-[165px]">المتبقي / الحالة الزمنية</th>
+                            <th class="py-3 px-3 text-start">المتبقي المالي</th>
+                            <th class="py-3 px-3 text-start">التسليم</th>
+                            <th class="py-3 px-3 text-center">إجراءات</th>
+                        </tr></thead>
+                        <tbody class="divide-y divide-slate-200">${list.map(({ c, d }) => {
+                            const rem = Math.max(0, custRemaining(c));
+                            const rowBg = d.status === 'expired' ? 'bg-rose-50/40 hover:bg-rose-50/80' : d.status === 'today' ? 'bg-orange-50/40 hover:bg-orange-50/80' : 'hover:bg-slate-50';
+                            return `<tr class="${rowBg}">
+                                <td class="py-3 px-3 font-mono font-bold whitespace-nowrap">${custNoLabel(c)}</td>
+                                <td class="py-3 px-3 font-bold text-slate-800">${esc(c.customer || '—')}<span class="block text-[11px] font-normal text-slate-500">${esc(c.category || '—')}</span></td>
+                                <td class="py-3 px-3 whitespace-nowrap">${esc(c.repName || '—')}</td>
+                                <td class="py-3 px-3 whitespace-nowrap text-xs">${esc(fmtDateAr(c.date) || '—')}</td>
+                                <td class="py-3 px-3 whitespace-nowrap font-bold ${d.status === 'expired' ? 'text-rose-700' : d.status === 'today' ? 'text-orange-700' : 'text-slate-800'}">${esc(fmtDateAr(c.validUntil) || '—')}</td>
+                                <td class="py-3 px-3">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold border ${d.cls}">${esc(d.label)}</span>
+                                    ${c.validUntil ? `<div class="w-full h-1.5 rounded-full bg-slate-200/80 overflow-hidden mt-1.5"><div class="h-full rounded-full ${d.barCls}" style="width:${d.progressPct}%"></div></div>` : ''}
+                                    ${d.payDue ? `<span class="block text-[10px] mt-1 ${d.payDaysLeft < 0 ? 'text-rose-700 font-bold' : 'text-slate-500'}">مهلة السداد: ${esc(fmtDateAr(d.payDue))}</span>` : ''}
+                                </td>
+                                <td class="py-3 px-3 whitespace-nowrap font-bold ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${fmtMoney(rem)}<span class="block text-[10px] font-normal text-slate-400">من ${fmtMoney(numOr0(c.amount))}</span></td>
+                                <td class="py-3 px-3 whitespace-nowrap">${custDeliveryBadge(c)}</td>
+                                <td class="py-3 px-3">${rowBtns(c, d)}</td>
+                            </tr>`;
+                        }).join('')}</tbody>
+                    </table>
+                </div>`;
+            }
+
+            return `<div class="space-y-4">${kpis}${filterPills}${repSummaryHtml}${listHtml}</div>`;
+        }
+
+        function printCustDeadlinesReport() {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const list = custDeadlineFilteredRows();
+            const body = `<style>@page { size: A4 landscape; margin: 8mm; } table { font-size: 9pt; }</style>
+                <h1>تقرير مواعيد وانتهاء طلبيات العملاء</h1>
+                <div class="meta">عدد الطلبيات: ${list.length} · تاريخ التقرير: ${esc(fmtDateAr(todayISO()))}</div>
+                <table><thead><tr><th>الرقم</th><th>العميل</th><th>المندوب</th><th>الصنف</th><th>تاريخ الطلب</th><th>تاريخ الانتهاء</th><th>الحالة / المتبقي بالأيام</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التسليم</th></tr></thead>
+                <tbody>${list.map(({ c, d }) => `<tr>
+                    <td>${esc(custNoLabel(c))}</td><td>${esc(c.customer || '—')}</td><td>${esc(c.repName || '—')}</td><td>${esc(c.category || '—')}</td>
+                    <td>${esc(fmtDateAr(c.date) || '—')}</td><td>${esc(fmtDateAr(c.validUntil) || '—')}</td>
+                    <td><b>${esc(d.label)}</b></td><td>${fmtMoney(numOr0(c.amount))}</td><td>${fmtMoney(numOr0(c.paid))}</td><td>${fmtMoney(Math.max(0, custRemaining(c)))}</td>
+                    <td>${esc(c.delivery || '—')}</td>
+                </tr>`).join('')}</tbody></table>`;
+            printHtml(orderPrintShell('تقرير مواعيد وانتهاء طلبيات العملاء', body));
+        }
+
+        function exportCustDeadlinesXlsx() {
+            if (!canCust('view')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            if (typeof XLSX === 'undefined') return toast('مكتبة الإكسيل غير متاحة. تأكد من الإنترنت', 'error', null, 5000);
+            const list = custDeadlineFilteredRows();
+            if (!list.length) return toast('لا توجد طلبيات للتصدير', 'error');
+            const head = ['رقم الطلب', 'العميل', 'المندوب', 'الصنف', 'تاريخ الطلب', 'تاريخ الانتهاء', 'الأيام المتبقية', 'الحالة الزمنية', 'الإجمالي', 'المدفوع', 'المتبقي', 'حالة التسليم'];
+            const data = list.map(({ c, d }) => [
+                Number(c.no) || '', c.customer || '', c.repName || '', c.category || '',
+                c.date || '', c.validUntil || '', d.daysLeft === null ? '' : d.daysLeft, d.label,
+                numOr0(c.amount), numOr0(c.paid), Math.max(0, custRemaining(c)), c.delivery || ''
+            ]);
+            const ws = XLSX.utils.aoa_to_sheet([head, ...data]);
+            ws['!cols'] = [10, 22, 16, 12, 13, 13, 12, 18, 13, 13, 13, 13].map(wch => ({ wch }));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'مواعيد الانتهاء');
+            wb.Workbook = { Views: [{ RTL: true }] };
+            XLSX.writeFile(wb, `مواعيد-طلبيات-العملاء-${todayISO()}.xlsx`);
+            log('تصدير تقرير مواعيد طلبيات العملاء', `${list.length} طلبية`);
+            toast(`تم تصدير ${list.length} طلبية`, 'success');
         }
 
         // one column per delivery status; each column lists its orders and their total
@@ -8560,7 +9032,21 @@
                 .map(r => statRow(r.name, rows.filter(c => c.repId === r.id))).join('')
                 + statRow('بدون مندوب', rows.filter(c => !c.repId));
             const byDel = CUST_DELIVERY.map(d => statRow(d, rows.filter(c => c.delivery === d))).join('');
+            const dSt = custDeadlineStats(rows);
+            const dlQuick = `<div class="bg-white rounded-2xl border-2 border-slate-200 p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-extrabold text-slate-800 text-sm"><i class="fa-solid fa-hourglass-half text-brand-600 me-1.5"></i>ملخص مواعيد وانتهاء الطلبيات</h3>
+                    <p class="text-xs text-slate-600 mt-1 flex flex-wrap gap-3">
+                        <span class="text-rose-700 font-bold">🔴 منتهية: ${fmtNumber(dSt.expired, 0)}</span>
+                        <span class="text-orange-700 font-bold">🟠 تنتهي اليوم: ${fmtNumber(dSt.today, 0)}</span>
+                        <span class="text-amber-700 font-bold">🟡 خلال 3 أيام: ${fmtNumber(dSt.soon, 0)}</span>
+                        <span class="text-emerald-700 font-bold">🟢 سارية: ${fmtNumber(dSt.active, 0)}</span>
+                    </p>
+                </div>
+                ${btn("navigate('customers/deadlines')", 'فتح تقرير المواعيد والانتهاء بالتفصيل', 'fa-arrow-left', BTN_PRIMARY + ' !text-xs !py-2')}
+            </div>`;
             return `<div class="space-y-4">
+                ${dlQuick}
                 <div class="flex flex-wrap gap-2 justify-end">
                     ${canCust('view') ? btn('printCustReport()', 'طباعة التقرير', 'fa-print', BTN_SECONDARY) : ''}
                     ${canCust('view') ? btn('exportCustReport()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY) : ''}
@@ -8859,7 +9345,8 @@
         function viewCustomerOrders(param = '') {
             if (!canCust('view')) return { title: 'طلبيات العملاء', html: noOrderAccessHtml() };
             custEnsureCommentSubs();
-            custTab = param === 'schedule' || param === 'reports' ? param : 'list';
+            custScheduleExpiryCheck();
+            custTab = param === 'schedule' || param === 'reports' || param === 'deadlines' ? param : 'list';
             const tools = `<div class="flex flex-wrap gap-2 justify-end">
                 ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
                 ${canCust('manage') ? btn('openCustRepsModal()', 'إدارة المندوبين', 'fa-user-tie', BTN_SECONDARY) : ''}
@@ -8872,7 +9359,7 @@
             return {
                 title: 'طلبيات العملاء',
                 actions: '',
-                html: `<div class="space-y-4">${custTabsBar()}${tools}${repBannerHtml()}${custFilterBar()}<div id="custBody" class="space-y-4">${custTabBody()}</div></div>`
+                html: `<div class="space-y-4">${custTabsBar()}${custExpiryAlertBannerHtml()}${tools}${repBannerHtml()}${custFilterBar()}<div id="custBody" class="space-y-4">${custTabBody()}</div></div>`
             };
         }
 
@@ -12690,6 +13177,11 @@
             const now = Date.now();
             if (canCust('view')) {
                 for (const c of appData.custOrders) {
+                    const dl = custDeadlineInfo(c);
+                    if (dl.status === 'expired' || dl.status === 'today') {
+                        out.push({ id: 'custexp:' + c.id, open: c.id, no: Number(c.no) || 0, type: 'انتهاء طلبية', prio: 1, route: 'customers/deadlines', text: `⏰ ${dl.label} — رقم الفاتورة ${custNoLabel(c)} — ${c.customer || ''}${c.repName ? ' (' + c.repName + ')' : ''}` });
+                        continue;
+                    }
                     const reasons = [];
                     if (homeCfg.alertUndelivered && c.delivery === 'لم تُسلم') reasons.push('لم تُسلم');
                     if (homeCfg.alertIncomplete && c.completeness === 'ناقصة') reasons.push('ناقصة');
@@ -18062,5 +18554,5 @@
         };
 
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60dace9dc41edda',t:'MTc5NTc0NjI1NA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60dace9dc41edda',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
