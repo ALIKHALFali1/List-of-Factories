@@ -13313,14 +13313,24 @@
         }
         async function finBioRegister() {
             if (finNativeBioAvailable()) {
-                localStorage.setItem(finBioKey(), JSON.stringify({
-                    mode: 'native-android',
-                    registeredAt: new Date().toISOString(),
-                    device: 'Android App Biometric'
-                }));
-                finSecLog('تفعيل بصمة التطبيق المباشرة', 'تم تفعيل بصمة الجهاز المباشرة داخل تطبيق الأندرويد بدون جوجل', 'info');
-                toast('✓ تم تفعيل البصمة المحلية المباشرة داخل التطبيق!', 'success');
-                return finRepaint();
+                try {
+                    const ok = await new Promise(resolve => {
+                        window.__finBioRegCb = res => resolve(!!res);
+                        try { window.AndroidBridge.authenticateBiometric('__finBioRegCb'); } catch (e) { resolve(false); }
+                    });
+                    if (!ok) return toast('تم إلغاء التحقق بالبصمة — حاول مرة أخرى لتفعيلها', 'error');
+                    localStorage.setItem(finBioKey(), JSON.stringify({
+                        mode: 'native-android',
+                        registeredAt: new Date().toISOString(),
+                        device: 'Android Native Hardware Biometric'
+                    }));
+                    finSecLog('تفعيل بصمة التطبيق المباشرة', 'تم ربط بصمة الهاتف العتادية مباشرة داخل تطبيق الأندرويد (بدون جوجل)', 'info');
+                    toast('✓ تم تفعيل بصمة الهاتف المحلية بنجاح داخل التطبيق!', 'success');
+                    return finRepaint();
+                } catch (err) {
+                    console.warn('Native bio register:', err);
+                    return toast('تعذّر تشغيل مستشعر البصمة — تأكد من تفعيل البصمة في إعدادات الهاتف', 'error', null, 5500);
+                }
             }
             if (!finBioSupported()) {
                 return toast('متصفح التطبيق لا يدعم WebAuthn — استخدم «الرمز السريع المحلي» بالأسفل للدخول السريع بدون جوجل', 'info', null, 6000);
@@ -14317,11 +14327,17 @@
                         XLSX.utils.book_append_sheet(wb, ws, cleanName);
                     });
                     const fileName = `${safeBase}.xlsx`;
+                    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                    if (window.AndroidBridge && typeof window.AndroidBridge.saveBase64File === 'function') {
+                        const b64 = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+                        const saved = window.AndroidBridge.saveBase64File(fileName, mime, b64);
+                        if (saved) return true;
+                    }
                     const isWebView = !!(window.AndroidBridge || /; wv\)/i.test(navigator.userAgent || ''));
                     if (isWebView) {
                         const b64 = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
                         const a = document.createElement('a');
-                        a.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + b64;
+                        a.href = 'data:' + mime + ';base64,' + b64;
                         a.download = fileName;
                         document.body.appendChild(a);
                         a.click();
@@ -21510,5 +21526,5 @@
         };
 
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60e5d4aecba5258',t:'MTc5NTc1MzQ3OA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60e5d4aecba5258',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
