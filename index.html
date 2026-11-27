@@ -1833,20 +1833,8 @@
 
         // Batch notifications split by permission-gated section (written atomically with changes)
         function notificationsFor(ops) {
-            const bySec = {};
-            ops.forEach(op => {
-                const sec = notifSectionForKey(op.key);
-                if (!sec) return;
-                (bySec[sec] = bySec[sec] || []).push(op);
-            });
-            const out = [];
-            Object.entries(bySec).forEach(([sec, secOps]) => {
-                const info = describeChanges(secOps);
-                if (!info) return;
-                const n = newNotification(info);
-                out.push({ key: 'sectionNotifications/' + sec + '/' + n.id, data: n });
-            });
-            return out;
+            // Privacy: do NOT broadcast one user's edits/actions to other users' bells.
+            return [];
         }
 
         // Auto-prune old notifications so RTDB never bloats (throttled per path)
@@ -1876,15 +1864,9 @@
             rtdb.ref('userNotifications/' + toUid + '/' + n.id).set(n).catch(err => console.warn('user notification not saved:', err && err.code));
         }
 
-        // Section-scoped direct notification (PDF upload/removal, shipping, customer comments, announcements, etc.)
+        // Section-scoped broadcast notifications disabled so each user only sees their own activity & direct personal alerts.
         function notifyDirect(verb, kind, detail, target) {
-            if (!rtdb || !fbUser) return;
-            const sec = notifSectionForKey(target && target.col ? target.col + '/' : '');
-            if (!sec) return;
-            const n = newNotification({ verb, kind, detail, target });
-            rtdb.ref('sectionNotifications/' + sec + '/' + n.id).set(n).then(() => {
-                if (isSystemAdmin() || can('settings.manage')) pruneNotifFeed('sectionNotifications/' + sec, false);
-            }).catch(err => console.warn('section notification not saved:', err && err.code));
+            return;
         }
 
         function listNameById(id) {
@@ -1935,9 +1917,6 @@
                 notifUnsubs.push(() => { try { ref.off('value', cb); } catch (e) { /* noop */ } });
             };
             subFeed('__mine__', rtdb.ref('userNotifications/' + meUid).orderByChild('t').limitToLast(30));
-            NOTIF_SECTIONS.forEach(sec => {
-                if (sec.check()) subFeed(sec.key, rtdb.ref('sectionNotifications/' + sec.key).orderByChild('t').limitToLast(20));
-            });
         }
 
         function stopNotifSync() {
@@ -2012,10 +1991,11 @@
             return ['fa-bell', 'bg-slate-100 text-slate-500'];
         }
 
-        // everyone's entries except the user's own changes
+        // Only direct personal notifications explicitly addressed to the current user (no other users' broadcast activity)
         function visibleNotifs() {
             const me = fbUser?.uid;
-            return notifs.filter(n => n.uid !== me && (!n.to || n.to === me));
+            if (!me) return [];
+            return notifs.filter(n => n.to === me && n.uid !== me);
         }
 
         function renderNotifs() {
@@ -2165,8 +2145,19 @@
             return new Date(iso).toLocaleString('ar-EG', { day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' });
         }
 
+        function logBelongsToMe(entry) {
+            if (!entry || typeof entry !== 'object') return false;
+            const meUid = (fbUser && fbUser.uid) || sessionUserId || '';
+            if (!meUid) return false;
+            if (entry.uid) return entry.uid === meUid;
+            const meUser = (fbCache && fbCache.users && fbCache.users[meUid]) || (appData && (appData.users || []).find(u => u.id === meUid));
+            const meName = String(meUser?.name || '').trim();
+            return !!meName && String(entry.user || '').trim() === meName;
+        }
+
         function log(action, detail = '') {
-            const entry = { id: uid('LOG-'), t: new Date().toISOString(), user: currentUser()?.name || 'النظام', action, detail };
+            const meUid = (fbUser && fbUser.uid) || sessionUserId || '';
+            const entry = { id: uid('LOG-'), t: new Date().toISOString(), uid: meUid, user: currentUser()?.name || 'النظام', action, detail };
             appData.logs.unshift(entry);
             if (appData.logs.length > LOG_LIMIT) appData.logs.length = LOG_LIMIT;
             // The data change goes out first. The database fires its listeners synchronously on a local write,
@@ -2205,7 +2196,7 @@
                 orders: buildOrdersFromCache(c),
                 custOrders: Object.values(c.custOrders || {}),
                 custReps: Object.values(c.custReps || {}),
-                logs: c.logs || []
+                logs: (c.logs || []).filter(logBelongsToMe)
             });
             fbBaseline = new Map();
             desiredDocs(appData).forEach((data, key) => {
@@ -2601,9 +2592,10 @@
             setTimeout(() => { try { maybeAutoBackup(); } catch (e) { /* noop */ } }, 4000);
         }
 
-        async function deleteAllLogs() {
+        async function deleteAllLogs(onlyMine = false) {
             const snap = await fbDb.collection('logs').get();
-            await commitChunks(snap.docs.map(d => ({ key: 'logs/' + d.id, del: true })));
+            const docs = onlyMine ? snap.docs.filter(d => logBelongsToMe(d.data())) : snap.docs;
+            if (docs.length) await commitChunks(docs.map(d => ({ key: 'logs/' + d.id, del: true })));
         }
 
         // Local data saved in this browser by earlier versions (v4 or v3). Used once, on first setup.
@@ -15935,7 +15927,7 @@
             const body = el('logBody');
             if (!body) return;
             const q = (el('logSearch')?.value || '').trim().toLowerCase();
-            const list = appData.logs.filter(l => !q || `${l.user} ${l.action} ${l.detail}`.toLowerCase().includes(q)).slice(0, 300);
+            const list = appData.logs.filter(l => logBelongsToMe(l) && (!q || `${l.user} ${l.action} ${l.detail}`.toLowerCase().includes(q))).slice(0, 300);
             body.innerHTML = list.map(l => `<tr class="hover:bg-slate-50">
                 <td class="py-3 px-4 text-xs text-slate-500 whitespace-nowrap">${fmtDateTime(l.t)}</td>
                 <td class="py-3 px-4 font-semibold whitespace-nowrap">${esc(l.user)}</td>
@@ -16453,7 +16445,7 @@
             if (!can('settings.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
             if (!confirm('مسح كل سجل النشاط؟')) return;
             try {
-                await deleteAllLogs();
+                await deleteAllLogs(true);
             } catch (err) {
                 console.error(err);
                 toast('تعذر مسح السجل من السيرفر', 'error');
@@ -18070,5 +18062,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60a80a45a34e1d0',t:'MTc5NTcxMjk4Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60a80a45a34e1d0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
