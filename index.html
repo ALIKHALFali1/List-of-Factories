@@ -13637,7 +13637,7 @@
             finClearMyVaultSessions('');
             finUnsubs.forEach(u => { try { u(); } catch (e) {} });
             finUnsubs = [];
-            finCfg = null; finVaults = []; finTxns = []; finAudits = []; finSecLogs = [];
+            finCfg = null; finVaults = []; finTxns = []; finAudits = []; finSecLogs = []; finCoa = []; finEntries = []; finCoaSeededOnce = false;
             finActiveSessions = {}; finRemoteLocks = {}; finVaultOpenedAt = {};
             finLoaded = false;
             finLockNow(true);
@@ -13678,8 +13678,674 @@
                 finRemoteLocks = (v && typeof v === 'object') ? v : {};
                 finCheckRemoteLocks();
             });
+            sub('finance/coa', v => {
+                finCoa = v ? Object.entries(v).map(([code, x]) => ({ code, ...x })) : [];
+                if (!finCoa.length) finEnsureCoaSeeded();
+            });
+            sub('finance/entries', v => {
+                finEntries = v ? Object.entries(v).map(([id, x]) => ({ id, ...x })).sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0)) : [];
+            });
         }
 
+        // ============================================================
+        // ERP DOUBLE-ENTRY ACCOUNTING & CHART OF ACCOUNTS (COA / GL / IFRS)
+        // ============================================================
+        let finCoa = [];
+        let finEntries = [];
+        let finCoaExpanded = new Set(['1', '11', '12', '2', '21', '3', '4', '41', '5', '51', '52']);
+        let finCoaSearch = '';
+        let finCoaTypeFilter = 'all';
+        let finLedgerCode = '1101';
+        let finLedgerFrom = '';
+        let finLedgerTo = '';
+        let finIfrsSubTab = 'ifrs7'; // 'ifrs7' | 'tb' | 'pl' | 'bs' | 'gl'
+        let finJvDraftRows = [];
+
+        const FIN_COA_TYPES = {
+            asset:     { label: 'الأصول',        short: 'أصول',        normal: 'debit',  root: '1', badge: 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30',       bar: '#0284c7' },
+            liability: { label: 'الالتزامات',     short: 'التزامات',    normal: 'credit', root: '2', badge: 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30', bar: '#d97706' },
+            equity:    { label: 'حقوق الملكية',   short: 'حقوق ملكية',  normal: 'credit', root: '3', badge: 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30', bar: '#7c3aed' },
+            revenue:   { label: 'الإيرادات',      short: 'إيرادات',     normal: 'credit', root: '4', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30', bar: '#059669' },
+            expense:   { label: 'المصروفات والتكاليف', short: 'مصروفات', normal: 'debit',  root: '5', badge: 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30',   bar: '#e11d48' }
+        };
+
+        const FIN_DEFAULT_COA = [
+            // 1. Assets
+            { code: '1',    parent: '',   name: 'الأصول',                            type: 'asset',     normal: 'debit',  isGroup: true,  system: true },
+            { code: '11',   parent: '1',  name: 'الأصول المتداولة',                  type: 'asset',     normal: 'debit',  isGroup: true,  system: true },
+            { code: '1101', parent: '11', name: 'النقدية بالخزائن (رئيسية وفرعيات)', type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1102', parent: '11', name: 'البنوك والحسابات الجارية',          type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1103', parent: '11', name: 'العملاء والذمم المدينة',            type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1104', parent: '11', name: 'المخزون (سيراميك / صحي / أبواب)',  type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1105', parent: '11', name: 'عهد وسلف الموظفين والمناديب',      type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1106', parent: '11', name: 'أوراق القبض وشيكات تحت التحصيل',   type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '12',   parent: '1',  name: 'الأصول الثابتة (غير المتداولة)',    type: 'asset',     normal: 'debit',  isGroup: true,  system: true },
+            { code: '1201', parent: '12', name: 'الأراضي والمباني والمعارض',         type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1202', parent: '12', name: 'السيارات ووسائل النقل والشحن',     type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1203', parent: '12', name: 'الأثاث والتجهيزات والحاسبات',       type: 'asset',     normal: 'debit',  isGroup: false, system: true },
+            { code: '1204', parent: '12', name: 'مجمع الإهلاك',                      type: 'asset',     normal: 'credit', isGroup: false, system: true },
+            // 2. Liabilities
+            { code: '2',    parent: '',   name: 'الالتزامات',                        type: 'liability', normal: 'credit', isGroup: true,  system: true },
+            { code: '21',   parent: '2',  name: 'الالتزامات المتداولة',              type: 'liability', normal: 'credit', isGroup: true,  system: true },
+            { code: '2101', parent: '21', name: 'الموردون والمصانع (الذمم الدائنة)', type: 'liability', normal: 'credit', isGroup: false, system: true },
+            { code: '2102', parent: '21', name: 'دفعات مقدمة وحجوزات العملاء',       type: 'liability', normal: 'credit', isGroup: false, system: true },
+            { code: '2103', parent: '21', name: 'أوراق دفع وشيكات مستحقة',          type: 'liability', normal: 'credit', isGroup: false, system: true },
+            { code: '2104', parent: '21', name: 'رواتب ومصروفات مستحقة',             type: 'liability', normal: 'credit', isGroup: false, system: true },
+            { code: '2105', parent: '21', name: 'ضرائب وتأمينات مستحقة',            type: 'liability', normal: 'credit', isGroup: false, system: true },
+            { code: '22',   parent: '2',  name: 'التزامات طويلة الأجل',              type: 'liability', normal: 'credit', isGroup: true,  system: true },
+            { code: '2201', parent: '22', name: 'قروض وتسهيلات بنكية',               type: 'liability', normal: 'credit', isGroup: false, system: true },
+            // 3. Equity
+            { code: '3',    parent: '',   name: 'حقوق الملكية',                      type: 'equity',    normal: 'credit', isGroup: true,  system: true },
+            { code: '3101', parent: '3',  name: 'رأس المال المدفوع',                 type: 'equity',    normal: 'credit', isGroup: false, system: true },
+            { code: '3102', parent: '3',  name: 'جاري الشركاء والمسحوبات',           type: 'equity',    normal: 'debit',  isGroup: false, system: true },
+            { code: '3103', parent: '3',  name: 'الأرباح المحتجزة (المرحّلة)',       type: 'equity',    normal: 'credit', isGroup: false, system: true },
+            // 4. Revenues
+            { code: '4',    parent: '',   name: 'الإيرادات',                         type: 'revenue',   normal: 'credit', isGroup: true,  system: true },
+            { code: '41',   parent: '4',  name: 'إيرادات النشاط التشغيلي',           type: 'revenue',   normal: 'credit', isGroup: true,  system: true },
+            { code: '4101', parent: '41', name: 'مبيعات السيراميك والبورسلين',       type: 'revenue',   normal: 'credit', isGroup: false, system: true },
+            { code: '4102', parent: '41', name: 'مبيعات الأدوات الصحية والأبواب',    type: 'revenue',   normal: 'credit', isGroup: false, system: true },
+            { code: '4103', parent: '41', name: 'إيرادات الشحن والنقل والتوصيل',     type: 'revenue',   normal: 'credit', isGroup: false, system: true },
+            { code: '42',   parent: '4',  name: 'إيرادات أخرى وفروق عملة',          type: 'revenue',   normal: 'credit', isGroup: true,  system: true },
+            { code: '4201', parent: '42', name: 'إيرادات متنوعة وفائض جرد',          type: 'revenue',   normal: 'credit', isGroup: false, system: true },
+            { code: '4202', parent: '42', name: 'أرباح فروق عملة (IAS 21)',          type: 'revenue',   normal: 'credit', isGroup: false, system: true },
+            // 5. Expenses & COGS
+            { code: '5',    parent: '',   name: 'المصروفات والتكاليف',               type: 'expense',   normal: 'debit',  isGroup: true,  system: true },
+            { code: '51',   parent: '5',  name: 'تكلفة المبيعات والمشتريات (COGS)',  type: 'expense',   normal: 'debit',  isGroup: true,  system: true },
+            { code: '5101', parent: '51', name: 'مشتريات بضاعة من المصانع',          type: 'expense',   normal: 'debit',  isGroup: false, system: true },
+            { code: '5102', parent: '51', name: 'مصروفات نقل ومشال وتفريغ البضاعة',  type: 'expense',   normal: 'debit',  isGroup: false, system: true },
+            { code: '52',   parent: '5',  name: 'مصروفات تشغيلية وإدارية',           type: 'expense',   normal: 'debit',  isGroup: true,  system: true },
+            { code: '5201', parent: '52', name: 'الرواتب والأجور والعمولات',         type: 'expense',   normal: 'debit',  isGroup: false, system: true },
+            { code: '5202', parent: '52', name: 'الإيجارات والكهرباء والمرافق',      type: 'expense',   normal: 'debit',  isGroup: false, system: true },
+            { code: '5203', parent: '52', name: 'الدعاية والتسويق والمطبوعات',       type: 'expense',   normal: 'debit',  isGroup: false, system: true },
+            { code: '5204', parent: '52', name: 'الصيانة والضيافة والنثريات الإدارية', type: 'expense', normal: 'debit',  isGroup: false, system: true },
+            { code: '5205', parent: '52', name: 'عجز جرد وخسائر فروق عملة (IAS 21)', type: 'expense',   normal: 'debit',  isGroup: false, system: true }
+        ];
+
+        let finCoaSeededOnce = false;
+        function finEnsureCoaSeeded() {
+            if (finCoaSeededOnce || !rtdb || !fbUser || !finCanAccess()) return;
+            if (finCoa && finCoa.length > 0) { finCoaSeededOnce = true; return; }
+            finCoaSeededOnce = true;
+            const obj = {};
+            FIN_DEFAULT_COA.forEach(a => { obj[a.code] = { ...a, active: true }; });
+            rtdb.ref('finance/coa').set(obj).catch(() => {});
+        }
+        function finGetCoaList() {
+            const list = (finCoa && finCoa.length) ? finCoa : FIN_DEFAULT_COA;
+            return list.slice().sort((a, b) => String(a.code).localeCompare(String(b.code), 'en', { numeric: true }));
+        }
+        function finCoaMap() {
+            const m = {};
+            finGetCoaList().forEach(a => { m[a.code] = a; });
+            return m;
+        }
+        function finLeafAccounts(filterType = '') {
+            return finGetCoaList().filter(a => !a.isGroup && a.active !== false && (!filterType || a.type === filterType));
+        }
+
+        function finAutoAccountForTxn(tx) {
+            const m = finCoaMap();
+            if (tx.coaCode && m[tx.coaCode]) return tx.coaCode;
+            const cat = String(tx.category || '');
+            if (tx.type === 'in') {
+                if (/رأس مال|تمويل|شركاء/.test(cat) || tx.ias7 === 'financing') return m['3101'] ? '3101' : '4201';
+                if (/أصل|استثمار|معدات/.test(cat) || tx.ias7 === 'investing') return m['1203'] ? '1203' : '4201';
+                if (/عهد|سلف/.test(cat)) return m['1105'] ? '1105' : '4201';
+                if (/دفعة|حجز|مقدم/.test(cat)) return m['2102'] ? '2102' : '4101';
+                if (/عملاء|مديوني|تحصيل/.test(cat)) return m['1103'] ? '1103' : '4101';
+                if (/شحن|نقل/.test(cat)) return m['4103'] ? '4103' : '4101';
+                if (/صحي|أبواب/.test(cat)) return m['4102'] ? '4102' : '4101';
+                if (/فائض|جرد|أخرى|متنوع/.test(cat)) return m['4201'] ? '4201' : '4101';
+                return m['4101'] ? '4101' : '4201';
+            }
+            if (tx.type === 'out') {
+                if (/شركاء|مسحوب|أرباح/.test(cat) || tx.ias7 === 'financing') return m['3102'] ? '3102' : '5204';
+                if (/أصل|سيار|مباني|تجهيز/.test(cat) || tx.ias7 === 'investing') return m['1203'] ? '1203' : '5204';
+                if (/مصنع|مورد/.test(cat)) return m['2101'] ? '2101' : '5101';
+                if (/مشتري|بضاع/.test(cat)) return m['5101'] ? '5101' : '5204';
+                if (/نقل|شحن|مشال/.test(cat)) return m['5102'] ? '5102' : '5204';
+                if (/راتب|رواتب|أجور|عمول/.test(cat)) return m['5201'] ? '5201' : '5204';
+                if (/إيجار|كهرباء|مياه|مرافق|إنترنت/.test(cat)) return m['5202'] ? '5202' : '5204';
+                if (/دعاي|تسويق|إعلان/.test(cat)) return m['5203'] ? '5203' : '5204';
+                if (/عهد|سلف/.test(cat)) return m['1105'] ? '1105' : '5204';
+                if (/عجز|جرد/.test(cat)) return m['5205'] ? '5205' : '5204';
+                return m['5204'] ? '5204' : '5101';
+            }
+            return '4201';
+        }
+
+        function finBuildDoubleEntryLines(fromDate = '', toDate = '') {
+            const lines = [];
+            const vMap = Object.fromEntries(finVaults.map(v => [v.id, v.name]));
+            // 1. Auto-post Treasury Transactions (finTxns) as balanced Double-Entry lines (in EGP presentation currency)
+            for (let i = 0; i < finTxns.length; i++) {
+                const tx = finTxns[i];
+                if (fromDate && tx.date < fromDate) continue;
+                if (toDate && tx.date > toDate) continue;
+                const egp = numOr0(tx.amountEgp) || r2(numOr0(tx.amount) * finRateOf(tx.currency));
+                const vName = vMap[tx.vaultId] || tx.vaultId || '';
+                const memo = `${tx.category || ''}${tx.party ? ' · ' + tx.party : ''}${tx.notes ? ' — ' + tx.notes : ''}`.trim();
+                if (tx.type === 'in' && egp > 0) {
+                    const contra = finAutoAccountForTxn(tx);
+                    lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'treasury', accountCode: '1101', debit: egp, credit: 0, memo, party: tx.party || '', vaultName: vName });
+                    lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'treasury', accountCode: contra, debit: 0, credit: egp, memo, party: tx.party || '', vaultName: vName });
+                } else if (tx.type === 'out' && egp > 0) {
+                    const contra = finAutoAccountForTxn(tx);
+                    lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'treasury', accountCode: contra, debit: egp, credit: 0, memo, party: tx.party || '', vaultName: vName });
+                    lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'treasury', accountCode: '1101', debit: 0, credit: egp, memo, party: tx.party || '', vaultName: vName });
+                } else if (tx.type === 'fx') {
+                    const gain = r2(numOr0(tx.fxGainEgp));
+                    if (gain > 0) {
+                        lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'fx', accountCode: '1101', debit: gain, credit: 0, memo: 'أرباح فرق عملة IAS 21 — ' + memo, party: tx.party || '', vaultName: vName });
+                        lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'fx', accountCode: '4202', debit: 0, credit: gain, memo: 'أرباح فرق عملة IAS 21 — ' + memo, party: tx.party || '', vaultName: vName });
+                    } else if (gain < 0) {
+                        const loss = Math.abs(gain);
+                        lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'fx', accountCode: '5205', debit: loss, credit: 0, memo: 'خسائر فرق عملة IAS 21 — ' + memo, party: tx.party || '', vaultName: vName });
+                        lines.push({ date: tx.date, refNo: tx.refNo || tx.id, entryId: tx.id, source: 'fx', accountCode: '1101', debit: 0, credit: loss, memo: 'خسائر فرق عملة IAS 21 — ' + memo, party: tx.party || '', vaultName: vName });
+                    }
+                }
+            }
+            // 2. Manual Double-Entry Journal Vouchers (finance/entries)
+            for (let i = 0; i < finEntries.length; i++) {
+                const je = finEntries[i];
+                if (fromDate && je.date < fromDate) continue;
+                if (toDate && je.date > toDate) continue;
+                const rows = Array.isArray(je.lines) ? je.lines : [];
+                rows.forEach(ln => {
+                    const dr = r2(numOr0(ln.debit)), cr = r2(numOr0(ln.credit));
+                    if (!ln.accountCode || (dr <= 0 && cr <= 0)) return;
+                    lines.push({
+                        date: je.date, refNo: je.refNo || je.id, entryId: je.id, source: 'jv',
+                        accountCode: ln.accountCode, debit: dr, credit: cr,
+                        memo: ln.memo || je.memo || 'قيد يومية مزدوج', party: je.party || '', vaultName: 'قيد محاسبي'
+                    });
+                });
+            }
+            lines.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+            return lines;
+        }
+
+        function finComputeAccounting(fromDate = '', toDate = '') {
+            const coaList = finGetCoaList();
+            const cMap = finCoaMap();
+            const lines = finBuildDoubleEntryLines(fromDate, toDate);
+            const byAccount = {};
+            coaList.forEach(a => { byAccount[a.code] = { debit: 0, credit: 0, net: 0, drBal: 0, crBal: 0, count: 0 }; });
+
+            for (let i = 0; i < lines.length; i++) {
+                const ln = lines[i];
+                if (!byAccount[ln.accountCode]) byAccount[ln.accountCode] = { debit: 0, credit: 0, net: 0, drBal: 0, crBal: 0, count: 0 };
+                byAccount[ln.accountCode].debit = r2(byAccount[ln.accountCode].debit + ln.debit);
+                byAccount[ln.accountCode].credit = r2(byAccount[ln.accountCode].credit + ln.credit);
+                byAccount[ln.accountCode].count++;
+            }
+
+            // Compute individual leaf net balances according to normal side
+            Object.entries(byAccount).forEach(([code, st]) => {
+                const acc = cMap[code] || { normal: 'debit' };
+                const rawDiff = r2(st.debit - st.credit);
+                st.drBal = rawDiff > 0 ? rawDiff : 0;
+                st.crBal = rawDiff < 0 ? Math.abs(rawDiff) : 0;
+                st.net = acc.normal === 'credit' ? r2(st.credit - st.debit) : rawDiff;
+            });
+
+            // Roll up leaf totals into parent groups recursively
+            const rolled = {};
+            coaList.forEach(a => { rolled[a.code] = { debit: byAccount[a.code].debit, credit: byAccount[a.code].credit, net: 0, count: byAccount[a.code].count }; });
+            // Process deepest codes first
+            const byDepthDesc = coaList.slice().sort((a, b) => String(b.code).length - String(a.code).length);
+            byDepthDesc.forEach(a => {
+                const cur = rolled[a.code];
+                cur.net = a.normal === 'credit' ? r2(cur.credit - cur.debit) : r2(cur.debit - cur.credit);
+                if (a.parent && rolled[a.parent]) {
+                    rolled[a.parent].debit = r2(rolled[a.parent].debit + cur.debit);
+                    rolled[a.parent].credit = r2(rolled[a.parent].credit + cur.credit);
+                    rolled[a.parent].count += cur.count;
+                }
+            });
+            // Recompute net on groups cleanly after full roll-up
+            coaList.forEach(a => {
+                const cur = rolled[a.code];
+                cur.net = a.normal === 'credit' ? r2(cur.credit - cur.debit) : r2(cur.debit - cur.credit);
+            });
+
+            // 1. Trial Balance
+            const tbRows = [];
+            let totalDebit = 0, totalCredit = 0, totalDrBal = 0, totalCrBal = 0;
+            coaList.forEach(a => {
+                if (a.isGroup) return;
+                const st = byAccount[a.code];
+                if (!st || (st.debit === 0 && st.credit === 0)) return;
+                totalDebit = r2(totalDebit + st.debit);
+                totalCredit = r2(totalCredit + st.credit);
+                totalDrBal = r2(totalDrBal + st.drBal);
+                totalCrBal = r2(totalCrBal + st.crBal);
+                tbRows.push({ ...a, ...st });
+            });
+            const trialBalance = {
+                rows: tbRows, totalDebit, totalCredit, totalDrBal, totalCrBal,
+                isBalanced: Math.abs(totalDebit - totalCredit) < 0.02 && Math.abs(totalDrBal - totalCrBal) < 0.02
+            };
+
+            // 2. Income Statement (IAS 1 — P&L)
+            const revItems = [], cogsItems = [], opexItems = [];
+            let totalRev = 0, totalCogs = 0, totalOpex = 0;
+            coaList.forEach(a => {
+                if (a.isGroup) return;
+                const st = byAccount[a.code];
+                if (!st || (st.debit === 0 && st.credit === 0)) return;
+                if (a.type === 'revenue') {
+                    totalRev = r2(totalRev + st.net);
+                    revItems.push({ ...a, amount: st.net });
+                } else if (a.type === 'expense') {
+                    if (String(a.code).startsWith('51') || a.parent === '51') {
+                        totalCogs = r2(totalCogs + st.net);
+                        cogsItems.push({ ...a, amount: st.net });
+                    } else {
+                        totalOpex = r2(totalOpex + st.net);
+                        opexItems.push({ ...a, amount: st.net });
+                    }
+                }
+            });
+            const grossProfit = r2(totalRev - totalCogs);
+            const totalExpenses = r2(totalCogs + totalOpex);
+            const netProfit = r2(totalRev - totalExpenses);
+            const incomeStatement = {
+                revItems, cogsItems, opexItems, totalRev, totalCogs, grossProfit, totalOpex, totalExpenses, netProfit,
+                grossMarginPct: totalRev > 0 ? ((grossProfit / totalRev) * 100).toFixed(1) : '0.0',
+                netMarginPct: totalRev > 0 ? ((netProfit / totalRev) * 100).toFixed(1) : '0.0'
+            };
+
+            // 3. Balance Sheet (IAS 1 — Statement of Financial Position)
+            const currentAssets = [], fixedAssets = [], currentLiab = [], longLiab = [], equityItems = [];
+            let sumCurAssets = 0, sumFixAssets = 0, sumCurLiab = 0, sumLongLiab = 0, sumEquity = 0;
+            coaList.forEach(a => {
+                if (a.isGroup) return;
+                const st = byAccount[a.code];
+                if (!st || (st.debit === 0 && st.credit === 0)) return;
+                if (a.type === 'asset') {
+                    // Contra asset (e.g. Accumulated Depreciation normal=credit) reduces assets
+                    const val = r2(st.debit - st.credit);
+                    if (String(a.code).startsWith('12') || a.parent === '12') {
+                        sumFixAssets = r2(sumFixAssets + val);
+                        fixedAssets.push({ ...a, amount: val });
+                    } else {
+                        sumCurAssets = r2(sumCurAssets + val);
+                        currentAssets.push({ ...a, amount: val });
+                    }
+                } else if (a.type === 'liability') {
+                    const val = r2(st.credit - st.debit);
+                    if (String(a.code).startsWith('22') || a.parent === '22') {
+                        sumLongLiab = r2(sumLongLiab + val);
+                        longLiab.push({ ...a, amount: val });
+                    } else {
+                        sumCurLiab = r2(sumCurLiab + val);
+                        currentLiab.push({ ...a, amount: val });
+                    }
+                } else if (a.type === 'equity') {
+                    const val = r2(st.credit - st.debit); // drawings (debit) automatically negative!
+                    sumEquity = r2(sumEquity + val);
+                    equityItems.push({ ...a, amount: val });
+                }
+            });
+            const totalAssets = r2(sumCurAssets + sumFixAssets);
+            const totalLiab = r2(sumCurLiab + sumLongLiab);
+            const totalEquity = r2(sumEquity + netProfit);
+            const totalLiabEquity = r2(totalLiab + totalEquity);
+            const balanceSheet = {
+                currentAssets, fixedAssets, sumCurAssets, sumFixAssets, totalAssets,
+                currentLiab, longLiab, sumCurLiab, sumLongLiab, totalLiab,
+                equityItems, equityBeforeProfit: sumEquity, netProfit, totalEquity, totalLiabEquity,
+                isBalanced: Math.abs(totalAssets - totalLiabEquity) < 0.02
+            };
+
+            return { coaList, cMap, lines, byAccount, rolled, trialBalance, incomeStatement, balanceSheet };
+        }
+
+        function finComputeAccountLedger(code, fromDate = '', toDate = '') {
+            const cMap = finCoaMap();
+            const acc = cMap[code] || { code, name: code, normal: 'debit', type: 'asset' };
+            const allLines = finBuildDoubleEntryLines('', toDate || '');
+            let opening = 0;
+            const rows = [];
+            let totalDr = 0, totalCr = 0;
+            allLines.forEach(ln => {
+                if (ln.accountCode !== code) return;
+                const delta = acc.normal === 'credit' ? r2(ln.credit - ln.debit) : r2(ln.debit - ln.credit);
+                if (fromDate && ln.date < fromDate) {
+                    opening = r2(opening + delta);
+                } else {
+                    totalDr = r2(totalDr + ln.debit);
+                    totalCr = r2(totalCr + ln.credit);
+                    rows.push({ ...ln, delta });
+                }
+            });
+            let running = opening;
+            rows.forEach(r => { running = r2(running + r.delta); r.balance = running; });
+            return { acc, opening, rows, totalDr, totalCr, closing: running };
+        }
+
+        function finSuggestNextCoaCode(parentCode) {
+            const p = String(parentCode || '').trim();
+            const list = finGetCoaList();
+            const kids = list.filter(a => a.parent === p).map(a => Number(a.code)).filter(Number.isFinite);
+            if (kids.length) return String(Math.max(...kids) + 1);
+            if (!p) return '6';
+            if (p.length === 1) return p + '1';
+            if (p.length === 2) return p + '01';
+            return p + '1';
+        }
+
+        function openFinCoaModal(editCode = '', preParent = '') {
+            if (!finCanAudit() && !finCanManage()) return toast('ليس لديك صلاحية تعديل الشجرة المحاسبية', 'error');
+            const list = finGetCoaList();
+            const cur = editCode ? list.find(a => a.code === editCode) : null;
+            const parents = list.filter(a => a.isGroup);
+            const defParent = cur ? cur.parent : (preParent || '52');
+            const defParentObj = parents.find(x => x.code === defParent);
+            const defType = cur ? cur.type : (defParentObj ? defParentObj.type : 'expense');
+            const defCode = cur ? cur.code : finSuggestNextCoaCode(defParent);
+
+            openModal({
+                title: cur ? `تعديل الحساب (${cur.code}) — ${cur.name}` : 'إضافة حساب جديد في الشجرة المحاسبية',
+                submitText: cur ? 'حفظ التعديل' : 'إضافة الحساب للشجرة',
+                body: `
+                    <div class="grid sm:grid-cols-2 gap-3">
+                        ${field('الحساب الرئيسي (الأب)', `<select name="parent" ${cur?.system ? 'disabled' : ''} onchange="const p=finGetCoaList().find(x=>x.code===this.value);const f=this.form;if(p&&f){if(f.type)f.type.value=p.type;if(f.normal)f.normal.value=p.normal;if(f.code&&!f.code.readOnly)f.code.value=finSuggestNextCoaCode(p.code);}" class="${INPUT_CLS}">
+                            <option value="">— حساب جذري رئيسي —</option>
+                            ${parents.map(p => `<option value="${esc(p.code)}" ${p.code === defParent ? 'selected' : ''}>${esc(p.code)} — ${esc(p.name)}</option>`).join('')}
+                        </select>`)}
+                        ${field('كود الحساب *', `<input name="code" required maxlength="12" value="${esc(defCode)}" ${cur ? 'readonly' : ''} dir="ltr" placeholder="مثال: 5206" class="${INPUT_CLS} font-mono font-bold ${cur ? 'bg-slate-100' : ''}">`)}
+                    </div>
+                    ${field('اسم الحساب *', `<input name="name" required maxlength="100" value="${esc(cur?.name || '')}" placeholder="مثال: مصروفات سيارات التوزيع / عملاء الجملة" class="${INPUT_CLS}">`)}
+                    <div class="grid sm:grid-cols-3 gap-3">
+                        ${field('التصنيف الرئيسي *', `<select name="type" class="${INPUT_CLS}">
+                            ${Object.entries(FIN_COA_TYPES).map(([k, v]) => `<option value="${k}" ${defType === k ? 'selected' : ''}>${v.label}</option>`).join('')}
+                        </select>`)}
+                        ${field('الطبيعة المحاسبية *', `<select name="normal" class="${INPUT_CLS}">
+                            <option value="debit" ${(cur?.normal || FIN_COA_TYPES[defType]?.normal) === 'debit' ? 'selected' : ''}>مدين (Debit)</option>
+                            <option value="credit" ${(cur?.normal || FIN_COA_TYPES[defType]?.normal) === 'credit' ? 'selected' : ''}>دائن (Credit)</option>
+                        </select>`)}
+                        ${field('نوع الحساب', `<select name="isGroup" ${cur?.system ? 'disabled' : ''} class="${INPUT_CLS}">
+                            <option value="0" ${!cur?.isGroup ? 'selected' : ''}>حساب فرعي (يقبل قيود)</option>
+                            <option value="1" ${cur?.isGroup ? 'selected' : ''}>مجموعة رئيسية (تجميعي)</option>
+                        </select>`)}
+                    </div>
+                `,
+                onSubmit: async fd => {
+                    const code = String(cur ? cur.code : (fd.get('code') || '')).trim().replace(/[^0-9A-Za-z_-]/g, '');
+                    const name = String(fd.get('name') || '').trim();
+                    const parent = cur?.system ? cur.parent : String(fd.get('parent') || '').trim();
+                    const type = String(fd.get('type') || 'expense');
+                    const normal = fd.get('normal') === 'credit' ? 'credit' : 'debit';
+                    const isGroup = cur?.system ? !!cur.isGroup : (fd.get('isGroup') === '1');
+                    if (!code || !name) return toast('أدخل كود واسم الحساب', 'error'), false;
+                    if (!cur && finCoaMap()[code]) return toast(`الكود ${code} موجود بالفعل في الشجرة المحاسبية!`, 'error'), false;
+                    if (parent === code) return toast('لا يمكن أن يكون الحساب أباً لنفسه', 'error'), false;
+                    const obj = {
+                        code, parent, name, type, normal, isGroup,
+                        system: !!(cur && cur.system), active: true,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await rtdb.ref('finance/coa/' + code).set(obj);
+                    if (parent) finCoaExpanded.add(parent);
+                    finSecLog(cur ? 'تعديل حساب بالشجرة' : 'إضافة حساب للشجرة', `${code} — ${name}`, 'info');
+                    toast(`✓ تم حفظ الحساب (${code}) ${name}`, 'success');
+                    return true;
+                }
+            });
+        }
+
+        async function finDeleteCoaAccount(code) {
+            if (!finCanAudit()) return toast('حذف الحسابات متاح للمدير المالي فقط', 'error');
+            const list = finGetCoaList();
+            const acc = list.find(a => a.code === code);
+            if (!acc) return;
+            if (acc.system) return toast('لا يمكن حذف حساب أساسي من الدليل المحاسبي القياسي (يمكنك تعديل اسمه فقط)', 'error');
+            if (list.some(a => a.parent === code)) return toast('لا يمكن حذف مجموعة تحتوي على حسابات فرعية — احذف الفرعيات أولاً', 'error');
+            const st = finComputeAccounting().byAccount[code];
+            if (st && (st.debit > 0 || st.credit > 0)) return toast('لا يمكن حذف حساب عليه حركات مالية مسجلة', 'error');
+            if (!confirm(`حذف الحساب (${acc.code}) ${acc.name} من الشجرة المحاسبية؟`)) return;
+            await rtdb.ref('finance/coa/' + code).remove();
+            finSecLog('حذف حساب من الشجرة', `${acc.code} — ${acc.name}`, 'warn');
+            toast('تم حذف الحساب من الشجرة المحاسبية', 'info');
+        }
+
+        // Double-Entry Journal Voucher (JV) Modal
+        function finJvRowsHtml() {
+            const leaves = finLeafAccounts();
+            return finJvDraftRows.map((row, idx) => `
+                <div class="grid grid-cols-12 gap-1.5 items-center py-1.5 border-b border-slate-100 dark:border-slate-800">
+                    <select onchange="finJvDraftRows[${idx}].accountCode=this.value" class="${INPUT_CLS} col-span-5 !py-1.5 !text-xs">
+                        <option value="">— اختر الحساب —</option>
+                        ${leaves.map(a => `<option value="${esc(a.code)}" ${row.accountCode === a.code ? 'selected' : ''}>${esc(a.code)} · ${esc(a.name)}</option>`).join('')}
+                    </select>
+                    <input type="number" step="0.01" min="0" value="${row.debit || ''}" oninput="finJvDraftRows[${idx}].debit=Number(this.value)||0;finJvRecalc()" placeholder="مدين" dir="ltr" class="${INPUT_CLS} col-span-2 !py-1.5 !text-xs font-mono text-center">
+                    <input type="number" step="0.01" min="0" value="${row.credit || ''}" oninput="finJvDraftRows[${idx}].credit=Number(this.value)||0;finJvRecalc()" placeholder="دائن" dir="ltr" class="${INPUT_CLS} col-span-2 !py-1.5 !text-xs font-mono text-center">
+                    <input type="text" value="${esc(row.memo || '')}" oninput="finJvDraftRows[${idx}].memo=this.value" placeholder="البيان" class="${INPUT_CLS} col-span-2 !py-1.5 !text-xs">
+                    <button type="button" onclick="if(finJvDraftRows.length>2){finJvDraftRows.splice(${idx},1);finJvPaintRows();}" class="col-span-1 h-8 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center justify-center cursor-pointer" title="حذف السطر"><i class="fa-solid fa-xmark text-xs"></i></button>
+                </div>
+            `).join('');
+        }
+        function finJvPaintRows() {
+            const host = el('finJvRowsHost');
+            if (host) host.innerHTML = finJvRowsHtml();
+            finJvRecalc();
+        }
+        function finJvRecalc() {
+            let dr = 0, cr = 0;
+            finJvDraftRows.forEach(r => { dr = r2(dr + (Number(r.debit) || 0)); cr = r2(cr + (Number(r.credit) || 0)); });
+            const diff = r2(dr - cr);
+            const s = el('finJvTotals');
+            if (s) {
+                const balanced = dr > 0 && Math.abs(diff) < 0.01;
+                s.innerHTML = `
+                    <span>إجمالي المدين: <b class="font-mono text-sky-700">${fmtNumber(dr, 2)}</b></span>
+                    <span>إجمالي الدائن: <b class="font-mono text-emerald-700">${fmtNumber(cr, 2)}</b></span>
+                    <span class="px-2.5 py-0.5 rounded-full text-xs font-black ${balanced ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}">
+                        ${balanced ? '✓ القيد متوازن 100%' : '⚠ الفرق: ' + fmtNumber(Math.abs(diff), 2)}
+                    </span>`;
+            }
+        }
+        function openFinJournalEntryModal() {
+            if (!finCanAudit() && !finCanManage()) return toast('ليس لديك صلاحية تسجيل القيود المحاسبية', 'error');
+            finJvDraftRows = [
+                { accountCode: '5101', debit: 0, credit: 0, memo: '' },
+                { accountCode: '2101', debit: 0, credit: 0, memo: '' }
+            ];
+            openModal({
+                title: '📒 قيد يومية محاسبي مزدوج (Double-Entry JV)',
+                submitText: 'ترحيل القيد للشجرة والأستاذ العام',
+                body: `
+                    <div class="p-3 rounded-xl bg-sky-50 border border-sky-200 text-xs text-sky-900">
+                        <i class="fa-solid fa-scale-balanced me-1"></i>
+                        للقيود غير النقدية والتسويات (مثل: مشتريات آجلة من مصنع، إثبات إهلاك، تسوية عهدة، قيد افتتاحي لرأس المال أو المخزون). يشترط توازن <b>المدين = الدائن</b>.
+                    </div>
+                    <div class="grid sm:grid-cols-3 gap-2.5">
+                        ${field('التاريخ *', `<input name="date" type="date" required value="${todayISO()}" class="${INPUT_CLS}">`)}
+                        ${field('رقم القيد *', `<input name="refNo" required value="JV-${String(finEntries.length + 1).padStart(4, '0')}" dir="ltr" class="${INPUT_CLS} font-mono font-bold">`)}
+                        ${field('الطرف / المرجع', `<input name="party" maxlength="100" placeholder="اسم مصنع / شريك / موظف" class="${INPUT_CLS}">`)}
+                    </div>
+                    ${field('شرح القيد العام *', `<input name="memo" required maxlength="300" placeholder="مثال: إثبات فاتورة مشتريات آجلة من مصنع الجوهرة" class="${INPUT_CLS}">`)}
+                    <div class="space-y-1">
+                        <div class="grid grid-cols-12 gap-1.5 text-[11px] font-extrabold text-slate-500 px-1">
+                            <span class="col-span-5">الحساب (من الشجرة المحاسبية)</span><span class="col-span-2 text-center">مدين (EGP)</span><span class="col-span-2 text-center">دائن (EGP)</span><span class="col-span-2">بيان السطر</span><span class="col-span-1"></span>
+                        </div>
+                        <div id="finJvRowsHost">${finJvRowsHtml()}</div>
+                        <button type="button" onclick="finJvDraftRows.push({accountCode:'',debit:0,credit:0,memo:''});finJvPaintRows()" class="mt-2 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-extrabold cursor-pointer"><i class="fa-solid fa-plus me-1"></i>إضافة سطر جديد</button>
+                    </div>
+                    <div id="finJvTotals" class="p-3 rounded-xl bg-slate-50 border flex flex-wrap items-center justify-between gap-2 text-xs"></div>
+                `,
+                onSubmit: async fd => {
+                    const cleanLines = finJvDraftRows
+                        .map(r => ({ accountCode: String(r.accountCode || '').trim(), debit: r2(Number(r.debit) || 0), credit: r2(Number(r.credit) || 0), memo: String(r.memo || '').trim() }))
+                        .filter(r => r.accountCode && (r.debit > 0 || r.credit > 0));
+                    if (cleanLines.length < 2) return toast('يجب إدخال سطرين على الأقل (مدين ودائن)', 'error'), false;
+                    let dr = 0, cr = 0;
+                    cleanLines.forEach(r => { dr = r2(dr + r.debit); cr = r2(cr + r.credit); });
+                    if (!(dr > 0) || Math.abs(dr - cr) >= 0.01) {
+                        return toast(`القيد غير متوازن! المدين (${dr}) ≠ الدائن (${cr})`, 'error', null, 5000), false;
+                    }
+                    const id = uid('FJV-');
+                    const entry = {
+                        id, t: new Date().toISOString(),
+                        date: String(fd.get('date') || todayISO()),
+                        refNo: String(fd.get('refNo') || id).trim(),
+                        party: String(fd.get('party') || '').trim(),
+                        memo: String(fd.get('memo') || '').trim(),
+                        total: dr, lines: cleanLines,
+                        byUid: fbUser.uid, byName: currentUser()?.name || 'النظام'
+                    };
+                    await rtdb.ref('finance/entries/' + id).set(entry);
+                    finSecLog('ترحيل قيد يومية مزدوج', `${entry.refNo} — ${finFmtCurr(dr, 'EGP')} (${entry.memo})`, 'info');
+                    toast(`✓ تم ترحيل القيد المحاسبي ${entry.refNo} وتحديث الشجرة والميزانية`, 'success');
+                    return true;
+                }
+            });
+            setTimeout(finJvRecalc, 30);
+        }
+
+        async function finDeleteJournalEntry(id) {
+            if (!finCanAudit()) return toast('الحذف متاح للمدير المالي فقط', 'error');
+            const je = finEntries.find(x => x.id === id);
+            if (!je) return;
+            if (!confirm(`حذف القيد المحاسبي ${je.refNo || id} بمبلغ ${finFmtCurr(je.total, 'EGP')}؟`)) return;
+            await rtdb.ref('finance/entries/' + id).remove();
+            finSecLog('حذف قيد محاسبي مزدوج', `${je.refNo || id} — ${finFmtCurr(je.total, 'EGP')}`, 'crit');
+            toast('تم حذف القيد المحاسبي وتوثيقه في سجل الأمان', 'info');
+        }
+
+        // ERP Financial Statement Print & Excel Helpers
+        function finPrintAccountLedger(code) {
+            const led = finComputeAccountLedger(code || finLedgerCode, finLedgerFrom, finLedgerTo);
+            const body = `<style>@page{size:A4 portrait;margin:10mm}</style>
+                <h1>كشف حساب الأستاذ العام (General Ledger)</h1>
+                <div class="meta">${esc(appData?.settings?.systemName || 'شركة الرحمة')} · الحساب: <b>(${esc(led.acc.code)}) ${esc(led.acc.name)}</b> · الطبيعة: ${led.acc.normal === 'credit' ? 'دائن' : 'مدين'} · تاريخ الطباعة: ${esc(fmtDateTime(new Date().toISOString()))}</div>
+                <table><tbody>
+                    <tr><th>رصيد أول المدة</th><td><b>${esc(finFmtCurr(led.opening, 'EGP'))}</b></td><th>إجمالي المدين</th><td><b>${esc(finFmtCurr(led.totalDr, 'EGP'))}</b></td><th>إجمالي الدائن</th><td><b>${esc(finFmtCurr(led.totalCr, 'EGP'))}</b></td><th>الرصيد الختامي</th><td><b>${esc(finFmtCurr(led.closing, 'EGP'))}</b></td></tr>
+                </tbody></table>
+                <table style="margin-top:12px"><thead><tr><th>التاريخ</th><th>المرجع</th><th>المصدر</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead><tbody>
+                    ${led.rows.map(r => `<tr><td>${esc(fmtDateAr(r.date))}</td><td>${esc(r.refNo)}</td><td>${esc(r.vaultName)}</td><td>${esc(r.memo)}</td><td>${r.debit ? esc(fmtNumber(r.debit, 2)) : '—'}</td><td>${r.credit ? esc(fmtNumber(r.credit, 2)) : '—'}</td><td><b>${esc(fmtNumber(r.balance, 2))}</b></td></tr>`).join('') || '<tr><td colspan="7" style="text-align:center">لا توجد حركات على هذا الحساب</td></tr>'}
+                </tbody></table>`;
+            printHtml(orderPrintShell(`كشف حساب ${led.acc.code} - ${led.acc.name}`, body));
+        }
+
+        function finExportAccountLedgerExcel(code) {
+            const led = finComputeAccountLedger(code || finLedgerCode, finLedgerFrom, finLedgerTo);
+            const ok = finSaveExcelFile([{
+                name: `حساب ${led.acc.code}`,
+                rows: [
+                    ['كود الحساب', led.acc.code, 'اسم الحساب', led.acc.name],
+                    ['رصيد أول المدة', led.opening, 'الرصيد الختامي', led.closing],
+                    [],
+                    ['التاريخ', 'المرجع', 'المصدر', 'البيان', 'مدين (EGP)', 'دائن (EGP)', 'الرصيد التراكمي'],
+                    ...led.rows.map(r => [r.date, r.refNo, r.vaultName, r.memo, r.debit, r.credit, r.balance])
+                ]
+            }], `كشف-حساب-${led.acc.code}-${todayISO()}`);
+            if (ok) toast(`✓ تم تصدير كشف حساب (${led.acc.code}) ${led.acc.name}`, 'success');
+        }
+
+        function finPrintErpStatements() {
+            const acc = finComputeAccounting(finIfrsFrom, finIfrsTo);
+            const tb = acc.trialBalance, pl = acc.incomeStatement, bs = acc.balanceSheet;
+            const periodLbl = (finIfrsFrom || finIfrsTo) ? `من ${fmtDateAr(finIfrsFrom) || 'البداية'} إلى ${fmtDateAr(finIfrsTo) || fmtDateAr(todayISO())}` : `حتى تاريخ ${fmtDateAr(todayISO())}`;
+            const body = `<style>@page{size:A4 portrait;margin:10mm} h2{font-size:12pt;margin:14px 0 6px;border-bottom:2px solid #0f172a;padding-bottom:4px}</style>
+                <h1>القوائم المالية الختامية وميزان المراجعة (IFRS / IAS 1)</h1>
+                <div class="meta">${esc(appData?.settings?.systemName || 'شركة الرحمة')} · الفترة: ${esc(periodLbl)} · عملة العرض: الجنيه المصري (EGP)</div>
+                <h2>1. قائمة الدخل — الأرباح والخسائر (Income Statement — IAS 1)</h2>
+                <table><thead><tr><th>البند / الحساب</th><th>المبلغ (EGP)</th></tr></thead><tbody>
+                    ${pl.revItems.map(x => `<tr><td>(${esc(x.code)}) ${esc(x.name)}</td><td style="color:#047857">${esc(finFmtCurr(x.amount, 'EGP'))}</td></tr>`).join('')}
+                    <tr style="background:#ecfdf5"><td><b>إجمالي الإيرادات</b></td><td><b>${esc(finFmtCurr(pl.totalRev, 'EGP'))}</b></td></tr>
+                    ${pl.cogsItems.map(x => `<tr><td>(${esc(x.code)}) ${esc(x.name)}</td><td style="color:#be123c">(${esc(finFmtCurr(x.amount, 'EGP'))})</td></tr>`).join('')}
+                    <tr style="background:#f8fafc"><td><b>مجمل الربح (Gross Profit — ${pl.grossMarginPct}%)</b></td><td><b>${esc(finFmtCurr(pl.grossProfit, 'EGP'))}</b></td></tr>
+                    ${pl.opexItems.map(x => `<tr><td>(${esc(x.code)}) ${esc(x.name)}</td><td style="color:#be123c">(${esc(finFmtCurr(x.amount, 'EGP'))})</td></tr>`).join('')}
+                    <tr style="background:#eff6ff;font-size:11pt"><td><b>صافي الربح / الخسارة (Net Profit — ${pl.netMarginPct}%)</b></td><td><b>${esc(finFmtCurr(pl.netProfit, 'EGP'))}</b></td></tr>
+                </tbody></table>
+                <h2>2. قائمة المركز المالي — الميزانية العمومية (Balance Sheet — IAS 1)</h2>
+                <table><thead><tr><th>الأصول</th><th>EGP</th><th>الالتزامات وحقوق الملكية</th><th>EGP</th></tr></thead><tbody>
+                    <tr><td>الأصول المتداولة</td><td>${esc(finFmtCurr(bs.sumCurAssets, 'EGP'))}</td><td>الالتزامات المتداولة</td><td>${esc(finFmtCurr(bs.sumCurLiab, 'EGP'))}</td></tr>
+                    <tr><td>الأصول الثابتة (صافي)</td><td>${esc(finFmtCurr(bs.sumFixAssets, 'EGP'))}</td><td>الالتزامات طويلة الأجل</td><td>${esc(finFmtCurr(bs.sumLongLiab, 'EGP'))}</td></tr>
+                    <tr><td></td><td></td><td>حقوق الملكية قبل الربح</td><td>${esc(finFmtCurr(bs.equityBeforeProfit, 'EGP'))}</td></tr>
+                    <tr><td></td><td></td><td>صافي ربح / خسارة الفترة</td><td>${esc(finFmtCurr(bs.netProfit, 'EGP'))}</td></tr>
+                    <tr style="background:#f1f5f9"><td><b>إجمالي الأصول</b></td><td><b>${esc(finFmtCurr(bs.totalAssets, 'EGP'))}</b></td><td><b>إجمالي الالتزامات وحقوق الملكية</b></td><td><b>${esc(finFmtCurr(bs.totalLiabEquity, 'EGP'))}</b></td></tr>
+                </tbody></table>
+                <h2>3. ميزان المراجعة (Trial Balance — ${tb.isBalanced ? 'متوازن 100% ✓' : 'غير متوازن'})</h2>
+                <table><thead><tr><th>الكود</th><th>الحساب</th><th>إجمالي مدين</th><th>إجمالي دائن</th><th>رصيد مدين</th><th>رصيد دائن</th></tr></thead><tbody>
+                    ${tb.rows.map(r => `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(fmtNumber(r.debit, 2))}</td><td>${esc(fmtNumber(r.credit, 2))}</td><td>${r.drBal ? esc(fmtNumber(r.drBal, 2)) : '—'}</td><td>${r.crBal ? esc(fmtNumber(r.crBal, 2)) : '—'}</td></tr>`).join('')}
+                    <tr style="background:#f1f5f9;font-weight:900"><td colspan="2">الإجمالي</td><td>${esc(fmtNumber(tb.totalDebit, 2))}</td><td>${esc(fmtNumber(tb.totalCredit, 2))}</td><td>${esc(fmtNumber(tb.totalDrBal, 2))}</td><td>${esc(fmtNumber(tb.totalCrBal, 2))}</td></tr>
+                </tbody></table>
+                <div class="sign" style="margin-top:28px"><div>رئيس الحسابات</div><div>المدير المالي</div><div>اعتماد الإدارة العليا</div></div>`;
+            printHtml(orderPrintShell('القوائم المالية الختامية IFRS وميزان المراجعة', body));
+        }
+
+        function finExportFullErpExcel() {
+            const acc = finComputeAccounting(finIfrsFrom, finIfrsTo);
+            const tb = acc.trialBalance, pl = acc.incomeStatement, bs = acc.balanceSheet;
+            const bal = finComputeBalances();
+            const rep = finComputeIfrs(finIfrsFrom, finIfrsTo);
+            const ok = finSaveExcelFile([
+                {
+                    name: 'الشجرة المحاسبية COA',
+                    rows: [
+                        ['الكود', 'الحساب الأب', 'اسم الحساب', 'التصنيف', 'الطبيعة', 'النوع', 'مدين (EGP)', 'دائن (EGP)', 'الرصيد (EGP)'],
+                        ...acc.coaList.map(a => {
+                            const r = acc.rolled[a.code] || { debit: 0, credit: 0, net: 0 };
+                            return [a.code, a.parent || 'جذر', a.name, FIN_COA_TYPES[a.type]?.label || a.type, a.normal === 'credit' ? 'دائن' : 'مدين', a.isGroup ? 'مجموعة' : 'فرعي', r.debit, r.credit, r.net];
+                        })
+                    ]
+                },
+                {
+                    name: 'ميزان المراجعة',
+                    rows: [
+                        ['الكود', 'اسم الحساب', 'مدين', 'دائن', 'رصيد مدين', 'رصيد دائن'],
+                        ...tb.rows.map(r => [r.code, r.name, r.debit, r.credit, r.drBal, r.crBal]),
+                        ['الإجمالي', '', tb.totalDebit, tb.totalCredit, tb.totalDrBal, tb.totalCrBal]
+                    ]
+                },
+                {
+                    name: 'قائمة الدخل IAS1',
+                    rows: [
+                        ['القسم', 'الكود', 'اسم الحساب', 'المبلغ (EGP)'],
+                        ...pl.revItems.map(x => ['الإيرادات', x.code, x.name, x.amount]),
+                        ['إجمالي الإيرادات', '', '', pl.totalRev],
+                        ...pl.cogsItems.map(x => ['تكلفة المبيعات', x.code, x.name, -x.amount]),
+                        ['مجمل الربح', '', '', pl.grossProfit],
+                        ...pl.opexItems.map(x => ['مصروفات تشغيلية', x.code, x.name, -x.amount]),
+                        ['صافي الربح / الخسارة', '', '', pl.netProfit]
+                    ]
+                },
+                {
+                    name: 'الميزانية العمومية',
+                    rows: [
+                        ['القسم', 'الكود', 'الحساب', 'المبلغ (EGP)'],
+                        ...bs.currentAssets.map(x => ['أصول متداولة', x.code, x.name, x.amount]),
+                        ...bs.fixedAssets.map(x => ['أصول ثابتة', x.code, x.name, x.amount]),
+                        ['إجمالي الأصول', '', '', bs.totalAssets],
+                        ...bs.currentLiab.map(x => ['التزامات متداولة', x.code, x.name, x.amount]),
+                        ...bs.longLiab.map(x => ['التزامات طويلة الأجل', x.code, x.name, x.amount]),
+                        ...bs.equityItems.map(x => ['حقوق الملكية', x.code, x.name, x.amount]),
+                        ['صافي ربح الفترة', '', '', bs.netProfit],
+                        ['إجمالي الالتزامات وحقوق الملكية', '', '', bs.totalLiabEquity]
+                    ]
+                },
+                {
+                    name: 'التدفقات IAS7',
+                    rows: [
+                        ['النشاط (IAS 7)', 'وارد (EGP)', 'صادر (EGP)', 'الصافي (EGP)'],
+                        ['الأنشطة التشغيلية', rep.buckets.operating.inEgp, rep.buckets.operating.outEgp, rep.buckets.operating.netEgp],
+                        ['الأنشطة الاستثمارية', rep.buckets.investing.inEgp, rep.buckets.investing.outEgp, rep.buckets.investing.netEgp],
+                        ['الأنشطة التمويلية', rep.buckets.financing.inEgp, rep.buckets.financing.outEgp, rep.buckets.financing.netEgp],
+                        ['أثر فروق الصرف IAS 21', '', '', rep.fxRevalEgp],
+                        ['رصيد آخر المدة', '', '', rep.closingBal],
+                        ['إجمالي أرصدة الخزائن', '', '', bal.totalEgp]
+                    ]
+                }
+            ], `القوائم-المالية-والشجرة-IFRS-${todayISO()}`);
+            if (ok) {
+                finSecLog('تصدير حزمة IFRS وCOA الكاملة', '5 أوراق عمل (الشجرة + ميزان المراجعة + الدخل + الميزانية + التدفقات)', 'info');
+                toast('✓ تم تصدير الحزمة المالية الكاملة (5 شيتات Excel)', 'success');
+            }
+        }
         function finComputeBalances(upToDate = '') {
             const zeroCurr = () => ({ EGP: 0, USD: 0, EUR: 0, SAR: 0 });
             const byVault = {};
@@ -13946,7 +14612,8 @@
                             <option value="investing">أنشطة استثمارية (Investing)</option>
                             <option value="financing">أنشطة تمويلية (Financing)</option>
                         </select>`)}
-                        ${field('البند / الحساب *', `<select name="category" class="${INPUT_CLS}">${cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>`)}
+                        ${field('البند / التصنيف *', `<select name="category" class="${INPUT_CLS}">${cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>`)}
+                        ${field('الحساب المقابل (الشجرة المحاسبية)', `<select name="coaCode" class="${INPUT_CLS}"><option value="">توجيه تلقائي ذكي حسب البند</option>${finLeafAccounts().filter(a => a.code !== '1101').map(a => `<option value="${esc(a.code)}">${esc(a.code)} — ${esc(a.name)}</option>`).join('')}</select>`)}
                         ${field(isIn ? 'المُورِّد / دافع المبلغ' : 'المستفيد / المستلم', `<input name="party" maxlength="120" placeholder="اسم العميل أو الموظف أو الجهة" class="${INPUT_CLS}">`)}
                         ${field('رقم السند / المرجع', `<input name="refNo" maxlength="60" value="${(isIn ? 'RV-' : 'PV-') + String(finTxns.length + 1).padStart(4, '0')}" dir="ltr" class="${INPUT_CLS} font-mono">`)}
                     </div>
@@ -13976,6 +14643,7 @@
                         amountEgp: r2(amount * rate),
                         ias7: String(fd.get('ias7') || 'operating'),
                         category: String(fd.get('category') || cats[0]),
+                        coaCode: String(fd.get('coaCode') || '').trim(),
                         party: String(fd.get('party') || '').trim(),
                         refNo: String(fd.get('refNo') || '').trim(),
                         notes: String(fd.get('notes') || '').trim(),
@@ -14533,6 +15201,15 @@
             .fin-subtab-on{background:rgb(var(--ink));color:rgb(var(--surface))}
             .fin-subtab-off{background:rgb(var(--muted));color:rgb(var(--ink-2));border:1px solid rgb(var(--line))}
             .fin-subtab-off:hover{border-color:rgb(var(--brand-500));color:rgb(var(--ink))}
+            .fin-num{font-variant-numeric:tabular-nums}
+            .fin-kpi{background:rgb(var(--surface));border:1px solid rgb(var(--line));border-inline-start:3.5px solid var(--kpi-c,rgb(var(--brand-600)));border-radius:1rem;padding:.9rem 1rem;box-shadow:var(--shadow-sm);transition:transform .16s ease,box-shadow .18s ease}
+            .fin-kpi:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+            .fin-tabs-bar{background:rgb(var(--muted) / .7);border-bottom:1px solid rgb(var(--line));padding:.65rem 1rem;display:flex;gap:.45rem;overflow-x:auto;scrollbar-width:none}
+            .fin-tabs-bar::-webkit-scrollbar{display:none}
+            .fin-fx-pill{display:inline-flex;align-items:center;gap:.45rem;padding:.28rem .65rem;border-radius:999px;background:rgb(var(--muted));border:1px solid rgb(var(--line));font-size:.7rem;font-weight:700;color:rgb(var(--ink-2))}
+            .fin-coa-row{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.6rem .9rem;transition:background-color .14s ease}
+            .fin-coa-row:hover{background:rgb(var(--muted) / .8)}
+            .fin-coa-row.is-group{background:rgb(var(--muted) / .45)}
 
             /* ===== Premium Cinematic Dark Vault Entrance Overlay (Pure CSS, GPU-Composited) ===== */
             .fin-portal{position:fixed;inset:0;z-index:95;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;background:radial-gradient(900px 560px at 50% 16%,rgba(212,175,55,.085),transparent 62%),radial-gradient(720px 540px at 18% 92%,rgba(148,163,184,.07),transparent 58%),rgba(2,6,18,.93);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:finBackdropIn .38s cubic-bezier(.22,1,.36,1) both;color:#e2e8f0}
@@ -15496,12 +16173,9 @@
         function finDashboardTabHtml() {
             const visibleVaults = finVisibleVaults();
             const bal = finComputeBalances();
-            const rep = finComputeIfrs('', '');
-            const opRatio = rep.totalIn > 0 ? ((rep.buckets.operating.inEgp / rep.totalIn) * 100).toFixed(0) : '0';
-            const netMargin = rep.totalIn > 0 ? ((rep.netFlowEgp / rep.totalIn) * 100).toFixed(1) : '0.0';
-            const fxExpPct = bal.totalEgp > 0 ? ((((bal.totalEgp - bal.byCurr.EGP) / bal.totalEgp) * 100)).toFixed(1) : '0.0';
-            const matchAudits = finAudits.filter(a => a.status === 'match').length;
-            const auditAcc = finAudits.length ? Math.round((matchAudits / finAudits.length) * 100) + '%' : '—';
+            const acc = finComputeAccounting();
+            const pl = acc.incomeStatement;
+            const tb = acc.trialBalance;
 
             const days14 = [];
             for (let i = 13; i >= 0; i--) {
@@ -15515,44 +16189,88 @@
                 days14.push({ d, lbl: d.slice(5), inn: r2(inn), out: r2(out) });
             }
             const maxBar = Math.max(1, ...days14.map(x => Math.max(x.inn, x.out)));
+            const topExp = [...pl.cogsItems, ...pl.opexItems].sort((a, b) => b.amount - a.amount).slice(0, 5);
+            const topRev = pl.revItems.slice().sort((a, b) => b.amount - a.amount).slice(0, 5);
 
             return `<div class="space-y-5">
-                <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                    <div class="lg:col-span-5 fin-card-gold p-5 flex flex-col justify-between">
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="text-xs font-extrabold fin-gold">إجمالي السيولة المجمّعة (IFRS Valuation)</span>
-                            <span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-black">${visibleVaults.length} خزائن</span>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    <div class="fin-kpi" style="--kpi-c:#0284c7">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-extrabold fin-muted">إجمالي السيولة النقدية (الخزائن)</span><span class="w-8 h-8 rounded-xl bg-sky-500/15 text-sky-600 dark:text-sky-400 flex items-center justify-center"><i class="fa-solid fa-vault text-xs"></i></span></div>
+                        <p class="text-2xl font-black fin-title font-mono fin-num mt-2">${finMask(finFmtCurr(bal.totalEgp, 'EGP'))}</p>
+                        <p class="text-[10px] fin-muted mt-1">${visibleVaults.length} خزائن · تقييم مباشر بأسعار اليوم</p>
+                    </div>
+                    <div class="fin-kpi" style="--kpi-c:#059669">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-extrabold fin-muted">إجمالي الإيرادات (قائمة الدخل)</span><span class="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center"><i class="fa-solid fa-arrow-trend-up text-xs"></i></span></div>
+                        <p class="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono fin-num mt-2">${finMask(finFmtCurr(pl.totalRev, 'EGP'))}</p>
+                        <p class="text-[10px] fin-muted mt-1">هامش مجمل الربح: <b>${pl.grossMarginPct}%</b></p>
+                    </div>
+                    <div class="fin-kpi" style="--kpi-c:#e11d48">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-extrabold fin-muted">إجمالي التكاليف والمصروفات</span><span class="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center"><i class="fa-solid fa-arrow-trend-down text-xs"></i></span></div>
+                        <p class="text-2xl font-black text-rose-600 dark:text-rose-400 font-mono fin-num mt-2">${finMask(finFmtCurr(pl.totalExpenses, 'EGP'))}</p>
+                        <p class="text-[10px] fin-muted mt-1">مشتريات: ${finMask(finFmtCurr(pl.totalCogs, 'EGP'))} · تشغيل: ${finMask(finFmtCurr(pl.totalOpex, 'EGP'))}</p>
+                    </div>
+                    <div class="fin-kpi" style="--kpi-c:${pl.netProfit >= 0 ? '#059669' : '#e11d48'}">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-extrabold fin-muted">صافي الربح / الخسارة (IAS 1)</span><span class="w-8 h-8 rounded-xl ${pl.netProfit >= 0 ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'} flex items-center justify-center"><i class="fa-solid fa-chart-line text-xs"></i></span></div>
+                        <p class="text-2xl font-black ${pl.netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'} font-mono fin-num mt-2">${finMask(finFmtCurr(pl.netProfit, 'EGP'))}</p>
+                        <p class="text-[10px] fin-muted mt-1">صافي الهامش: <b>${pl.netMarginPct}%</b> · ميزان المراجعة: <b class="${tb.isBalanced ? 'text-emerald-600' : 'text-rose-600'}">${tb.isBalanced ? 'متوازن ✓' : 'فرق'}</b></p>
+                    </div>
+                </div>
+
+                <div class="fin-card p-3.5 flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="openFinTxnModal('in','V-MAIN')" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-arrow-down me-1"></i>سند قبض</button>
+                        <button type="button" onclick="openFinTxnModal('out','V-MAIN')" class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-arrow-up me-1"></i>سند صرف</button>
+                        <button type="button" onclick="openFinTransferModal('V-MAIN')" class="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-right-left me-1"></i>تحويل بين الخزائن</button>
+                        <button type="button" onclick="openFinJournalEntryModal()" class="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-scale-balanced me-1"></i>قيد محاسبي مزدوج</button>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        ${FIN_CURR_LIST.map(c => `<span class="fin-fx-pill"><span>${FIN_CURRENCIES[c].flag} ${c}</span><b class="font-mono fin-title">${finMask(fmtNumber(bal.byCurr[c] || 0, 2))}</b></span>`).join('')}
+                        <button type="button" onclick="finSyncLiveFxRates(true)" class="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-brand-600 hover:text-white fin-text2 flex items-center justify-center cursor-pointer transition-colors" title="تحديث أسعار الصرف من السوق المباشر"><i class="fa-solid ${finFxSyncing ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'} text-xs"></i></button>
+                    </div>
+                </div>
+
+                <div class="grid lg:grid-cols-12 gap-4">
+                    <div class="lg:col-span-7 fin-card p-4 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <h3 class="font-extrabold text-sm fin-title"><i class="fa-solid fa-chart-column text-brand-600 me-1.5"></i>حركة التدفقات النقدية — آخر 14 يوماً (EGP)</h3>
+                            <div class="flex items-center gap-3 text-[11px]">
+                                <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span class="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span>داخل</span>
+                                <span class="flex items-center gap-1 text-rose-600 dark:text-rose-400"><span class="w-2.5 h-2.5 rounded bg-rose-500 inline-block"></span>صرف</span>
+                            </div>
                         </div>
-                        <p class="text-3xl sm:text-4xl font-black fin-title mt-2 tracking-tight">${finMask(finFmtCurr(bal.totalEgp, 'EGP'))}</p>
-                        <p class="text-[11px] fin-muted mt-1">أسعار الصرف المباشرة: USD=${finRateOf('USD')} · EUR=${finRateOf('EUR')} · SAR=${finRateOf('SAR')}</p>
-                        <div class="flex flex-wrap gap-2 mt-4">
-                            <button type="button" onclick="openFinTxnModal('in','V-MAIN')" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-arrow-down me-1"></i> قبض</button>
-                            <button type="button" onclick="openFinTxnModal('out','V-MAIN')" class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-arrow-up me-1"></i> صرف</button>
-                            <button type="button" onclick="openFinTransferModal('V-MAIN')" class="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-right-left me-1"></i> تحويل بين الخزائن</button>
+                        <div class="gap-1 items-end h-40 pt-3" style="display:grid;grid-template-columns:repeat(14,minmax(0,1fr));align-items:end">
+                            ${days14.map(x => {
+                                const hIn = Math.max(3, Math.round((x.inn / maxBar) * 100));
+                                const hOut = Math.max(3, Math.round((x.out / maxBar) * 100));
+                                return `<div class="flex flex-col items-center gap-1 h-full justify-end" title="${x.d}: داخل ${finFmtCurr(x.inn,'EGP')} | صرف ${finFmtCurr(x.out,'EGP')}">
+                                    <div class="w-full flex items-end justify-center gap-0.5 h-28">
+                                        <div class="w-1/2 rounded-t bg-emerald-500/85" style="height:${x.inn ? hIn : 3}%"></div>
+                                        <div class="w-1/2 rounded-t bg-rose-500/85" style="height:${x.out ? hOut : 3}%"></div>
+                                    </div>
+                                    <span class="text-[9px] fin-muted font-mono">${x.lbl}</span>
+                                </div>`;
+                            }).join('')}
                         </div>
                     </div>
-                    <div class="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        ${FIN_CURR_LIST.map(c => {
-                            const info = FIN_CURRENCIES[c], v = bal.byCurr[c] || 0, eq = r2(v * finRateOf(c));
-                            return `<div class="fin-card p-3.5 flex flex-col justify-between">
-                                <div class="flex items-center justify-between"><span class="text-lg">${info.flag}</span><span class="text-[11px] font-mono font-bold fin-muted">${c}</span></div>
-                                <p class="text-lg font-black fin-title mt-2 break-all">${finMask(finFmtCurr(v, c))}</p>
-                                <p class="text-[10px] fin-muted mt-1">${c === 'EGP' ? 'عملة العرض الأساسية' : '≈ ' + finMask(finFmtCurr(eq, 'EGP'))}</p>
-                            </div>`;
-                        }).join('')}
-                        <div class="col-span-2 sm:col-span-4 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                            <div class="fin-card p-3"><span class="text-[10px] fin-muted block">نسبة التدفق التشغيلي</span><b class="text-base text-emerald-600 dark:text-emerald-400">${opRatio}%</b></div>
-                            <div class="fin-card p-3"><span class="text-[10px] fin-muted block">هامش صافي التدفق</span><b class="text-base ${Number(netMargin) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">${netMargin}%</b></div>
-                            <div class="fin-card p-3"><span class="text-[10px] fin-muted block">انكشاف العملات الأجنبية</span><b class="text-base text-amber-600 dark:text-amber-300">${fxExpPct}%</b></div>
-                            <div class="fin-card p-3"><span class="text-[10px] fin-muted block">دقة جرد الخزائن</span><b class="text-base text-sky-600 dark:text-sky-300">${auditAcc}</b></div>
+
+                    <div class="lg:col-span-5 fin-card p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <h3 class="font-extrabold text-sm fin-title"><i class="fa-solid fa-sitemap text-brand-600 me-1.5"></i>أعلى حسابات الشجرة المحاسبية</h3>
+                            <button type="button" onclick="finSetTab('coa')" class="text-xs text-brand-600 dark:text-amber-300 font-bold hover:underline cursor-pointer">الشجرة الكاملة ←</button>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400">أعلى الإيرادات</div>
+                            ${topRev.length ? topRev.map(x => `<button type="button" onclick="finOpenAccountLedger('${esc(x.code)}')" class="w-full fin-subbox px-3 py-1.5 flex items-center justify-between text-xs hover:border-emerald-500/50 cursor-pointer"><span class="truncate fin-title"><span class="font-mono fin-muted me-1.5">${esc(x.code)}</span>${esc(x.name)}</span><b class="font-mono text-emerald-600 dark:text-emerald-400 shrink-0">${finMask(finFmtCurr(x.amount, 'EGP'))}</b></button>`).join('') : '<p class="text-[11px] fin-muted">لا توجد إيرادات مسجلة بعد</p>'}
+                            <div class="text-[10px] font-extrabold text-rose-600 dark:text-rose-400 pt-1">أعلى المصروفات والتكاليف</div>
+                            ${topExp.length ? topExp.map(x => `<button type="button" onclick="finOpenAccountLedger('${esc(x.code)}')" class="w-full fin-subbox px-3 py-1.5 flex items-center justify-between text-xs hover:border-rose-500/50 cursor-pointer"><span class="truncate fin-title"><span class="font-mono fin-muted me-1.5">${esc(x.code)}</span>${esc(x.name)}</span><b class="font-mono text-rose-600 dark:text-rose-400 shrink-0">${finMask(finFmtCurr(x.amount, 'EGP'))}</b></button>`).join('') : '<p class="text-[11px] fin-muted">لا توجد مصروفات مسجلة بعد</p>'}
                         </div>
                     </div>
                 </div>
 
                 <div>
                     <div class="flex items-center justify-between mb-2.5">
-                        <h3 class="font-extrabold text-sm fin-title"><i class="fa-solid fa-vault text-brand-600 me-1.5"></i>الخزائن وحالة العمل المباشرة (${visibleVaults.length})</h3>
-                        <button type="button" onclick="finSetTab('security');finSettingsTab='vaults';finRepaint()" class="text-xs text-brand-600 dark:text-amber-300 font-bold hover:underline cursor-pointer">إدارة الجلسات والقفل الإداري ←</button>
+                        <h3 class="font-extrabold text-sm fin-title"><i class="fa-solid fa-vault text-brand-600 me-1.5"></i>حالة الخزائن والمستخدمين النشطين (${visibleVaults.length})</h3>
+                        <button type="button" onclick="finSetTab('security');finSettingsTab='vaults';finRepaint()" class="text-xs text-brand-600 dark:text-amber-300 font-bold hover:underline cursor-pointer">التحكم الإداري عن بُعد ←</button>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5">
                         ${visibleVaults.map((v, idx) => {
@@ -15567,48 +16285,24 @@
                                         <h4 class="font-black text-base fin-title mt-1">${esc(v.name)}</h4>
                                     </div>
                                     ${v.adminLocked
-                                        ? `<span class="px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 text-[10px] font-black">🔒 مجمدة إدارياً</span>`
+                                        ? `<span class="px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 text-[10px] font-black">🔒 مجمدة</span>`
                                         : sess ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold">🟢 ${esc(sess.userName)}</span>` : `<span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 fin-muted text-[10px] font-bold">مغلقة</span>`}
                                 </div>
-                                <div class="text-xl font-black fin-title">${finMask(finFmtCurr(vb.totalEgp, 'EGP'))} <span class="text-[11px] font-normal fin-muted">(${share}%)</span></div>
+                                <div class="text-xl font-black fin-title font-mono fin-num">${finMask(finFmtCurr(vb.totalEgp, 'EGP'))} <span class="text-[11px] font-normal fin-muted">(${share}%)</span></div>
                                 <div class="grid grid-cols-2 gap-1.5 text-[11px]">
                                     ${FIN_CURR_LIST.map(c => `<div class="fin-subbox px-2 py-1 flex justify-between"><span class="fin-muted">${FIN_CURRENCIES[c].flag} ${c}</span><b class="fin-title font-mono">${finMask(fmtNumber(vb[c] || 0, 2))}</b></div>`).join('')}
                                 </div>
                                 <div class="flex flex-wrap gap-1.5 pt-1">
                                     <button type="button" onclick="finSelectVault('${esc(v.id)}')" class="flex-1 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-[11px] font-black cursor-pointer">فتح صفحة الخزينة</button>
                                     ${isSystemAdmin() && sess && sess.uid !== (fbUser && fbUser.uid) ? `<button type="button" onclick="finAdminKickVault('${esc(v.id)}')" class="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-black cursor-pointer" title="قفل وطرد المستخدم الآن"><i class="fa-solid fa-user-lock"></i></button>` : ''}
-                                    ${isSystemAdmin() ? `<button type="button" onclick="finAdminToggleFreeze('${esc(v.id)}')" class="px-2.5 py-1.5 rounded-lg ${v.adminLocked ? 'bg-emerald-600 text-white' : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'} text-[11px] font-bold cursor-pointer" title="${v.adminLocked ? 'فك القفل الإداري' : 'قفل إداري كامل للخزينة'}"><i class="fa-solid ${v.adminLocked ? 'fa-lock-open' : 'fa-ban'}"></i></button>` : ''}
+                                    ${isSystemAdmin() ? `<button type="button" onclick="finAdminToggleFreeze('${esc(v.id)}')" class="px-2.5 py-1.5 rounded-lg ${v.adminLocked ? 'bg-emerald-600 text-white' : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'} text-[11px] font-bold cursor-pointer" title="${v.adminLocked ? 'فك التجميد' : 'تجميد إداري'}"><i class="fa-solid ${v.adminLocked ? 'fa-lock-open' : 'fa-ban'}"></i></button>` : ''}
                                 </div>
-                            </div>`;
-                        }).join('')}
-                    </div>
-                </div>
-
-                <div class="fin-card p-4 space-y-3">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <h3 class="font-extrabold text-sm fin-title"><i class="fa-solid fa-chart-column text-brand-600 me-1.5"></i>حركة التدفقات النقدية — آخر 14 يوماً (EGP)</h3>
-                        <div class="flex items-center gap-3 text-[11px]">
-                            <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span class="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span>داخل (قبض)</span>
-                            <span class="flex items-center gap-1 text-rose-600 dark:text-rose-400"><span class="w-2.5 h-2.5 rounded bg-rose-500 inline-block"></span>صرف</span>
-                        </div>
-                    </div>
-                    <div class="gap-1 items-end h-36 pt-3" style="display:grid;grid-template-columns:repeat(14,minmax(0,1fr));align-items:end">
-                        ${days14.map(x => {
-                            const hIn = Math.max(2, Math.round((x.inn / maxBar) * 100));
-                            const hOut = Math.max(2, Math.round((x.out / maxBar) * 100));
-                            return `<div class="flex flex-col items-center gap-1 h-full justify-end" title="${x.d}: داخل ${finFmtCurr(x.inn,'EGP')} | صرف ${finFmtCurr(x.out,'EGP')}">
-                                <div class="w-full flex items-end justify-center gap-0.5 h-24">
-                                    <div class="w-1/2 rounded-t bg-emerald-500/85" style="height:${x.inn ? hIn : 3}%"></div>
-                                    <div class="w-1/2 rounded-t bg-rose-500/85" style="height:${x.out ? hOut : 3}%"></div>
-                                </div>
-                                <span class="text-[9px] fin-muted font-mono">${x.lbl}</span>
                             </div>`;
                         }).join('')}
                     </div>
                 </div>
             </div>`;
         }
-
         function finVaultsTabHtml() {
             const visibleVaults = finVisibleVaults();
             const bal = finComputeBalances();
@@ -15679,6 +16373,7 @@
                         <button type="button" onclick="openFinTxnModal('in','V-MAIN')" class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-black cursor-pointer">+ سند قبض</button>
                         <button type="button" onclick="openFinTxnModal('out','V-MAIN')" class="px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-black cursor-pointer">- سند صرف</button>
                         <button type="button" onclick="openFinTransferModal('V-MAIN')" class="px-3 py-1.5 rounded-xl bg-amber-500 text-white text-xs font-black cursor-pointer">⇄ تحويل</button>
+                        <button type="button" onclick="openFinJournalEntryModal()" class="px-3 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-black cursor-pointer">📒 قيد محاسبي مزدوج</button>
                     </div>
                 </div>
                 <div class="fin-card p-3 grid grid-cols-2 sm:grid-cols-6 gap-2">
@@ -15716,6 +16411,26 @@
                         </tbody>
                     </table>
                 </div>
+                ${finEntries.length ? `<div class="fin-card overflow-x-auto">
+                    <div class="p-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                        <span class="font-extrabold text-sm fin-title"><i class="fa-solid fa-scale-balanced text-sky-600 me-1.5"></i>القيود المحاسبية المزدوجة المرحّلة للشجرة (${finEntries.length})</span>
+                    </div>
+                    <table class="w-full text-xs">
+                        <thead class="fin-thead"><tr><th class="py-2 px-3 text-start">التاريخ / القيد</th><th class="py-2 px-3 text-start">الشرح</th><th class="py-2 px-3 text-start">الأطراف (مدين / دائن)</th><th class="py-2 px-3 text-end">القيمة (EGP)</th><th class="py-2 px-3 text-center">إجراء</th></tr></thead>
+                        <tbody class="fin-divide">
+                            ${finEntries.slice(0, 50).map(je => {
+                                const cM = finCoaMap();
+                                return `<tr class="fin-row-hover">
+                                    <td class="py-2 px-3 whitespace-nowrap"><b class="font-mono text-sky-700 dark:text-sky-300">${esc(je.refNo || je.id)}</b><span class="block text-[10px] fin-muted">${esc(fmtDateAr(je.date))}</span></td>
+                                    <td class="py-2 px-3"><b class="fin-title">${esc(je.memo || '—')}</b>${je.party ? `<span class="block text-[10px] fin-muted">${esc(je.party)}</span>` : ''}</td>
+                                    <td class="py-2 px-3 text-[11px]">${(je.lines || []).map(l => `<div><span class="font-mono fin-muted">${esc(l.accountCode)}</span> ${esc(cM[l.accountCode]?.name || '')}: ${l.debit ? `<b class="text-sky-600">مدين ${fmtNumber(l.debit,2)}</b>` : `<b class="text-emerald-600">دائن ${fmtNumber(l.credit,2)}</b>`}</div>`).join('')}</td>
+                                    <td class="py-2 px-3 text-end font-mono font-black fin-title">${finMask(finFmtCurr(je.total, 'EGP'))}</td>
+                                    <td class="py-2 px-3 text-center">${finCanAudit() ? `<button type="button" onclick="finDeleteJournalEntry('${esc(je.id)}')" class="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-600 cursor-pointer" title="حذف القيد"><i class="fa-solid fa-trash-can"></i></button>` : '—'}</td>
+                                </tr>`;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>` : ''}
             </div>`;
         }
 
@@ -15723,61 +16438,321 @@
             return finFinancialAuditBoxHtml(finAuditRange.vaultId || 'V-MAIN', false);
         }
 
-        function finIfrsTabHtml() {
-            const bal = finComputeBalances(finIfrsTo || '');
-            const rep = finComputeIfrs(finIfrsFrom, finIfrsTo);
-            return `<div class="space-y-5">
-                <div class="fin-card p-3.5 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                        <h3 class="font-black text-base fin-title"><i class="fa-solid fa-globe text-brand-600 me-1.5"></i>التقارير المالية وفق المعايير الدولية (IFRS / IAS 7 / IAS 21)</h3>
-                        <p class="text-[11px] fin-muted">عملة العرض: الجنيه المصري (EGP) · استبعاد آلي للتحويلات الداخلية لمنع الازدواج المحاسبي</p>
+        // ===== Interactive Chart of Accounts Tree Tab (الشجرة المحاسبية الكاملة) =====
+        function finToggleCoaNode(code) {
+            if (finCoaExpanded.has(code)) finCoaExpanded.delete(code);
+            else finCoaExpanded.add(code);
+            finRepaint();
+        }
+        function finCoaExpandAll(open) {
+            finCoaExpanded.clear();
+            if (open) finGetCoaList().filter(a => a.isGroup).forEach(a => finCoaExpanded.add(a.code));
+            finRepaint();
+        }
+        function finOpenAccountLedger(code) {
+            finLedgerCode = code;
+            finTab = 'ifrs';
+            finIfrsSubTab = 'gl';
+            finTouchActivity();
+            finRepaint();
+        }
+
+        function finCoaTabHtml() {
+            const acc = finComputeAccounting();
+            const list = acc.coaList;
+            const q = String(finCoaSearch || '').trim().toLowerCase();
+            const tf = finCoaTypeFilter;
+
+            const childrenOf = {};
+            list.forEach(a => {
+                const p = a.parent || '';
+                if (!childrenOf[p]) childrenOf[p] = [];
+                childrenOf[p].push(a);
+            });
+
+            const matchSelfOrDesc = a => {
+                const selfOk = (!q || `${a.code} ${a.name}`.toLowerCase().includes(q)) && (tf === 'all' || a.type === tf);
+                if (selfOk) return true;
+                const kids = childrenOf[a.code] || [];
+                return kids.some(matchSelfOrDesc);
+            };
+
+            const renderNode = (a, depth = 0) => {
+                if (!matchSelfOrDesc(a)) return '';
+                const kids = (childrenOf[a.code] || []).filter(matchSelfOrDesc);
+                const hasKids = kids.length > 0 || a.isGroup;
+                const isOpen = q ? true : finCoaExpanded.has(a.code);
+                const r = acc.rolled[a.code] || { debit: 0, credit: 0, net: 0, count: 0 };
+                const tMeta = FIN_COA_TYPES[a.type] || FIN_COA_TYPES.asset;
+                const pad = depth * 18;
+                return `
+                    <div class="fin-coa-row ${a.isGroup ? 'is-group' : ''}" style="padding-inline-start:${pad + 12}px">
+                        <div class="flex items-center gap-2 min-w-0 flex-1">
+                            ${hasKids
+                                ? `<button type="button" onclick="finToggleCoaNode('${esc(a.code)}')" class="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-brand-600 hover:text-white flex items-center justify-center text-[10px] shrink-0 cursor-pointer transition-colors"><i class="fa-solid ${isOpen ? 'fa-chevron-down' : 'fa-chevron-left'}"></i></button>`
+                                : `<span class="w-6 h-6 flex items-center justify-center text-[9px] fin-muted shrink-0"><i class="fa-solid fa-circle text-[5px]"></i></span>`}
+                            <span class="px-2 py-0.5 rounded-md font-mono text-[11px] font-black border shrink-0 ${tMeta.badge}">${esc(a.code)}</span>
+                            <span class="truncate ${a.isGroup ? 'font-black text-sm fin-title' : 'font-semibold text-xs fin-text2'}">${esc(a.name)}</span>
+                            ${a.code === '1101' ? `<span class="hidden sm:inline-flex px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[9px] font-black shrink-0">مربوط بالخزائن</span>` : ''}
+                        </div>
+                        <div class="flex items-center gap-3 shrink-0 text-xs">
+                            <span class="hidden md:inline-block w-24 text-end font-mono fin-muted">${r.debit ? finMask(fmtNumber(r.debit, 2)) : '—'}</span>
+                            <span class="hidden md:inline-block w-24 text-end font-mono fin-muted">${r.credit ? finMask(fmtNumber(r.credit, 2)) : '—'}</span>
+                            <span class="w-28 text-end font-mono font-black ${r.net > 0 ? 'fin-title' : r.net < 0 ? 'text-rose-600 dark:text-rose-400' : 'fin-muted'}">${finMask(finFmtCurr(r.net, 'EGP'))}</span>
+                            <div class="flex items-center gap-1">
+                                ${!a.isGroup ? `<button type="button" onclick="finOpenAccountLedger('${esc(a.code)}')" class="w-7 h-7 rounded-lg bg-sky-500/10 hover:bg-sky-600 hover:text-white text-sky-700 dark:text-sky-300 flex items-center justify-center cursor-pointer transition-colors" title="كشف حساب (الأستاذ العام)"><i class="fa-solid fa-file-lines text-[11px]"></i></button>` : `<button type="button" onclick="openFinCoaModal('','${esc(a.code)}')" class="w-7 h-7 rounded-lg bg-emerald-500/10 hover:bg-emerald-600 hover:text-white text-emerald-700 dark:text-emerald-300 flex items-center justify-center cursor-pointer transition-colors" title="إضافة حساب فرعي هنا"><i class="fa-solid fa-plus text-[11px]"></i></button>`}
+                                <button type="button" onclick="openFinCoaModal('${esc(a.code)}')" class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 fin-text2 flex items-center justify-center cursor-pointer" title="تعديل الحساب"><i class="fa-solid fa-pen text-[10px]"></i></button>
+                                ${!a.system ? `<button type="button" onclick="finDeleteCoaAccount('${esc(a.code)}')" class="w-7 h-7 rounded-lg bg-rose-500/10 hover:bg-rose-600 hover:text-white text-rose-600 flex items-center justify-center cursor-pointer transition-colors" title="حذف"><i class="fa-solid fa-trash-can text-[10px]"></i></button>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    ${isOpen && kids.length ? kids.map(k => renderNode(k, depth + 1)).join('') : ''}`;
+            };
+
+            const roots = childrenOf[''] || [];
+            return `<div class="space-y-4">
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                    ${Object.entries(FIN_COA_TYPES).map(([k, t]) => {
+                        const r = acc.rolled[t.root] || { net: 0, count: 0 };
+                        return `<button type="button" onclick="finCoaTypeFilter=finCoaTypeFilter==='${k}'?'all':'${k}';finRepaint()" class="fin-kpi text-start cursor-pointer ${finCoaTypeFilter === k ? 'ring-2 ring-brand-500' : ''}" style="--kpi-c:${t.bar}">
+                            <div class="flex items-center justify-between gap-1"><span class="text-[11px] font-extrabold fin-muted">${t.root} · ${t.short}</span><span class="text-[10px] font-mono fin-muted">${r.count} حركة</span></div>
+                            <div class="text-base sm:text-lg font-black fin-title font-mono mt-1.5 fin-num">${finMask(finFmtCurr(r.net, 'EGP'))}</div>
+                        </button>`;
+                    }).join('')}
+                </div>
+
+                <div class="fin-card p-3.5 flex flex-wrap items-center justify-between gap-2.5">
+                    <div class="flex flex-wrap items-center gap-2 flex-1 min-w-[220px]">
+                        <input type="search" value="${esc(finCoaSearch)}" oninput="finCoaSearch=this.value;uiDebounce('finCoaQ',finRepaint,140)" placeholder="بحث بالكود أو اسم الحساب (مثال: 1101، مبيعات، رواتب)..." class="fin-inp !max-w-xs text-xs">
+                        <button type="button" onclick="finCoaExpandAll(true)" class="px-2.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 fin-text2 text-xs font-bold cursor-pointer"><i class="fa-solid fa-angles-down me-1"></i>فتح الكل</button>
+                        <button type="button" onclick="finCoaExpandAll(false)" class="px-2.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 fin-text2 text-xs font-bold cursor-pointer"><i class="fa-solid fa-angles-up me-1"></i>طي الكل</button>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
-                        <input type="date" value="${esc(finIfrsFrom)}" onchange="finIfrsFrom=this.value;finRepaint()" class="fin-inp !w-auto text-xs" title="من تاريخ">
-                        <input type="date" value="${esc(finIfrsTo)}" onchange="finIfrsTo=this.value;finRepaint()" class="fin-inp !w-auto text-xs" title="إلى تاريخ">
-                        <button type="button" onclick="printFinIfrsReport()" class="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-print me-1"></i> طباعة تقرير IFRS</button>
-                        <button type="button" onclick="exportFinExcel()" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-file-excel me-1"></i> تصدير Excel</button>
+                        <button type="button" onclick="openFinJournalEntryModal()" class="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-scale-balanced me-1"></i>قيد محاسبي مزدوج</button>
+                        <button type="button" onclick="openFinCoaModal()" class="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-plus me-1"></i>إضافة حساب جديد</button>
+                        <button type="button" onclick="finExportFullErpExcel()" class="px-3 py-2 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-600/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold cursor-pointer"><i class="fa-solid fa-file-excel me-1"></i>تصدير Excel</button>
                     </div>
                 </div>
 
-                <div class="fin-card overflow-x-auto">
-                    <div class="p-3.5 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
-                        <span class="font-extrabold text-sm fin-title">1. قائمة التدفقات النقدية — المعيار الدولي <span class="fin-gold">IAS 7</span></span>
-                        <span class="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">✓ مطابقة 100% لأرصدة الخزائن</span>
+                <div class="fin-card overflow-hidden">
+                    <div class="fin-thead px-4 py-2.5 flex items-center justify-between text-[11px] font-extrabold">
+                        <span>كود واسم الحساب (الشجرة المحاسبية القياسية IFRS — ${list.length} حساب)</span>
+                        <div class="flex items-center gap-3">
+                            <span class="hidden md:inline-block w-24 text-end">مدين (EGP)</span>
+                            <span class="hidden md:inline-block w-24 text-end">دائن (EGP)</span>
+                            <span class="w-28 text-end">الرصيد</span>
+                            <span class="w-20 text-center">إجراء</span>
+                        </div>
                     </div>
-                    <table class="w-full text-xs">
-                        <thead class="fin-thead"><tr><th class="py-2.5 px-3 text-start">النشاط المالي</th><th class="py-2.5 px-3 text-start">الداخل</th><th class="py-2.5 px-3 text-start">الصرف</th><th class="py-2.5 px-3 text-start">صافي التدفق (EGP)</th></tr></thead>
-                        <tbody class="fin-divide">
-                            ${[['operating', 'أولاً: الأنشطة التشغيلية (Operating Activities)'], ['investing', 'ثانياً: الأنشطة الاستثمارية (Investing Activities)'], ['financing', 'ثالثاً: الأنشطة التمويلية (Financing Activities)']].map(([k, lbl]) => {
-                                const b = rep.buckets[k];
-                                return `<tr class="fin-row-hover"><td class="py-2.5 px-3 font-bold fin-title">${lbl}</td><td class="py-2.5 px-3 font-mono text-emerald-600 dark:text-emerald-400">${finMask(finFmtCurr(b.inEgp, 'EGP'))}</td><td class="py-2.5 px-3 font-mono text-rose-600 dark:text-rose-400">${finMask(finFmtCurr(b.outEgp, 'EGP'))}</td><td class="py-2.5 px-3 font-mono font-black ${b.netEgp >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">${finMask(finFmtCurr(b.netEgp, 'EGP'))}</td></tr>`;
-                            }).join('')}
-                            <tr class="fin-thead font-black"><td class="py-2.5 px-3">صافي التغير في النقدية خلال الفترة</td><td class="py-2.5 px-3 font-mono text-emerald-600 dark:text-emerald-400">${finMask(finFmtCurr(rep.totalIn, 'EGP'))}</td><td class="py-2.5 px-3 font-mono text-rose-600 dark:text-rose-400">${finMask(finFmtCurr(rep.totalOut, 'EGP'))}</td><td class="py-2.5 px-3 font-mono fin-gold">${finMask(finFmtCurr(rep.netFlowEgp, 'EGP'))}</td></tr>
-                            <tr><td colspan="3" class="py-2 px-3 fin-text2">أثر تغيرات أسعار الصرف وإعادة التقييم (<b class="text-sky-600 dark:text-cyan-300">IAS 21</b>)</td><td class="py-2 px-3 font-mono font-bold text-sky-600 dark:text-cyan-300">${finMask(finFmtCurr(rep.fxRevalEgp, 'EGP'))}</td></tr>
-                            <tr><td colspan="3" class="py-2 px-3 fin-text2">رصيد النقدية أول المدة</td><td class="py-2 px-3 font-mono">${finMask(finFmtCurr(rep.openingBal, 'EGP'))}</td></tr>
-                            <tr class="bg-emerald-500/15 font-black"><td colspan="3" class="py-3 px-3 text-emerald-800 dark:text-emerald-200 text-sm">إجمالي النقدية وما في حكمها آخر المدة (Closing Cash Balance)</td><td class="py-3 px-3 font-mono text-emerald-700 dark:text-emerald-300 text-sm">${finMask(finFmtCurr(rep.closingBal, 'EGP'))}</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="fin-card overflow-x-auto">
-                    <div class="p-3.5 border-b border-slate-200 dark:border-slate-700 font-extrabold text-sm fin-title">2. بيان المركز النقدي المجمّع وانكشاف العملات — <span class="fin-gold">IAS 1 / IFRS 7</span></div>
-                    <table class="w-full text-xs">
-                        <thead class="fin-thead"><tr><th class="py-2.5 px-3 text-start">الخزينة</th><th class="py-2.5 px-3 text-start">🇪🇬 EGP</th><th class="py-2.5 px-3 text-start">🇺🇸 USD</th><th class="py-2.5 px-3 text-start">🇪🇺 EUR</th><th class="py-2.5 px-3 text-start">🇸🇦 SAR</th><th class="py-2.5 px-3 text-start">المعادل (EGP)</th><th class="py-2.5 px-3 text-start">الحصة</th></tr></thead>
-                        <tbody class="fin-divide">
-                            ${finVaults.map(v => {
-                                const vb = bal.byVault[v.id] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
-                                const pct = bal.totalEgp > 0 ? ((vb.totalEgp / bal.totalEgp) * 100).toFixed(1) + '%' : '0%';
-                                return `<tr class="fin-row-hover"><td class="py-2.5 px-3 font-bold fin-title">${esc(v.name)}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(vb.EGP, 2))}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(vb.USD, 2))}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(vb.EUR, 2))}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(vb.SAR, 2))}</td><td class="py-2.5 px-3 font-mono font-black fin-gold">${finMask(finFmtCurr(vb.totalEgp, 'EGP'))}</td><td class="py-2.5 px-3 font-bold">${pct}</td></tr>`;
-                            }).join('')}
-                            <tr class="fin-thead font-black"><td class="py-2.5 px-3">الإجمالي المجمّع</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(bal.byCurr.EGP, 2))}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(bal.byCurr.USD, 2))}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(bal.byCurr.EUR, 2))}</td><td class="py-2.5 px-3 font-mono">${finMask(fmtNumber(bal.byCurr.SAR, 2))}</td><td class="py-2.5 px-3 font-mono fin-gold">${finMask(finFmtCurr(bal.totalEgp, 'EGP'))}</td><td class="py-2.5 px-3">100%</td></tr>
-                        </tbody>
-                    </table>
-                    <p class="p-3 text-[11px] fin-muted border-t border-slate-200 dark:border-slate-700">إفصاح (IAS 7): تم تنفيذ <b>${rep.transfersCount}</b> تحويل داخلي بين الخزائن بقيمة إجمالية <b>${finMask(finFmtCurr(rep.transfersEgp, 'EGP'))}</b> (مستبعدة من صافي التدفقات لمنع الازدواج).</p>
+                    <div class="divide-y divide-slate-100 dark:divide-slate-800/80">
+                        ${roots.map(r => renderNode(r, 0)).join('') || '<div class="p-8 text-center fin-muted text-xs">لا توجد حسابات مطابقة للبحث</div>'}
+                    </div>
                 </div>
             </div>`;
         }
 
+        // ===== Upgraded Complete IFRS & Financial Statements Suite (5 Clean Sub-Tabs) =====
+        function finIfrsTabHtml() {
+            const bal = finComputeBalances(finIfrsTo || '');
+            const rep = finComputeIfrs(finIfrsFrom, finIfrsTo);
+            const acc = finComputeAccounting(finIfrsFrom, finIfrsTo);
+            const tb = acc.trialBalance, pl = acc.incomeStatement, bs = acc.balanceSheet;
+
+            const subTabs = [
+                ['ifrs7', 'التدفقات النقدية IAS 7', 'fa-water'],
+                ['tb',    'ميزان المراجعة',        'fa-scale-balanced'],
+                ['pl',    'قائمة الدخل P&L',       'fa-chart-line'],
+                ['bs',    'الميزانية العمومية',    'fa-building-columns'],
+                ['gl',    'كشف حساب (الأستاذ العام)', 'fa-file-lines']
+            ];
+
+            let panel = '';
+            if (finIfrsSubTab === 'tb') {
+                panel = `<div class="fin-card overflow-x-auto">
+                    <div class="p-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-extrabold text-sm fin-title">ميزان المراجعة بالأرصدة والمجاميع (Trial Balance)</span>
+                        <span class="px-2.5 py-1 rounded-full text-[11px] font-black ${tb.isBalanced ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'}">${tb.isBalanced ? '✓ متوازن 100% (المدين = الدائن)' : '⚠ يوجد فرق'}</span>
+                    </div>
+                    <table class="w-full text-xs">
+                        <thead class="fin-thead"><tr>
+                            <th class="py-2.5 px-3 text-start">الكود</th><th class="py-2.5 px-3 text-start">اسم الحساب</th><th class="py-2.5 px-3 text-start">التصنيف</th>
+                            <th class="py-2.5 px-3 text-end">مجموع مدين</th><th class="py-2.5 px-3 text-end">مجموع دائن</th><th class="py-2.5 px-3 text-end">رصيد مدين</th><th class="py-2.5 px-3 text-end">رصيد دائن</th>
+                        </tr></thead>
+                        <tbody class="fin-divide">
+                            ${tb.rows.map(r => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(r.code)}')" title="اضغط لعرض كشف الحساب">
+                                <td class="py-2.5 px-3 font-mono font-bold text-brand-700 dark:text-amber-300">${esc(r.code)}</td>
+                                <td class="py-2.5 px-3 font-bold fin-title">${esc(r.name)}</td>
+                                <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full text-[10px] border ${FIN_COA_TYPES[r.type]?.badge || ''}">${esc(FIN_COA_TYPES[r.type]?.short || '')}</span></td>
+                                <td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(r.debit, 2))}</td>
+                                <td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(r.credit, 2))}</td>
+                                <td class="py-2.5 px-3 text-end font-mono font-bold text-sky-700 dark:text-sky-300">${r.drBal ? finMask(fmtNumber(r.drBal, 2)) : '—'}</td>
+                                <td class="py-2.5 px-3 text-end font-mono font-bold text-emerald-700 dark:text-emerald-300">${r.crBal ? finMask(fmtNumber(r.crBal, 2)) : '—'}</td>
+                            </tr>`).join('') || '<tr><td colspan="7" class="py-8 text-center fin-muted">لا توجد حركات محاسبية خلال الفترة المحددة</td></tr>'}
+                            <tr class="fin-thead font-black">
+                                <td colspan="3" class="py-3 px-3">الإجمالي العام</td>
+                                <td class="py-3 px-3 text-end font-mono">${finMask(fmtNumber(tb.totalDebit, 2))}</td>
+                                <td class="py-3 px-3 text-end font-mono">${finMask(fmtNumber(tb.totalCredit, 2))}</td>
+                                <td class="py-3 px-3 text-end font-mono text-sky-700 dark:text-sky-300">${finMask(fmtNumber(tb.totalDrBal, 2))}</td>
+                                <td class="py-3 px-3 text-end font-mono text-emerald-700 dark:text-emerald-300">${finMask(fmtNumber(tb.totalCrBal, 2))}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>`;
+            } else if (finIfrsSubTab === 'pl') {
+                panel = `<div class="space-y-4">
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div class="fin-kpi" style="--kpi-c:#059669"><span class="text-[11px] fin-muted block">إجمالي الإيرادات</span><b class="text-lg font-black text-emerald-600 dark:text-emerald-400 font-mono fin-num">${finMask(finFmtCurr(pl.totalRev, 'EGP'))}</b></div>
+                        <div class="fin-kpi" style="--kpi-c:#0284c7"><span class="text-[11px] fin-muted block">مجمل الربح (${pl.grossMarginPct}%)</span><b class="text-lg font-black fin-title font-mono fin-num">${finMask(finFmtCurr(pl.grossProfit, 'EGP'))}</b></div>
+                        <div class="fin-kpi" style="--kpi-c:#e11d48"><span class="text-[11px] fin-muted block">إجمالي التكاليف والمصروفات</span><b class="text-lg font-black text-rose-600 dark:text-rose-400 font-mono fin-num">${finMask(finFmtCurr(pl.totalExpenses, 'EGP'))}</b></div>
+                        <div class="fin-kpi" style="--kpi-c:${pl.netProfit >= 0 ? '#059669' : '#e11d48'}"><span class="text-[11px] fin-muted block">صافي الربح / الخسارة (${pl.netMarginPct}%)</span><b class="text-lg font-black ${pl.netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'} font-mono fin-num">${finMask(finFmtCurr(pl.netProfit, 'EGP'))}</b></div>
+                    </div>
+                    <div class="fin-card overflow-x-auto">
+                        <div class="p-3.5 border-b border-slate-200 dark:border-slate-800 font-extrabold text-sm fin-title">قائمة الدخل — الأرباح والخسائر (Income Statement · IAS 1)</div>
+                        <table class="w-full text-xs">
+                            <tbody class="fin-divide">
+                                <tr class="fin-thead font-black"><td colspan="2" class="py-2 px-3">أولاً: الإيرادات (Revenues)</td></tr>
+                                ${pl.revItems.map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono font-bold text-emerald-600 dark:text-emerald-400">${finMask(finFmtCurr(x.amount, 'EGP'))}</td></tr>`).join('') || '<tr><td colspan="2" class="py-2.5 px-4 fin-muted">لا توجد إيرادات مسجّلة</td></tr>'}
+                                <tr class="bg-emerald-500/10 font-black"><td class="py-2.5 px-3">إجمالي الإيرادات</td><td class="py-2.5 px-4 text-end font-mono text-emerald-700 dark:text-emerald-300">${finMask(finFmtCurr(pl.totalRev, 'EGP'))}</td></tr>
+
+                                <tr class="fin-thead font-black"><td colspan="2" class="py-2 px-3">ثانياً: تكلفة المبيعات والمشتريات (COGS)</td></tr>
+                                ${pl.cogsItems.map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono text-rose-600 dark:text-rose-400">(${finMask(finFmtCurr(x.amount, 'EGP'))})</td></tr>`).join('') || '<tr><td colspan="2" class="py-2.5 px-4 fin-muted">لا توجد تكاليف مشتريات مسجّلة</td></tr>'}
+                                <tr class="bg-sky-500/10 font-black"><td class="py-2.5 px-3">مجمل الربح (Gross Profit · ${pl.grossMarginPct}%)</td><td class="py-2.5 px-4 text-end font-mono fin-title">${finMask(finFmtCurr(pl.grossProfit, 'EGP'))}</td></tr>
+
+                                <tr class="fin-thead font-black"><td colspan="2" class="py-2 px-3">ثالثاً: المصروفات التشغيلية والإدارية (Operating Expenses)</td></tr>
+                                ${pl.opexItems.map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono text-rose-600 dark:text-rose-400">(${finMask(finFmtCurr(x.amount, 'EGP'))})</td></tr>`).join('') || '<tr><td colspan="2" class="py-2.5 px-4 fin-muted">لا توجد مصروفات تشغيلية مسجّلة</td></tr>'}
+                                <tr class="${pl.netProfit >= 0 ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200' : 'bg-rose-500/15 text-rose-800 dark:text-rose-200'} font-black text-sm">
+                                    <td class="py-3 px-3">صافي الربح / الخسارة للفترة (Net Profit · ${pl.netMarginPct}%)</td>
+                                    <td class="py-3 px-4 text-end font-mono">${finMask(finFmtCurr(pl.netProfit, 'EGP'))}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`;
+            } else if (finIfrsSubTab === 'bs') {
+                panel = `<div class="space-y-4">
+                    <div class="fin-card p-3.5 flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-extrabold text-sm fin-title">الميزانية العمومية — قائمة المركز المالي (Balance Sheet · IAS 1)</span>
+                        <span class="px-3 py-1 rounded-full text-xs font-black ${bs.isBalanced ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'}">${bs.isBalanced ? '✓ المعادلة المحاسبية متوازنة (الأصول = الالتزامات + حقوق الملكية)' : '⚠ يوجد فرق في التوازن'}</span>
+                    </div>
+                    <div class="grid lg:grid-cols-2 gap-4">
+                        <div class="fin-card overflow-hidden">
+                            <div class="fin-thead px-4 py-2.5 font-black text-xs text-sky-700 dark:text-sky-300">الجانب الأيمن: الأصول (Assets)</div>
+                            <table class="w-full text-xs"><tbody class="fin-divide">
+                                <tr class="bg-slate-50/70 dark:bg-slate-800/40 font-bold"><td colspan="2" class="py-2 px-3 fin-muted">الأصول المتداولة</td></tr>
+                                ${bs.currentAssets.map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono font-bold">${finMask(finFmtCurr(x.amount, 'EGP'))}</td></tr>`).join('') || '<tr><td colspan="2" class="py-2 px-4 fin-muted">—</td></tr>'}
+                                <tr class="bg-slate-50/70 dark:bg-slate-800/40 font-bold"><td colspan="2" class="py-2 px-3 fin-muted">الأصول الثابتة (غير المتداولة)</td></tr>
+                                ${bs.fixedAssets.map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono font-bold">${finMask(finFmtCurr(x.amount, 'EGP'))}</td></tr>`).join('') || '<tr><td colspan="2" class="py-2 px-4 fin-muted">—</td></tr>'}
+                                <tr class="bg-sky-500/15 font-black text-sm"><td class="py-3 px-3 text-sky-900 dark:text-sky-200">إجمالي الأصول</td><td class="py-3 px-4 text-end font-mono text-sky-800 dark:text-sky-200">${finMask(finFmtCurr(bs.totalAssets, 'EGP'))}</td></tr>
+                            </tbody></table>
+                        </div>
+                        <div class="fin-card overflow-hidden">
+                            <div class="fin-thead px-4 py-2.5 font-black text-xs text-violet-700 dark:text-violet-300">الجانب الأيسر: الالتزامات وحقوق الملكية (Liabilities & Equity)</div>
+                            <table class="w-full text-xs"><tbody class="fin-divide">
+                                <tr class="bg-slate-50/70 dark:bg-slate-800/40 font-bold"><td colspan="2" class="py-2 px-3 fin-muted">الالتزامات المتداولة وطويلة الأجل</td></tr>
+                                ${[...bs.currentLiab, ...bs.longLiab].map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono font-bold">${finMask(finFmtCurr(x.amount, 'EGP'))}</td></tr>`).join('') || '<tr><td colspan="2" class="py-2 px-4 fin-muted">—</td></tr>'}
+                                <tr class="bg-slate-50/70 dark:bg-slate-800/40 font-bold"><td colspan="2" class="py-2 px-3 fin-muted">حقوق الملكية وصافي الربح</td></tr>
+                                ${bs.equityItems.map(x => `<tr class="fin-row-hover cursor-pointer" onclick="finOpenAccountLedger('${esc(x.code)}')"><td class="py-2 px-4"><span class="font-mono fin-muted me-2">${esc(x.code)}</span>${esc(x.name)}</td><td class="py-2 px-4 text-end font-mono font-bold">${finMask(finFmtCurr(x.amount, 'EGP'))}</td></tr>`).join('')}
+                                <tr class="fin-row-hover"><td class="py-2 px-4 font-bold text-emerald-700 dark:text-emerald-300">صافي ربح / خسارة الفترة الحالية</td><td class="py-2 px-4 text-end font-mono font-black ${bs.netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">${finMask(finFmtCurr(bs.netProfit, 'EGP'))}</td></tr>
+                                <tr class="bg-violet-500/15 font-black text-sm"><td class="py-3 px-3 text-violet-900 dark:text-violet-200">إجمالي الالتزامات وحقوق الملكية</td><td class="py-3 px-4 text-end font-mono text-violet-800 dark:text-violet-200">${finMask(finFmtCurr(bs.totalLiabEquity, 'EGP'))}</td></tr>
+                            </tbody></table>
+                        </div>
+                    </div>
+                </div>`;
+            } else if (finIfrsSubTab === 'gl') {
+                const leaves = finLeafAccounts();
+                const led = finComputeAccountLedger(finLedgerCode || '1101', finLedgerFrom, finLedgerTo);
+                panel = `<div class="space-y-4">
+                    <div class="fin-card p-3.5 flex flex-wrap items-center justify-between gap-2.5">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <select onchange="finLedgerCode=this.value;finRepaint()" class="fin-inp !w-auto text-xs font-bold">
+                                ${leaves.map(a => `<option value="${esc(a.code)}" ${a.code === led.acc.code ? 'selected' : ''}>${esc(a.code)} — ${esc(a.name)}</option>`).join('')}
+                            </select>
+                            <input type="date" value="${esc(finLedgerFrom)}" onchange="finLedgerFrom=this.value;finRepaint()" class="fin-inp !w-auto text-xs" title="من تاريخ">
+                            <input type="date" value="${esc(finLedgerTo)}" onchange="finLedgerTo=this.value;finRepaint()" class="fin-inp !w-auto text-xs" title="إلى تاريخ">
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="button" onclick="finPrintAccountLedger('${esc(led.acc.code)}')" class="px-3 py-1.5 rounded-xl bg-brand-600 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-print me-1"></i>طباعة كشف الحساب</button>
+                            <button type="button" onclick="finExportAccountLedgerExcel('${esc(led.acc.code)}')" class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-file-excel me-1"></i>Excel</button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        <div class="fin-card p-3"><span class="text-[10px] fin-muted block">رصيد أول المدة</span><b class="text-base font-mono font-black fin-title">${finMask(finFmtCurr(led.opening, 'EGP'))}</b></div>
+                        <div class="fin-card p-3"><span class="text-[10px] fin-muted block">إجمالي المدين</span><b class="text-base font-mono font-black text-sky-600 dark:text-sky-400">${finMask(finFmtCurr(led.totalDr, 'EGP'))}</b></div>
+                        <div class="fin-card p-3"><span class="text-[10px] fin-muted block">إجمالي الدائن</span><b class="text-base font-mono font-black text-emerald-600 dark:text-emerald-400">${finMask(finFmtCurr(led.totalCr, 'EGP'))}</b></div>
+                        <div class="fin-card-gold p-3"><span class="text-[10px] fin-gold font-extrabold block">الرصيد الختامي (${led.acc.normal === 'credit' ? 'دائن' : 'مدين'})</span><b class="text-base font-mono font-black fin-title">${finMask(finFmtCurr(led.closing, 'EGP'))}</b></div>
+                    </div>
+                    <div class="fin-card overflow-x-auto">
+                        <table class="w-full text-xs">
+                            <thead class="fin-thead"><tr><th class="py-2.5 px-3 text-start">التاريخ / المرجع</th><th class="py-2.5 px-3 text-start">المصدر</th><th class="py-2.5 px-3 text-start">البيان</th><th class="py-2.5 px-3 text-end">مدين</th><th class="py-2.5 px-3 text-end">دائن</th><th class="py-2.5 px-3 text-end">الرصيد التراكمي</th></tr></thead>
+                            <tbody class="fin-divide">
+                                ${led.rows.slice().reverse().slice(0, 150).map(r => `<tr class="fin-row-hover">
+                                    <td class="py-2 px-3 whitespace-nowrap"><b class="font-mono text-brand-700 dark:text-amber-300">${esc(r.refNo)}</b><span class="block text-[10px] fin-muted">${esc(fmtDateAr(r.date))}</span></td>
+                                    <td class="py-2 px-3 whitespace-nowrap fin-muted">${esc(r.vaultName)}</td>
+                                    <td class="py-2 px-3 fin-title">${esc(r.memo)}</td>
+                                    <td class="py-2 px-3 text-end font-mono font-bold text-sky-600 dark:text-sky-400">${r.debit ? finMask(fmtNumber(r.debit, 2)) : '—'}</td>
+                                    <td class="py-2 px-3 text-end font-mono font-bold text-emerald-600 dark:text-emerald-400">${r.credit ? finMask(fmtNumber(r.credit, 2)) : '—'}</td>
+                                    <td class="py-2 px-3 text-end font-mono font-black fin-title">${finMask(fmtNumber(r.balance, 2))}</td>
+                                </tr>`).join('') || '<tr><td colspan="6" class="py-8 text-center fin-muted">لا توجد حركات مسجّلة على هذا الحساب</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`;
+            } else {
+                // Default: IAS 7 Cash Flow + IAS 1 Consolidated Treasury Position
+                panel = `<div class="space-y-4">
+                    <div class="fin-card overflow-x-auto">
+                        <div class="p-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                            <span class="font-extrabold text-sm fin-title">1. قائمة التدفقات النقدية — المعيار الدولي <span class="fin-gold">IAS 7</span></span>
+                            <span class="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">✓ مطابقة 100% لأرصدة الخزائن</span>
+                        </div>
+                        <table class="w-full text-xs">
+                            <thead class="fin-thead"><tr><th class="py-2.5 px-3 text-start">النشاط المالي</th><th class="py-2.5 px-3 text-end">الداخل</th><th class="py-2.5 px-3 text-end">الصرف</th><th class="py-2.5 px-3 text-end">صافي التدفق (EGP)</th></tr></thead>
+                            <tbody class="fin-divide">
+                                ${[['operating', 'أولاً: الأنشطة التشغيلية (Operating Activities)'], ['investing', 'ثانياً: الأنشطة الاستثمارية (Investing Activities)'], ['financing', 'ثالثاً: الأنشطة التمويلية (Financing Activities)']].map(([k, lbl]) => {
+                                    const b = rep.buckets[k];
+                                    return `<tr class="fin-row-hover"><td class="py-2.5 px-3 font-bold fin-title">${lbl}</td><td class="py-2.5 px-3 text-end font-mono text-emerald-600 dark:text-emerald-400">${finMask(finFmtCurr(b.inEgp, 'EGP'))}</td><td class="py-2.5 px-3 text-end font-mono text-rose-600 dark:text-rose-400">${finMask(finFmtCurr(b.outEgp, 'EGP'))}</td><td class="py-2.5 px-3 text-end font-mono font-black ${b.netEgp >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">${finMask(finFmtCurr(b.netEgp, 'EGP'))}</td></tr>`;
+                                }).join('')}
+                                <tr class="fin-thead font-black"><td class="py-2.5 px-3">صافي التغير في النقدية خلال الفترة</td><td class="py-2.5 px-3 text-end font-mono text-emerald-600 dark:text-emerald-400">${finMask(finFmtCurr(rep.totalIn, 'EGP'))}</td><td class="py-2.5 px-3 text-end font-mono text-rose-600 dark:text-rose-400">${finMask(finFmtCurr(rep.totalOut, 'EGP'))}</td><td class="py-2.5 px-3 text-end font-mono fin-gold">${finMask(finFmtCurr(rep.netFlowEgp, 'EGP'))}</td></tr>
+                                <tr><td colspan="3" class="py-2 px-3 fin-text2">أثر تغيرات أسعار الصرف وإعادة التقييم (<b class="text-sky-600 dark:text-cyan-300">IAS 21</b>)</td><td class="py-2 px-3 text-end font-mono font-bold text-sky-600 dark:text-cyan-300">${finMask(finFmtCurr(rep.fxRevalEgp, 'EGP'))}</td></tr>
+                                <tr><td colspan="3" class="py-2 px-3 fin-text2">رصيد النقدية أول المدة</td><td class="py-2 px-3 text-end font-mono">${finMask(finFmtCurr(rep.openingBal, 'EGP'))}</td></tr>
+                                <tr class="bg-emerald-500/15 font-black"><td colspan="3" class="py-3 px-3 text-emerald-800 dark:text-emerald-200 text-sm">إجمالي النقدية وما في حكمها آخر المدة (Closing Cash Balance)</td><td class="py-3 px-3 text-end font-mono text-emerald-700 dark:text-emerald-300 text-sm">${finMask(finFmtCurr(rep.closingBal, 'EGP'))}</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="fin-card overflow-x-auto">
+                        <div class="p-3.5 border-b border-slate-200 dark:border-slate-800 font-extrabold text-sm fin-title">2. بيان المركز النقدي المجمّع للخزائن والعملات — <span class="fin-gold">IAS 1 / IFRS 7</span></div>
+                        <table class="w-full text-xs">
+                            <thead class="fin-thead"><tr><th class="py-2.5 px-3 text-start">الخزينة</th><th class="py-2.5 px-3 text-end">🇪🇬 EGP</th><th class="py-2.5 px-3 text-end">🇺🇸 USD</th><th class="py-2.5 px-3 text-end">🇪🇺 EUR</th><th class="py-2.5 px-3 text-end">🇸🇦 SAR</th><th class="py-2.5 px-3 text-end">المعادل (EGP)</th><th class="py-2.5 px-3 text-end">الحصة</th></tr></thead>
+                            <tbody class="fin-divide">
+                                ${finVaults.map(v => {
+                                    const vb = bal.byVault[v.id] || { EGP: 0, USD: 0, EUR: 0, SAR: 0, totalEgp: 0 };
+                                    const pct = bal.totalEgp > 0 ? ((vb.totalEgp / bal.totalEgp) * 100).toFixed(1) + '%' : '0%';
+                                    return `<tr class="fin-row-hover"><td class="py-2.5 px-3 font-bold fin-title">${esc(v.name)}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(vb.EGP, 2))}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(vb.USD, 2))}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(vb.EUR, 2))}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(vb.SAR, 2))}</td><td class="py-2.5 px-3 text-end font-mono font-black fin-gold">${finMask(finFmtCurr(vb.totalEgp, 'EGP'))}</td><td class="py-2.5 px-3 text-end font-bold">${pct}</td></tr>`;
+                                }).join('')}
+                                <tr class="fin-thead font-black"><td class="py-2.5 px-3">الإجمالي المجمّع</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(bal.byCurr.EGP, 2))}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(bal.byCurr.USD, 2))}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(bal.byCurr.EUR, 2))}</td><td class="py-2.5 px-3 text-end font-mono">${finMask(fmtNumber(bal.byCurr.SAR, 2))}</td><td class="py-2.5 px-3 text-end font-mono fin-gold">${finMask(finFmtCurr(bal.totalEgp, 'EGP'))}</td><td class="py-2.5 px-3 text-end">100%</td></tr>
+                            </tbody>
+                        </table>
+                        <p class="p-3 text-[11px] fin-muted border-t border-slate-200 dark:border-slate-800">إفصاح (IAS 7): تم تنفيذ <b>${rep.transfersCount}</b> تحويل داخلي بين الخزائن بقيمة إجمالية <b>${finMask(finFmtCurr(rep.transfersEgp, 'EGP'))}</b> (مستبعدة من صافي التدفقات لمنع الازدواج).</p>
+                    </div>
+                </div>`;
+            }
+
+            return `<div class="space-y-4">
+                <div class="fin-card p-3.5 flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex flex-wrap gap-1.5">
+                        ${subTabs.map(([k, lbl, ic]) => `<button type="button" onclick="finIfrsSubTab='${k}';finRepaint()" class="fin-subtab ${finIfrsSubTab === k ? 'fin-subtab-on' : 'fin-subtab-off'}"><i class="fa-solid ${ic}"></i>${lbl}</button>`).join('')}
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <input type="date" value="${esc(finIfrsFrom)}" onchange="finIfrsFrom=this.value;finRepaint()" class="fin-inp !w-auto text-xs" title="من تاريخ">
+                        <input type="date" value="${esc(finIfrsTo)}" onchange="finIfrsTo=this.value;finRepaint()" class="fin-inp !w-auto text-xs" title="إلى تاريخ">
+                        <button type="button" onclick="${finIfrsSubTab === 'ifrs7' ? 'printFinIfrsReport()' : 'finPrintErpStatements()'}" class="px-3 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-print me-1"></i>طباعة A4</button>
+                        <button type="button" onclick="finExportFullErpExcel()" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black cursor-pointer"><i class="fa-solid fa-file-excel me-1"></i>Excel (5 شيتات)</button>
+                    </div>
+                </div>
+                ${panel}
+            </div>`;
+        }
         // Cleanly Organized & Isolated Settings Sub-Tabs!
         function finSecurityTabHtml() {
             const sections = [
@@ -15973,14 +16948,16 @@
 
             const tabs = [
                 ['dashboard', 'لوحة القيادة CFO', 'fa-chart-pie'],
+                ['coa', 'الشجرة المحاسبية', 'fa-sitemap'],
                 ['vaults', 'الخزائن والتحويلات', 'fa-vault'],
-                ['journal', 'اليومية المجمّعة', 'fa-book'],
+                ['journal', 'اليومية والقيود', 'fa-book'],
                 ['audit', 'جرد ومطابقة المال', 'fa-scale-balanced'],
-                ['ifrs', 'التقارير الدولية IFRS', 'fa-globe'],
+                ['ifrs', 'القوائم والتقارير IFRS', 'fa-globe'],
                 ['security', 'الإعدادات والأمان', 'fa-sliders']
             ];
             let body = '';
-            if (finTab === 'vaults') body = finVaultsTabHtml();
+            if (finTab === 'coa') body = finCoaTabHtml();
+            else if (finTab === 'vaults') body = finVaultsTabHtml();
             else if (finTab === 'journal') body = finJournalTabHtml();
             else if (finTab === 'audit') body = finAuditTabHtml();
             else if (finTab === 'ifrs') body = finIfrsTabHtml();
@@ -16004,7 +16981,7 @@
                         <button type="button" onclick="finLockNow(false,'قفل فوري من الزر العلوي')" class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black cursor-pointer shadow-sm"><i class="fa-solid fa-lock me-1"></i> قفل فوري</button>
                     </div>
                 </div>
-                <div class="px-4 pt-3 pb-2 border-b border-slate-200 dark:border-slate-700 flex gap-2 overflow-x-auto">
+                <div class="fin-tabs-bar">
                     ${tabs.map(([k, lbl, ic]) => `<button type="button" onclick="finSetTab('${k}')" class="fin-tab ${finTab === k ? 'fin-tab-on' : 'fin-tab-off'}"><i class="fa-solid ${ic}"></i>${lbl}</button>`).join('')}
                 </div>
                 <div class="p-4 sm:p-5">${body}</div>
@@ -16027,7 +17004,7 @@
             if (!finCanAccess()) {
                 return { title: 'غير مصرح', html: `<div class="bg-white rounded-2xl border p-8 text-center"><i class="fa-solid fa-lock text-4xl text-slate-300 mb-3"></i><p class="text-slate-600 font-bold">هذا القسم سري ومغلق.</p></div>` };
             }
-            if (param && ['dashboard', 'vaults', 'journal', 'audit', 'ifrs', 'security'].includes(param)) finTab = param;
+            if (param && ['dashboard', 'coa', 'vaults', 'journal', 'audit', 'ifrs', 'security'].includes(param)) finTab = param;
             if (!finUnsubs.length) finStart();
             return {
                 title: 'الإدارة المالية والخزينة',
@@ -21526,5 +22503,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60e64855ff3baf7',t:'MTc5NTc1Mzc3NA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60e64855ff3baf7',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60e76bd4bd5ee74',t:'MTc5NTc1NDUyMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60e76bd4bd5ee74',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
