@@ -604,6 +604,28 @@
         .cust-nav-btn:disabled { opacity: .4; cursor: not-allowed; }
         html[data-theme="dark"] .cust-nav-btn { background: #1e293b; border-color: #334155; color: #e2e8f0; }
         html[data-theme="dark"] .cust-nav-btn:hover:not(:disabled) { border-color: #38bdf8; color: #7dd3fc; background: #0f172a; }
+
+        /* Executive Command Center Dashboard */
+        .dkpi {
+            background: #ffffff; border: 1px solid #e2e8f0; border-inline-start: 4px solid var(--dc, #0284c7);
+            border-radius: 1rem; padding: .85rem 1rem; text-align: start; transition: transform .15s ease, box-shadow .18s ease, border-color .15s ease;
+            box-shadow: 0 1px 3px rgba(15,23,42,.05); cursor: pointer; display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .dkpi:hover { transform: translateY(-2px); box-shadow: 0 8px 20px -8px rgba(15,23,42,.14); border-color: #cbd5e1; }
+        .dkpi-num { font-variant-numeric: tabular-nums; }
+        html[data-theme="dark"] .dkpi { background: #0f172a; border-color: #1e293b; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+        html[data-theme="dark"] .dkpi:hover { border-color: #334155; }
+        .dcard { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1rem 1.15rem; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+        html[data-theme="dark"] .dcard { background: #0f172a; border-color: #1e293b; }
+        .dtabs { display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; padding: .35rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: .9rem; }
+        .dtabs::-webkit-scrollbar { display: none; }
+        html[data-theme="dark"] .dtabs { background: #0f172a; border-color: #1e293b; }
+        .dtab { padding: .48rem .95rem; border-radius: .65rem; font-size: .78rem; font-weight: 800; color: #475569; white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: .4rem; transition: all .15s ease; }
+        .dtab:hover { color: #0f172a; background: rgba(255,255,255,.7); }
+        .dtab.on { background: #0284c7; color: #ffffff; box-shadow: 0 2px 8px rgba(2,132,199,.28); }
+        html[data-theme="dark"] .dtab { color: #94a3b8; }
+        html[data-theme="dark"] .dtab:hover { color: #f8fafc; background: rgba(30,41,59,.8); }
+        html[data-theme="dark"] .dtab.on { background: #0284c7; color: #ffffff; }
     </style>
 </head>
 <body class="text-slate-800 min-h-screen">
@@ -20032,258 +20054,541 @@
             };
         }
 
-        function viewDashboard() {
-            const s = computeStats();
+        // ---------- Executive Command Center Dashboard ----------
+        let dashPeriod = 'all'; // 'today' | 'week' | 'month' | 'all'
+        let dashTab = 'exec';   // 'exec' | 'finance' | 'factories' | 'reports'
+
+        function setDashPeriod(p) {
+            if (!['today', 'week', 'month', 'all'].includes(p)) return;
+            dashPeriod = p;
+            refreshDashBody();
+        }
+        function setDashTab(t) {
+            if (!['exec', 'finance', 'factories', 'reports'].includes(t)) return;
+            dashTab = t;
+            refreshDashBody();
+        }
+        function refreshDashBody() {
+            const root = el('dashRoot');
+            if (root) root.innerHTML = dashInnerHtml();
+        }
+        function dashDateInPeriod(dateStr) {
+            if (dashPeriod === 'all') return true;
+            const iso = String(dateStr || '').slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+            const today = todayISO();
+            if (dashPeriod === 'today') return iso === today;
+            if (dashPeriod === 'week') return iso >= addDays(today, -6) && iso <= today;
+            if (dashPeriod === 'month') return iso.slice(0, 7) === today.slice(0, 7);
+            return true;
+        }
+        function dashPeriodLabel() {
+            return { today: 'اليوم', week: 'آخر 7 أيام', month: 'هذا الشهر', all: 'كل الفترات' }[dashPeriod] || 'كل الفترات';
+        }
+
+        function dashInnerHtml() {
             const u = currentUser();
-            const tot = s.totalLists || 1;
-            const p1 = (s.activeOnly / tot) * 100;
-            const p2 = (s.expiring / tot) * 100;
-            const donut = s.totalLists
-                ? `conic-gradient(#10b981 0 ${p1}%, #f59e0b ${p1}% ${p1 + p2}%, #f43f5e ${p1 + p2}% 100%)`
-                : 'conic-gradient(#e2e8f0 0 100%)';
+            const today = todayISO();
+            const next7 = addDays(today, 7);
+            const hourNow = new Date().getHours();
+            const greet = hourNow >= 5 && hourNow < 12 ? 'صباح الخير' : (hourNow >= 12 && hourNow < 18 ? 'أهلاً بك' : 'مساء الخير');
 
-            // ---- cross-module aggregates (each block respects its permission) ----
-            const orders = can('orders.view') ? (appData.orders || []) : [];
-            const activeOrders = orders.filter(o => !['delivered', 'cancelled'].includes(o.status));
-            const checks = can('checks.view') ? (appData.checks || []) : [];
-            const openChecks = checks.filter(isOpen);
-            const overdueChecks = checks.filter(isOverdue);
-            const custOrders = can('custorders.view') ? (appData.custOrders || []) : [];
-            const undelivered = custOrders.filter(c => c.delivery === 'لم تُسلم');
+            // ---- Safe Cross-Module Data Collection (100% permission-aware; Finance stays strictly locked!) ----
+            const canComp = can('companies.view') || can('lists.view');
+            const s = canComp ? computeStats() : { companies: 0, totalLists: 0, active: 0, activeOnly: 0, expiring: 0, expired: 0, expItems: [], perCompany: [] };
 
-            const kpi = (label, value, icon, color, sub = '') => `
-                <div class="kpi"><span class="kpi-accent"></span>
-                    <div class="kpi-top"><span class="kpi-label">${label}</span><span class="kpi-icon" style="background:${color}22;color:${color}"><i class="fa-solid ${icon}"></i></span></div>
-                    <div class="kpi-value">${value}</div>
-                    ${sub ? `<div class="kpi-sub">${sub}</div>` : ''}
+            const canCustV = canCust('view');
+            const allCust = canCustV ? (appData.custOrders || []).filter(c => isSystemAdmin() || !visibleRepId() || custBelongsToCurrentRep(c)) : [];
+            const perCust = allCust.filter(c => dashDateInPeriod(c.date));
+            const custSales = r2(perCust.reduce((a, c) => a + numOr0(c.amount), 0));
+            const custPaid = r2(perCust.reduce((a, c) => a + numOr0(c.paid), 0));
+            const custRemPeriod = r2(perCust.reduce((a, c) => a + Math.max(0, custRemaining(c)), 0));
+            const custRemAll = r2(allCust.reduce((a, c) => a + Math.max(0, custRemaining(c)), 0));
+            const custColPct = custSales > 0 ? Math.min(100, Math.round((custPaid / custSales) * 100)) : 0;
+            const undeliveredCust = allCust.filter(c => c.delivery === 'لم تُسلم');
+            const custDlStats = (canCustV && typeof custDeadlineStats === 'function')
+                ? custDeadlineStats(allCust)
+                : { expired: 0, today: 0, soon: 0, active: 0, delivered: 0, nodate: 0, expiredAmt: 0, todayAmt: 0, soonAmt: 0 };
+
+            const canOrdV = can('orders.view');
+            const allOrders = canOrdV ? (appData.orders || []) : [];
+            const activeOrders = allOrders.filter(o => !['delivered', 'cancelled'].includes(o.status));
+            const todayOrders = allOrders.filter(o => orderDateOf(o) === today && !['delivered', 'cancelled'].includes(o.status));
+
+            const canChkV = can('checks.view');
+            const allChecks = canChkV ? (appData.checks || []) : [];
+            const openChecks = allChecks.filter(isOpen);
+            const overdueChecks = allChecks.filter(isOverdue);
+            const dueTodayChecks = openChecks.filter(c => c.dueDate === today);
+            const upcoming7Checks = openChecks.filter(c => c.dueDate && c.dueDate > today && c.dueDate <= next7).sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+            const canDebtV = typeof debtCanView === 'function' && debtCanView();
+            const allDebts = canDebtV && Array.isArray(debtList) ? debtList : [];
+            const activeDebts = allDebts.filter(d => d && d.stage !== 'settled' && debtRemaining(d) > 0);
+            const overdueDebts = activeDebts.filter(d => typeof debtDaysOverdue === 'function' && debtDaysOverdue(d) > 0);
+            const debtsRemTotal = r2(activeDebts.reduce((a, d) => a + debtRemaining(d), 0));
+            const debtsPaidTotal = r2(allDebts.reduce((a, d) => a + numOr0(d.paidAmount), 0));
+
+            const canExpV = (typeof canExpRequest === 'function' && canExpRequest()) || (typeof canExpApprove === 'function' && canExpApprove()) || (typeof canExpDelete === 'function' && canExpDelete());
+            const allExp = canExpV && typeof expVisible === 'function' ? expVisible() : [];
+            const pendingExp = allExp.filter(e => e.status === EXP_PENDING);
+            const perExpApproved = allExp.filter(e => (e.status === EXP_PAID || e.status === EXP_APPROVED) && dashDateInPeriod(e.paidAt || e.approvedAt || e.createdAt));
+            const expTotalPeriod = r2(perExpApproved.reduce((a, e) => a + numOr0(e.amount), 0));
+
+            const canShipV = can('shipping.view');
+            const shipTodayList = canShipV && shipCells && typeof shipCells === 'object'
+                ? Object.values(shipCells).filter(cell => cell && (cell.invId || cell.customer || cell.stage))
+                : [];
+            const shipStageCounts = {};
+            if (Array.isArray(SHIP_STAGES)) SHIP_STAGES.forEach(([k]) => { shipStageCounts[k] = 0; });
+            shipTodayList.forEach(cell => {
+                const st = cell.stage || 'waiting';
+                shipStageCounts[st] = (shipStageCounts[st] || 0) + 1;
+            });
+
+            const canCmpM = typeof cmpCanManage === 'function' && cmpCanManage();
+            const openComplaints = canCmpM && Array.isArray(cmpList)
+                ? cmpList.filter(c => c && !['resolved', 'closed', 'rejected', 'done'].includes(String(c.status || '').toLowerCase()))
+                : [];
+
+            // ---- 1) Unified Priority Emergency / Action Strip (ZERO duplication!) ----
+            const alerts = [];
+            if (canCustV && custDlStats.expired > 0) alerts.push({ sev: 1, cls: 'bg-rose-50 border-rose-300 text-rose-800', ic: 'fa-calendar-xmark text-rose-600', title: `${custDlStats.expired} فاتورة عملاء منتهية الصلاحية`, sub: `متبقي ${fmtMoney(custDlStats.expiredAmt)}`, go: "navigate('customers/deadlines')" });
+            if (canChkV && overdueChecks.length > 0) alerts.push({ sev: 1, cls: 'bg-rose-50 border-rose-300 text-rose-800', ic: 'fa-money-check-dollar text-rose-600', title: `${overdueChecks.length} شيك متأخر السداد`, sub: fmtMoney(sumAmt(overdueChecks)), go: "navigate('checks')" });
+            if (canDebtV && overdueDebts.length > 0) alerts.push({ sev: 1, cls: 'bg-rose-50 border-rose-300 text-rose-800', ic: 'fa-scale-balanced text-rose-600', title: `${overdueDebts.length} مديونية متأخرة تحتاج تحصيل`, sub: fmtMoney(r2(overdueDebts.reduce((a, d) => a + debtRemaining(d), 0))), go: "navigate('debts')" });
+            if (canCustV && custDlStats.today > 0) alerts.push({ sev: 2, cls: 'bg-orange-50 border-orange-300 text-orange-800', ic: 'fa-bolt text-orange-600', title: `${custDlStats.today} فاتورة عملاء تنتهي اليوم`, sub: `متبقي ${fmtMoney(custDlStats.todayAmt)}`, go: "navigate('customers/deadlines')" });
+            if (canChkV && dueTodayChecks.length > 0) alerts.push({ sev: 2, cls: 'bg-orange-50 border-orange-300 text-orange-800', ic: 'fa-calendar-day text-orange-600', title: `${dueTodayChecks.length} شيك مستحق اليوم`, sub: fmtMoney(sumAmt(dueTodayChecks)), go: "navigate('checks')" });
+            if (canExpV && typeof canExpApprove === 'function' && canExpApprove() && pendingExp.length > 0) alerts.push({ sev: 2, cls: 'bg-amber-50 border-amber-300 text-amber-900', ic: 'fa-file-signature text-amber-600', title: `${pendingExp.length} طلب صرف بانتظار الاعتماد`, sub: fmtMoney(r2(pendingExp.reduce((a, e) => a + numOr0(e.amount), 0))), go: "navigate('expenses')" });
+            if (canCmpM && openComplaints.length > 0) alerts.push({ sev: 2, cls: 'bg-violet-50 border-violet-300 text-violet-900', ic: 'fa-clipboard-check text-violet-600', title: `${openComplaints.length} شكوى مفتوحة بانتظار الرد`, sub: 'قسم الشكاوي والتقييم', go: "navigate('complaints')" });
+            if (canComp && s.expiring > 0) alerts.push({ sev: 3, cls: 'bg-amber-50 border-amber-200 text-amber-800', ic: 'fa-hourglass-half text-amber-600', title: `${s.expiring} لستة مصانع قريبة الانتهاء`, sub: `خلال ${expiryDays()} يوم`, go: "navigate('lists')" });
+            if (canOrdV) {
+                const stuckOrders = allOrders.filter(o => {
+                    if (!['loading', 'transit'].includes(o.status)) return false;
+                    const since = stageValueOf(o, o.status) || orderDateOf(o);
+                    const age = since ? daysBetween(since, today) : 0;
+                    return age >= 7;
+                });
+                if (stuckOrders.length) alerts.push({ sev: 2, cls: 'bg-sky-50 border-sky-300 text-sky-900', ic: 'fa-truck-fast text-sky-600', title: `${stuckOrders.length} طلبية مصانع عالقة (+7 أيام)`, sub: 'تحتاج متابعة تسليم', go: "navigate('orders')" });
+            }
+            alerts.sort((a, b) => a.sev - b.sev);
+
+            const alertsStripHtml = alerts.length ? `
+                <section class="dcard border-r-4 border-r-rose-500 space-y-2.5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="font-black text-sm text-slate-900 flex items-center gap-2"><i class="fa-solid fa-bell-concierge text-rose-600"></i>غرفة المتابعة العاجلة والأولويات</h3>
+                        <span class="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-rose-100 text-rose-700">${alerts.length} بند يحتاج انتباهك</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        ${alerts.slice(0, 6).map(a => `<button type="button" onclick="${a.go}" class="text-start rounded-xl border ${a.cls} px-3 py-2 flex items-center gap-2.5 hover:shadow-sm transition cursor-pointer">
+                            <i class="fa-solid ${a.ic} text-base shrink-0"></i>
+                            <span class="min-w-0 flex-1">
+                                <b class="block text-xs font-extrabold truncate">${esc(a.title)}</b>
+                                <span class="block text-[11px] opacity-80 truncate">${esc(a.sub)}</span>
+                            </span>
+                            <i class="fa-solid fa-chevron-left text-[10px] opacity-60 shrink-0"></i>
+                        </button>`).join('')}
+                    </div>
+                </section>` : `
+                <div class="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-4 py-2.5 flex items-center justify-between gap-2 text-xs font-extrabold text-emerald-800">
+                    <span><i class="fa-solid fa-circle-check text-emerald-600 me-1.5"></i>الوضع التشغيلي مستقر — لا توجد استحقاقات متأخرة أو موافقات عاجلة الآن</span>
+                    <span class="text-[11px] opacity-75">${esc(fmtDateAr(today))}</span>
                 </div>`;
 
-            const maxTotal = Math.max(1, ...s.perCompany.map(x => x.total));
-            const companyBars = s.perCompany.slice(0, 8).map(x => `
-                <div class="flex items-center gap-3">
-                    ${companyLogoHtml(x.c, 'w-9 h-9 text-xs')}
-                    <div class="flex-1 min-w-0">
-                        <div class="flex justify-between text-xs mb-1 gap-2">
-                            <span class="font-semibold truncate">${esc(x.c.name)}</span>
-                            <span class="text-slate-500 whitespace-nowrap">${x.total} لستة · ${x.active} نشطة</span>
-                        </div>
-                        <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
-                            <div class="h-full bg-brand-500 rounded-full" style="width:${(x.total / maxTotal) * 100}%"></div>
-                        </div>
+            // ---- 2) Executive KPI Grid ----
+            const kpiCard = (label, value, sub, icon, color, go) => `
+                <button type="button" onclick="${go}" class="dkpi" style="--dc:${color}">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[11px] font-extrabold text-slate-500 truncate">${label}</span>
+                        <span class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background:${color}1a;color:${color}"><i class="fa-solid ${icon} text-xs"></i></span>
                     </div>
-                </div>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا توجد شركات بعد</p>';
+                    <p class="text-lg sm:text-xl font-black text-slate-900 dkpi-num mt-1.5 truncate">${value}</p>
+                    <p class="text-[11px] font-semibold text-slate-500 mt-1 truncate">${sub}</p>
+                </button>`;
 
-            const effCompanies = s.perCompany.filter(x => x.total > 0).sort((a, b) => b.eff - a.eff).slice(0, 8);
-            const effBars = App.Charts.hbars(effCompanies.map(x => ({ label: x.c.name, value: +x.eff.toFixed(2), display: x.eff.toFixed(2) + '%' })));
+            const kpiCards = [
+                canCustV ? kpiCard(`مبيعات طلبيات العملاء (${dashPeriodLabel()})`, fmtMoney(custSales), `${fmtNumber(perCust.length, 0)} فاتورة · تحصيل ${custColPct}% (${fmtMoney(custPaid)})`, 'fa-file-invoice-dollar', '#0284c7', "navigate('customers')") : '',
+                canCustV ? kpiCard('المتبقي عند العملاء (الإجمالي)', fmtMoney(custRemAll), `${undeliveredCust.length} لم تُسلم · ${custDlStats.expired} منتهي الموعد`, 'fa-hand-holding-dollar', custRemAll > 0 ? '#e11d48' : '#059669', "navigate('customers/deadlines')") : '',
+                canDebtV ? kpiCard('المديونيات والتحصيل', fmtMoney(debtsRemTotal), `${activeDebts.length} مفتوحة · محصّل ${fmtMoney(debtsPaidTotal)}`, 'fa-scale-balanced', '#d97706', "navigate('debts')") : '',
+                canChkV ? kpiCard('الشيكات المفتوحة', fmtMoney(sumAmt(openChecks)), `${openChecks.length} شيك · ${overdueChecks.length ? overdueChecks.length + ' متأخر' : 'بدون متأخرات'}`, 'fa-money-check-dollar', overdueChecks.length ? '#e11d48' : '#b45309', "navigate('checks')") : '',
+                canExpV ? kpiCard(`المصروفات (${dashPeriodLabel()})`, fmtMoney(expTotalPeriod), `${pendingExp.length} طلب معلّق للاعتماد`, 'fa-receipt', '#7c3aed', "navigate('expenses')") : '',
+                (canOrdV || canShipV) ? kpiCard('الشحن وطلبيات المصانع', `${canOrdV ? activeOrders.length + ' طلبية' : ''}${canOrdV && canShipV ? ' · ' : ''}${canShipV ? shipTodayList.length + ' شحنة' : ''}`, `${todayOrders.length ? todayOrders.length + ' مجدولة اليوم · ' : ''}متابعة التشغيل اليومي`, 'fa-truck-fast', '#059669', canShipV ? "navigate('shipping')" : "navigate('orders')") : '',
+                canComp ? kpiCard('المصانع واللستات', `${s.companies} مصنع · ${s.active} نشطة`, `${s.expiring} قريبة الانتهاء · ${s.expired} منتهية`, 'fa-industry', '#475569', "navigate('companies')") : ''
+            ].filter(Boolean);
 
-            // orders of the last 6 months (count, or net value when prices are visible)
-            const nowD = new Date();
-            const months = Array.from({ length: 6 }, (_, i) => {
-                const d = new Date(nowD.getFullYear(), nowD.getMonth() - (5 - i), 1);
-                const key = d.getFullYear() + '-' + pad2(d.getMonth() + 1);
-                const rows = orders.filter(o => String(orderDateOf(o) || '').startsWith(key));
-                const val = canOrd('prices') ? rows.reduce((a, o) => a + (orderTotals(o).net || 0), 0) : rows.length;
-                return { label: d.toLocaleDateString('ar-EG', { month: 'short' }), value: Math.round(val * 100) / 100, display: canOrd('prices') ? fmtMoney(val) : String(rows.length) };
-            });
-            const ordersChart = orders.length
-                ? App.Charts.bars(months)
-                : '<div class="app-empty"><i class="fa-solid fa-truck-ramp-box"></i><b>لا توجد طلبيات بعد</b></div>';
-
-            const expRows = s.expItems.slice(0, 8).map(({ c, l, days }) => `
-                <button type="button" onclick="navigate('companies/${esc(c.id)}')" class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg hover:bg-amber-50 text-start">
-                    <span class="min-w-0 flex items-center gap-3">
-                        ${companyLogoHtml(c, 'w-8 h-8 text-xs')}
-                        <span class="min-w-0">
-                            <span class="block text-sm font-bold truncate">${esc(l.name)}</span>
-                            <span class="block text-xs text-slate-500 truncate">${esc(c.name)}</span>
-                        </span>
-                    </span>
-                    <span class="text-xs font-semibold text-amber-700 whitespace-nowrap">${days === 0 ? 'تنتهي اليوم' : `خلال ${days} يوم`}</span>
-                </button>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا توجد لستات قريبة الانتهاء</p>';
-
-            const logRows = appData.logs.slice(0, 8).map(lg => `
-                <div class="timeline-item"><span class="timeline-dot"></span>
-                    <div class="timeline-body">
-                        <p><b>${esc(lg.user)}</b> · ${esc(lg.action)}${lg.detail ? ` <span class="text-slate-500">(${esc(lg.detail)})</span>` : ''}</p>
-                        <time>${fmtDateTime(lg.t)}</time>
-                    </div>
-                </div>`).join('') || '<p class="text-sm text-slate-400 text-center py-6">لا يوجد نشاط بعد</p>';
-
-            // ---- 6.0: morning briefing + 12-week activity heatmap ----
-            const today0 = todayISO();
-            const hourNow = new Date().getHours();
-            const greet = hourNow >= 5 && hourNow < 12 ? 'صباح الخير' : (hourNow >= 12 && hourNow < 18 ? 'أهلاً بيك' : 'مساء الخير');
-            const morning = [];
-            if (can('checks.view')) {
-                const dueToday = checks.filter(c => isOpen(c) && c.dueDate === today0);
-                if (dueToday.length) morning.push({ icon: 'fa-money-check-dollar', color: '#b45309', text: `${dueToday.length} شيك مستحق النهاردة — ${fmtMoney(sumAmt(dueToday))}`, go: "navigate('checks')" });
-                if (overdueChecks.length) morning.push({ icon: 'fa-triangle-exclamation', color: '#e11d48', text: `${overdueChecks.length} شيك متأخر محتاج متابعة`, go: "navigate('checks')" });
-            }
-            if (can('orders.view')) {
-                const todayOrders = orders.filter(o => orderDateOf(o) === today0 && !['delivered', 'cancelled'].includes(o.status));
-                if (todayOrders.length) morning.push({ icon: 'fa-truck-fast', color: '#0284c7', text: `${todayOrders.length} طلبية مجدولة النهاردة`, go: "navigate('orders')" });
-            }
-            if (can('custorders.view') && undelivered.length) morning.push({ icon: 'fa-box-open', color: '#7c3aed', text: `${undelivered.length} طلبية عميل لسه ما اتسلمتش`, go: "navigate('customers')" });
-            if (s.expiring) morning.push({ icon: 'fa-hourglass-half', color: '#d97706', text: `${s.expiring} لستة قربت تنتهي`, go: "navigate('lists')" });
-            const morningHtml = `<section class="app-card morning-card mb-4">
-                    <div class="flex flex-wrap items-center gap-3">
-                        <span class="kpi-icon" style="width:2.6rem;height:2.6rem;background:rgb(var(--accent)/.18);color:#b45309"><i class="fa-solid fa-mug-hot"></i></span>
-                        <div class="min-w-0 flex-1"><h3 class="font-extrabold">${greet}، ${esc(u?.name || '')} — ده ملخص يومك</h3>
-                        <p class="text-[11px] text-slate-400">${new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
-                        <span class="app-badge ${morning.length ? 'badge-amber' : 'badge-green'}">${morning.length ? morning.length + ' حاجة محتاجة انتباه' : 'مفيش حاجة مستعجلة'}</span>
-                    </div>
-                    ${morning.length ? `<div class="grid sm:grid-cols-2 gap-2 mt-3">${morning.map(m => `<button type="button" class="insight" onclick="${m.go}"><i class="fa-solid ${m.icon}" style="background:${m.color}22;color:${m.color}"></i><span><b>${esc(m.text)}</b></span></button>`).join('')}</div>` : '<p class="text-xs text-slate-400 mt-2">يومك هادي — مفيش استحقاقات ولا تسليمات مستعجلة النهاردة.</p>'}
-                </section>`;
-            let heatHtml = '';
-            if (can('logs.view')) {
-                const DAYS = 84, counts = new Array(DAYS).fill(0), t0 = new Date(); t0.setHours(0, 0, 0, 0);
-                (appData.logs || []).forEach(l => { const d = new Date(l.t); if (isNaN(d)) return; d.setHours(0, 0, 0, 0); const diff = Math.round((t0 - d) / 864e5); if (diff >= 0 && diff < DAYS) counts[DAYS - 1 - diff]++; });
-                const mx = Math.max(1, ...counts);
-                heatHtml = `<section class="app-card span-12">
-                    <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-fire"></i>خريطة نشاط آخر ١٢ أسبوع</h3><p class="app-card-sub">كل مربع = يوم · اللون الأغمق = حركة أكتر (من سجل النشاط)</p></div>
-                    <span class="text-[10px] text-slate-400 flex items-center gap-1">أقل <span class="heat-cell" data-l="0" style="width:10px;height:10px;display:inline-block"></span><span class="heat-cell" data-l="2" style="width:10px;height:10px;display:inline-block"></span><span class="heat-cell" data-l="4" style="width:10px;height:10px;display:inline-block"></span> أكتر</span></div>
-                    ${App.Charts.heatmap(counts.map(c => Math.ceil((c / mx) * 4)))}
-                </section>`;
-            }
-
-            // ---- 6.0 smart radar: anomalies, overlaps, stuck orders, best discount ----
-            const radar = [];
-            if (can('orders.view')) {
-                for (const o of orders) {
-                    if (!['loading', 'transit'].includes(o.status)) continue;
-                    const since = stageValueOf(o, o.status) || orderDateOf(o);
-                    const age = since ? daysBetween(since, todayISO()) : null;
-                    if (age !== null && age >= 7) radar.push({ icon: 'fa-truck-fast', color: '#e11d48', title: `طلبية ${orderNoLabel(o)} عالقة «${ORDER_STATUS[o.status]}» من ${age} يوم`, sub: orderPartyText(o), go: `navigate('orders/${esc(o.id)}')` });
-                }
-            }
-            if (can('checks.view') && openChecks.length >= 4) {
-                const avg = openChecks.reduce((a, c) => a + (Number(c.amount) || 0), 0) / openChecks.length;
-                for (const c of openChecks) if ((Number(c.amount) || 0) > avg * 2.5) radar.push({ icon: 'fa-money-check-dollar', color: '#b45309', title: `مبلغ شاذ: شيك ${esc(c.number || '')} بـ ${fmtMoney(Number(c.amount) || 0)}`, sub: 'أكتر من ضعفين ونص متوسط الشيكات المفتوحة', go: "navigate('checks')" });
-            }
-            if (can('lists.view')) {
-                for (const co of appData.companies) {
-                    const act = co.lists.filter(l => listState(l).active);
-                    for (let i = 0; i < act.length; i++) for (let j = i + 1; j < act.length; j++) {
-                        const a = act[i], b = act[j];
-                        const overlap = (!a.endDate || !b.startDate || a.endDate >= b.startDate) && (!b.endDate || !a.startDate || b.endDate >= a.startDate);
-                        if (overlap) radar.push({ icon: 'fa-layer-group', color: '#7c3aed', title: `تداخل فترات لستات في ${co.name}`, sub: `«${a.name}» مع «${b.name}» — راجع أنهي لستة شغالة`, go: "navigate('lists')" });
-                    }
-                    for (const l of act) if (!numOr0(l.discount1) && !numOr0(l.discount2) && !numOr0(l.discount3) && effValue(l) === 0) radar.push({ icon: 'fa-percent', color: '#64748b', title: `لستة نشطة من غير أي خصم: «${l.name}»`, sub: co.name, go: "navigate('lists')" });
-                }
-                const effs = s.perCompany.filter(x => x.total > 0 && x.eff > 0).sort((a, b) => b.eff - a.eff);
-                if (effs.length) radar.push({ icon: 'fa-trophy', color: '#059669', title: `أفضل خصم فعلي حالياً: ${effs[0].eff.toFixed(2)}% عند ${effs[0].c.name}`, sub: 'من مساعد قرارات الخصومات', go: "navigate('companies/" + effs[0].c.id + "')" });
-            }
-            const radarHtml = `<section class="app-card span-12">
-                    <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-radar"></i>الرادار الذكي</h3><p class="app-card-sub">شذوذ وتداخلات وفرص — بتتحسب تلقائياً من بياناتك</p></div><span class="app-badge ${radar.length ? 'badge-amber' : 'badge-green'}">${radar.length || 'تمام'}</span></div>
-                    ${radar.length ? `<div class="grid sm:grid-cols-2 xl:grid-cols-3 gap-2">${radar.slice(0, 6).map(x => `<button type="button" class="insight" onclick="${x.go}"><i class="fa-solid ${x.icon}" style="background:${x.color}22;color:${x.color}"></i><span><b>${esc(x.title)}</b><span>${esc(x.sub)}</span></span></button>`).join('')}</div>` : '<div class="app-empty"><i class="fa-solid fa-satellite-dish"></i><b>الرادار هادي — مفيش شذوذ ولا تداخلات</b></div>'}
-                </section>`;
-
-            const insights = [];
-            if (s.expiring) insights.push({ icon: 'fa-hourglass-half', color: '#d97706', title: `${s.expiring} لستة قريبة الانتهاء`, sub: 'راجعها قبل ما تنتهي', go: "navigate('lists')" });
-            if (overdueChecks.length) insights.push({ icon: 'fa-money-check-dollar', color: '#e11d48', title: `${overdueChecks.length} شيك متأخر`, sub: fmtMoney(sumAmt(overdueChecks)), go: "navigate('checks')" });
-            if (activeOrders.length) insights.push({ icon: 'fa-truck-fast', color: '#0284c7', title: `${activeOrders.length} طلبية جارية`, sub: 'محتاجة متابعة', go: "navigate('orders')" });
-            if (undelivered.length) insights.push({ icon: 'fa-box-open', color: '#7c3aed', title: `${undelivered.length} طلبية عميل لم تُسلم`, sub: 'من طلبيات العملاء', go: "navigate('customers')" });
-            const insightsHtml = insights.length
-                ? insights.map(x => `<button type="button" class="insight" onclick="${x.go}"><i class="fa-solid ${x.icon}" style="background:${x.color}22;color:${x.color}"></i><span><b>${esc(x.title)}</b><span>${esc(x.sub)}</span></span></button>`).join('')
-                : '<div class="app-empty"><i class="fa-solid fa-circle-check"></i><b>كله تمام — مفيش تنبيهات دلوقتي</b></div>';
-
-            const quick = [
-                can('companies.manage') ? btn("openCompanyModal()", 'إضافة شركة', 'fa-plus') : '',
-                can('lists.manage') ? btn("openListModal({})", 'إضافة لستة', 'fa-file-circle-plus', BTN_SECONDARY) : '',
-                can('lists.import') ? btn("el('excelFileInput').click()", 'استيراد إكسيل', 'fa-file-import', BTN_SECONDARY) : '',
-                can('lists.export') ? btn("exportAll()", 'تصدير الكل', 'fa-file-excel', BTN_SECONDARY) : '',
-                can('users.manage') ? btn("navigate('users')", 'المستخدمون', 'fa-users-gear', BTN_SECONDARY) : ''
+            // ---- 3) Quick Actions Bar ----
+            const quickActions = [
+                canCust('manage') ? btn("openCustModal()", 'طلبية عميل', 'fa-plus', BTN_PRIMARY + ' !py-1.5 !px-3 !text-xs') : '',
+                can('checks.manage') ? btn("openCheckModal()", 'شيك جديد', 'fa-money-check-dollar', BTN_SECONDARY + ' !py-1.5 !px-3 !text-xs') : '',
+                canShipV ? btn("navigate('shipping')", 'جدول الشحن', 'fa-truck-fast', BTN_SECONDARY + ' !py-1.5 !px-3 !text-xs') : '',
+                (typeof debtCanManage === 'function' && debtCanManage()) ? btn("openDebtModal()", 'تسجيل مديونية', 'fa-scale-balanced', BTN_SECONDARY + ' !py-1.5 !px-3 !text-xs') : '',
+                canExpV ? btn("navigate('expenses')", 'المصروفات', 'fa-receipt', BTN_SECONDARY + ' !py-1.5 !px-3 !text-xs') : '',
+                (can('logs.custorders') || can('logs.view') || canViewAllLogs()) && canCustV ? btn("openCustMyHistoryModal()", 'سجل حركات الفواتير', 'fa-clock-rotate-left', BTN_SECONDARY + ' !py-1.5 !px-3 !text-xs !border-amber-300 !text-amber-800') : ''
             ].filter(Boolean).join('');
 
+            // ---- 4) Active Tab Content (renders ONLY the selected tab -> ultra fast!) ----
+            let tabBody = '';
+
+            if (dashTab === 'exec') {
+                // 6-Month Customer Orders Sales vs Collected
+                const nowD = new Date();
+                const custMonths = Array.from({ length: 6 }, (_, i) => {
+                    const d = new Date(nowD.getFullYear(), nowD.getMonth() - (5 - i), 1);
+                    const key = d.getFullYear() + '-' + pad2(d.getMonth() + 1);
+                    const rows = allCust.filter(c => String(c.date || '').startsWith(key));
+                    const sales = r2(rows.reduce((a, c) => a + numOr0(c.amount), 0));
+                    const paid = r2(rows.reduce((a, c) => a + numOr0(c.paid), 0));
+                    return { lbl: d.toLocaleDateString('ar-EG', { month: 'short' }), sales, paid, count: rows.length };
+                });
+                const maxCustM = Math.max(1, ...custMonths.map(x => Math.max(x.sales, x.paid)));
+
+                const custChartCard = canCustV ? `<section class="dcard lg:col-span-7 space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-chart-column text-brand-600 me-1.5"></i>مبيعات وتحصيل طلبيات العملاء — آخر 6 شهور</h3>
+                            <p class="text-[11px] text-slate-500">مقارنة إجمالي الفواتير مقابل المحصّل الفعلي</p>
+                        </div>
+                        <div class="flex items-center gap-3 text-[11px] font-bold">
+                            <span class="flex items-center gap-1 text-sky-700"><span class="w-2.5 h-2.5 rounded bg-sky-500 inline-block"></span>المبيعات</span>
+                            <span class="flex items-center gap-1 text-emerald-700"><span class="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span>المحصّل</span>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-6 gap-2 items-end h-44 pt-3">
+                        ${custMonths.map(m => {
+                            const hs = m.sales > 0 ? Math.max(6, Math.round((m.sales / maxCustM) * 100)) : 3;
+                            const hp = m.paid > 0 ? Math.max(6, Math.round((m.paid / maxCustM) * 100)) : 3;
+                            const pct = m.sales > 0 ? Math.round((m.paid / m.sales) * 100) : 0;
+                            return `<div class="flex flex-col items-center gap-1 h-full justify-end" title="${m.lbl}: مبيعات ${fmtMoney(m.sales)} | محصّل ${fmtMoney(m.paid)} (${pct}%) — ${m.count} فاتورة">
+                                <span class="text-[10px] font-extrabold text-slate-500 dkpi-num">${m.sales > 0 ? pct + '%' : '—'}</span>
+                                <div class="w-full flex items-end justify-center gap-1 h-28 px-1">
+                                    <div class="w-1/2 rounded-t-md bg-sky-500/85 transition-all" style="height:${hs}%"></div>
+                                    <div class="w-1/2 rounded-t-md bg-emerald-500/85 transition-all" style="height:${hp}%"></div>
+                                </div>
+                                <span class="text-[11px] font-bold text-slate-600">${esc(m.lbl)}</span>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </section>` : '';
+
+                // Customer Delivery & Deadlines Health
+                const totalCustAll = allCust.length || 1;
+                const delivCount = allCust.filter(c => c.delivery === 'تم التسليم').length;
+                const dlCard = canCustV ? `<section class="dcard lg:col-span-5 space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-hourglass-half text-amber-500 me-1.5"></i>حالة التسليم والمواعيد</h3>
+                        <button type="button" onclick="navigate('customers/deadlines')" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">المواعيد ←</button>
+                    </div>
+                    <div class="space-y-2.5 text-xs">
+                        ${[
+                            ['تم التسليم والإغلاق', delivCount, 'bg-emerald-500', 'text-emerald-700'],
+                            ['جارية لم تُسلم (سارية بأمان)', custDlStats.active, 'bg-sky-500', 'text-sky-700'],
+                            ['قريبة الانتهاء (اليوم – 3 أيام)', custDlStats.today + custDlStats.soon, 'bg-amber-500', 'text-amber-700'],
+                            ['منتهية الصلاحية (تحتاج متابعة)', custDlStats.expired, 'bg-rose-600', 'text-rose-700']
+                        ].map(([lbl, cnt, barCls, txtCls]) => {
+                            const pct = Math.round((cnt / totalCustAll) * 100);
+                            return `<div>
+                                <div class="flex justify-between font-bold mb-1"><span class="text-slate-700">${lbl}</span><span class="${txtCls} dkpi-num">${fmtNumber(cnt, 0)} (${pct}%)</span></div>
+                                <div class="h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full ${barCls}" style="width:${pct}%"></div></div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs">
+                        <div class="rounded-xl bg-slate-50 p-2 border border-slate-200/80"><span class="block text-[10px] text-slate-500">محصّل (${dashPeriodLabel()})</span><b class="text-emerald-700 dkpi-num">${fmtMoney(custPaid)}</b></div>
+                        <div class="rounded-xl bg-slate-50 p-2 border border-slate-200/80"><span class="block text-[10px] text-slate-500">متبقي (${dashPeriodLabel()})</span><b class="text-rose-700 dkpi-num">${fmtMoney(custRemPeriod)}</b></div>
+                    </div>
+                </section>` : '';
+
+                // Top Reps Performance Leaderboard
+                let repsCard = '';
+                if (canCustV && (isSystemAdmin() || !visibleRepId())) {
+                    const repMap = new Map();
+                    perCust.forEach(c => {
+                        const k = c.repId || ('__n_' + (c.repName || 'بدون مندوب'));
+                        if (!repMap.has(k)) repMap.set(k, { repId: c.repId || '', name: c.repName || 'بدون مندوب', count: 0, sales: 0, paid: 0, rem: 0, deliv: 0 });
+                        const g = repMap.get(k);
+                        g.count++;
+                        g.sales = r2(g.sales + numOr0(c.amount));
+                        g.paid = r2(g.paid + numOr0(c.paid));
+                        g.rem = r2(g.rem + Math.max(0, custRemaining(c)));
+                        if (c.delivery === 'تم التسليم') g.deliv++;
+                    });
+                    const repsArr = [...repMap.values()].sort((a, b) => b.sales - a.sales).slice(0, 6);
+                    repsCard = `<section class="dcard lg:col-span-7 space-y-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-trophy text-amber-500 me-1.5"></i>أداء المندوبين — ${dashPeriodLabel()}</h3>
+                            <button type="button" onclick="navigate('customers/reports')" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">التقرير الكامل ←</button>
+                        </div>
+                        ${repsArr.length ? `<div class="space-y-2">${repsArr.map((g, idx) => {
+                            const pct = g.sales > 0 ? Math.min(100, Math.round((g.paid / g.sales) * 100)) : 0;
+                            return `<div class="rounded-xl border border-slate-200/90 p-2.5 flex flex-wrap items-center justify-between gap-2 hover:border-brand-300 transition">
+                                <div class="flex items-center gap-2.5 min-w-0">
+                                    <span class="w-6 h-6 rounded-lg ${idx === 0 ? 'bg-amber-500 text-white' : idx === 1 ? 'bg-slate-400 text-white' : 'bg-slate-100 text-slate-600'} text-xs font-black flex items-center justify-center shrink-0">${idx + 1}</span>
+                                    <div class="min-w-0">
+                                        <p class="font-extrabold text-xs text-slate-900 truncate">${esc(g.name)}</p>
+                                        <p class="text-[10px] text-slate-500">${g.count} فاتورة · مُسلّم ${g.deliv} · تحصيل <b class="text-emerald-700">${pct}%</b></p>
+                                    </div>
+                                </div>
+                                <div class="text-end text-xs dkpi-num">
+                                    <b class="block text-slate-900">${fmtMoney(g.sales)}</b>
+                                    <span class="text-[10px] ${g.rem > 0 ? 'text-rose-600 font-bold' : 'text-emerald-600'}">${g.rem > 0 ? 'متبقي ' + fmtMoney(g.rem) : 'مسدد بالكامل'}</span>
+                                </div>
+                            </div>`;
+                        }).join('')}</div>` : '<p class="text-xs text-slate-400 text-center py-6">لا توجد طلبيات في هذه الفترة</p>'}
+                    </section>`;
+                }
+
+                // Today's Shipping Snapshot
+                const shipCard = canShipV ? `<section class="dcard ${repsCard ? 'lg:col-span-5' : 'lg:col-span-12'} space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-truck-fast text-emerald-600 me-1.5"></i>حركة الشحن والنقل اليوم</h3>
+                        <button type="button" onclick="navigate('shipping')" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">فتح جدول الشحن ←</button>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-center">
+                        ${(SHIP_STAGES || []).map(([k, lbl, col]) => `
+                            <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                                <span class="block text-[11px] font-bold text-slate-500">${esc(lbl)}</span>
+                                <b class="block text-lg font-black text-slate-900 dkpi-num mt-0.5">${shipStageCounts[k] || 0}</b>
+                            </div>`).join('')}
+                        <div class="rounded-xl border border-brand-200 bg-brand-50/60 p-2.5">
+                            <span class="block text-[11px] font-bold text-brand-700">إجمالي اليوم</span>
+                            <b class="block text-lg font-black text-brand-800 dkpi-num mt-0.5">${shipTodayList.length}</b>
+                        </div>
+                    </div>
+                </section>` : '';
+
+                tabBody = `<div class="grid grid-cols-1 lg:grid-cols-12 gap-4">${custChartCard}${dlCard}${repsCard}${shipCard}</div>`;
+                if (!custChartCard && !dlCard && !repsCard && !shipCard) {
+                    tabBody = `<div class="dcard text-center py-10 text-slate-500 text-sm font-bold">اختر تبويباً من الأعلى لعرض مؤشرات الأقسام المصرح لك بها</div>`;
+                }
+            } else if (dashTab === 'finance') {
+                // Tab 2: Checks + Debts + Expenses (strictly non-secret operational commitments; Finance Vaults stay 100% isolated!)
+                const checksCard = canChkV ? `<section class="dcard lg:col-span-6 space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-money-check-dollar text-amber-600 me-1.5"></i>الشيكات المتأخرة والمستحقة خلال 7 أيام</h3>
+                        <button type="button" onclick="navigate('checks')" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">كل الشيكات ←</button>
+                    </div>
+                    ${(overdueChecks.length || dueTodayChecks.length || upcoming7Checks.length) ? `<div class="space-y-1.5 max-h-72 overflow-y-auto">${[...overdueChecks, ...dueTodayChecks, ...upcoming7Checks].slice(0, 10).map(c => {
+                        const ov = isOverdue(c);
+                        const isTd = c.dueDate === today;
+                        return `<button type="button" onclick="navigate('checks')" class="w-full text-start rounded-xl border ${ov ? 'border-rose-200 bg-rose-50/60' : isTd ? 'border-orange-200 bg-orange-50/60' : 'border-slate-200 bg-slate-50/60'} px-3 py-2 flex items-center justify-between gap-2 text-xs cursor-pointer">
+                            <div class="min-w-0">
+                                <b class="block text-slate-900 truncate">${esc(c.partnerName || c.payee || c.bank || 'شيك')} <span class="font-mono text-slate-500">${c.number ? '#' + esc(c.number) : ''}</span></b>
+                                <span class="text-[11px] ${ov ? 'text-rose-700 font-bold' : isTd ? 'text-orange-700 font-bold' : 'text-slate-500'}">${ov ? 'متأخر — ' : isTd ? 'مستحق اليوم — ' : 'استحقاق: '}${esc(fmtDateAr(c.dueDate) || '—')}</span>
+                            </div>
+                            <b class="dkpi-num shrink-0 ${ov ? 'text-rose-700' : 'text-slate-900'}">${fmtMoney(numOr0(c.amount))}</b>
+                        </button>`;
+                    }).join('')}</div>` : '<p class="text-xs text-slate-400 text-center py-6">لا توجد شيكات متأخرة أو مستحقة خلال 7 أيام</p>'}
+                </section>` : '';
+
+                const debtsCard = canDebtV ? `<section class="dcard lg:col-span-6 space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-scale-balanced text-rose-600 me-1.5"></i>أعلى المديونيات المفتوحة والمتأخرة</h3>
+                        <button type="button" onclick="navigate('debts')" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">قسم المديونيات ←</button>
+                    </div>
+                    ${activeDebts.length ? `<div class="space-y-1.5 max-h-72 overflow-y-auto">${activeDebts.slice().sort((a, b) => debtRemaining(b) - debtRemaining(a)).slice(0, 8).map(d => {
+                        const st = typeof debtStageInfo === 'function' ? debtStageInfo(d.stage) : ['', 'متابعة', 'slate'];
+                        const ovD = typeof debtDaysOverdue === 'function' ? debtDaysOverdue(d) : 0;
+                        return `<button type="button" onclick="navigate('debts')" class="w-full text-start rounded-xl border ${ovD > 0 ? 'border-rose-200 bg-rose-50/40' : 'border-slate-200 bg-slate-50/60'} px-3 py-2 flex items-center justify-between gap-2 text-xs cursor-pointer">
+                            <div class="min-w-0">
+                                <b class="block text-slate-900 truncate">${esc(d.customerName || d.customer || '—')}</b>
+                                <span class="text-[11px] text-slate-500">${esc(st[1] || '')}${ovD > 0 ? ` · <b class="text-rose-700">متأخر ${ovD} يوم</b>` : ''}</span>
+                            </div>
+                            <b class="dkpi-num text-rose-700 shrink-0">${fmtMoney(debtRemaining(d))}</b>
+                        </button>`;
+                    }).join('')}</div>` : '<p class="text-xs text-slate-400 text-center py-6">لا توجد مديونيات مفتوحة حالياً</p>'}
+                </section>` : '';
+
+                const expCard = canExpV ? `<section class="dcard lg:col-span-12 space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-receipt text-violet-600 me-1.5"></i>طلبات الصرف والمصروفات المعلّقة (${pendingExp.length})</h3>
+                        <button type="button" onclick="navigate('expenses')" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">إدارة المصروفات ←</button>
+                    </div>
+                    ${pendingExp.length ? `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">${pendingExp.slice(0, 6).map(e => `
+                        <button type="button" onclick="navigate('expenses')" class="text-start rounded-xl border border-amber-200 bg-amber-50/50 p-3 flex items-center justify-between gap-2 text-xs cursor-pointer hover:bg-amber-50">
+                            <div class="min-w-0">
+                                <b class="block text-slate-900 truncate">${esc(e.title || e.category || 'طلب صرف')}</b>
+                                <span class="text-[11px] text-slate-500 truncate block">${esc(e.requesterName || e.payee || '—')} · ${esc(fmtDateAr(String(e.createdAt || '').slice(0, 10)))}</span>
+                            </div>
+                            <b class="dkpi-num text-amber-800 shrink-0">${fmtMoney(numOr0(e.amount))}</b>
+                        </button>`).join('')}</div>` : '<p class="text-xs text-slate-400 text-center py-5">لا توجد طلبات صرف معلقة للاعتماد حالياً</p>'}
+                </section>` : '';
+
+                tabBody = `<div class="grid grid-cols-1 lg:grid-cols-12 gap-4">${checksCard}${debtsCard}${expCard}</div>`;
+                if (!checksCard && !debtsCard && !expCard) tabBody = '<div class="dcard text-center py-10 text-slate-400 text-sm font-bold">لا توجد صلاحيات لعرض الشيكات أو المديونيات أو المصروفات</div>';
+            } else if (dashTab === 'factories') {
+                // Tab 3: Factories, Lists, Effective Discounts, Factory Orders & Smart Radar
+                const tot = s.totalLists || 1;
+                const p1 = (s.activeOnly / tot) * 100;
+                const p2 = (s.expiring / tot) * 100;
+                const donut = s.totalLists
+                    ? `conic-gradient(#10b981 0 ${p1}%, #f59e0b ${p1}% ${p1 + p2}%, #f43f5e ${p1 + p2}% 100%)`
+                    : 'conic-gradient(#e2e8f0 0 100%)';
+
+                const effCompanies = s.perCompany.filter(x => x.total > 0).sort((a, b) => b.eff - a.eff).slice(0, 8);
+                const effBars = effCompanies.length ? App.Charts.hbars(effCompanies.map(x => ({ label: x.c.name, value: +x.eff.toFixed(2), display: x.eff.toFixed(2) + '%' }))) : '<p class="text-xs text-slate-400 text-center py-6">لا توجد بيانات خصومات بعد</p>';
+
+                const expRows = s.expItems.slice(0, 8).map(({ c, l, days }) => `
+                    <button type="button" onclick="navigate('companies/${esc(c.id)}')" class="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg hover:bg-amber-50 text-start cursor-pointer">
+                        <span class="min-w-0 flex items-center gap-2.5">${companyLogoHtml(c, 'w-7 h-7 text-[10px]')}<span class="min-w-0"><span class="block text-xs font-bold truncate">${esc(l.name)}</span><span class="block text-[11px] text-slate-500 truncate">${esc(c.name)}</span></span></span>
+                        <span class="text-[11px] font-extrabold text-amber-700 whitespace-nowrap">${days === 0 ? 'تنتهي اليوم' : `خلال ${days} يوم`}</span>
+                    </button>`).join('') || '<p class="text-xs text-slate-400 text-center py-6">لا توجد لستات قريبة الانتهاء</p>';
+
+                const nowD = new Date();
+                const ordMonths = Array.from({ length: 6 }, (_, i) => {
+                    const d = new Date(nowD.getFullYear(), nowD.getMonth() - (5 - i), 1);
+                    const key = d.getFullYear() + '-' + pad2(d.getMonth() + 1);
+                    const rows = allOrders.filter(o => String(orderDateOf(o) || '').startsWith(key));
+                    const val = canOrd('prices') ? rows.reduce((a, o) => a + (orderTotals(o).net || 0), 0) : rows.length;
+                    return { label: d.toLocaleDateString('ar-EG', { month: 'short' }), value: r2(val), display: canOrd('prices') ? fmtMoney(val) : String(rows.length) };
+                });
+
+                const radar = [];
+                if (canComp) {
+                    for (const co of (appData.companies || [])) {
+                        const act = (co.lists || []).filter(l => listState(l).active);
+                        for (let i = 0; i < act.length; i++) for (let j = i + 1; j < act.length; j++) {
+                            const a = act[i], b = act[j];
+                            if ((!a.endDate || !b.startDate || a.endDate >= b.startDate) && (!b.endDate || !a.startDate || b.endDate >= a.startDate)) {
+                                radar.push({ ic: 'fa-layer-group text-violet-600', title: `تداخل لستات في ${co.name}`, sub: `«${a.name}» مع «${b.name}»`, go: "navigate('lists')" });
+                            }
+                        }
+                    }
+                    const best = s.perCompany.filter(x => x.total > 0 && x.eff > 0).sort((a, b) => b.eff - a.eff)[0];
+                    if (best) radar.push({ ic: 'fa-trophy text-emerald-600', title: `أفضل خصم فعلي: ${best.eff.toFixed(2)}% عند ${best.c.name}`, sub: 'اضغط لعرض تفاصيل المصنع', go: `navigate('companies/${esc(best.c.id)}')` });
+                }
+
+                tabBody = `<div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                    ${canComp ? `<section class="dcard lg:col-span-5 space-y-3">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-chart-pie text-brand-600 me-1.5"></i>حالة لستات المصانع</h3>
+                        <div class="flex items-center gap-5">
+                            <div class="w-28 h-28 shrink-0 rounded-full relative" style="background:${donut}">
+                                <div class="absolute inset-3.5 bg-white dark:bg-slate-900 rounded-full flex flex-col items-center justify-center"><span class="text-xl font-black">${s.totalLists}</span><span class="text-[10px] text-slate-500">لستة</span></div>
+                            </div>
+                            <ul class="space-y-1.5 text-xs font-bold">
+                                <li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>نشطة: ${s.activeOnly}</li>
+                                <li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-sm bg-amber-500"></span>قريبة الانتهاء: ${s.expiring}</li>
+                                <li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-sm bg-rose-500"></span>منتهية: ${s.expired}</li>
+                            </ul>
+                        </div>
+                    </section>
+                    <section class="dcard lg:col-span-7 space-y-2.5">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-percent text-emerald-600 me-1.5"></i>أفضل الخصومات الفعلية لكل مصنع</h3>
+                        ${effBars}
+                    </section>
+                    <section class="dcard lg:col-span-6 space-y-2">
+                        <div class="flex items-center justify-between"><h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-triangle-exclamation text-amber-500 me-1.5"></i>لستات قريبة الانتهاء</h3><span class="text-xs font-bold text-amber-700">${s.expItems.length}</span></div>
+                        <div class="divide-y divide-slate-100">${expRows}</div>
+                    </section>` : ''}
+                    ${canOrdV ? `<section class="dcard lg:col-span-6 space-y-2.5">
+                        <div class="flex items-center justify-between"><h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-truck-ramp-box text-sky-600 me-1.5"></i>طلبيات المصانع — آخر 6 شهور</h3><a href="#/orders" class="text-xs font-extrabold text-brand-700 hover:underline">الطلبيات ←</a></div>
+                        ${allOrders.length ? App.Charts.bars(ordMonths) : '<p class="text-xs text-slate-400 text-center py-6">لا توجد طلبيات مصانع بعد</p>'}
+                    </section>` : ''}
+                    ${radar.length ? `<section class="dcard lg:col-span-12 space-y-2">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-satellite-dish text-violet-600 me-1.5"></i>الرادار الذكي للمصانع والخصومات</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-2">${radar.slice(0, 6).map(r => `<button type="button" onclick="${r.go}" class="text-start rounded-xl border border-slate-200 p-2.5 flex items-center gap-2.5 hover:border-brand-300 text-xs cursor-pointer"><i class="fa-solid ${r.ic} text-base"></i><span class="min-w-0"><b class="block truncate">${esc(r.title)}</b><span class="text-[11px] text-slate-500 truncate block">${esc(r.sub)}</span></span></button>`).join('')}</div>
+                    </section>` : ''}
+                </div>`;
+            } else {
+                // Tab 4: Unified Reports Hub + Activity Heatmap + Actionable Latest Activity
+                const canLogs = can('logs.view') || canViewAllLogs();
+                let heatHtml = '';
+                if (canLogs) {
+                    const DAYS = 84, counts = new Array(DAYS).fill(0), t0 = new Date(); t0.setHours(0, 0, 0, 0);
+                    (appData.logs || []).forEach(l => { const d = new Date(l.t); if (isNaN(d)) return; d.setHours(0, 0, 0, 0); const diff = Math.round((t0 - d) / 864e5); if (diff >= 0 && diff < DAYS) counts[DAYS - 1 - diff]++; });
+                    const mx = Math.max(1, ...counts);
+                    heatHtml = `<section class="dcard lg:col-span-12 space-y-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-fire text-amber-500 me-1.5"></i>خريطة النشاط — آخر 12 أسبوع</h3>
+                            <span class="text-[10px] text-slate-400">كل مربع = يوم</span>
+                        </div>
+                        ${App.Charts.heatmap(counts.map(c => Math.ceil((c / mx) * 4)))}
+                    </section>`;
+                }
+
+                const recentLogs = canLogs ? (appData.logs || []).slice(0, 10).map(lg => {
+                    const co = canCustV && typeof custFindOrderFromLog === 'function' ? custFindOrderFromLog(lg) : null;
+                    return `<div class="py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div class="min-w-0">
+                            <p class="text-slate-800"><b>${esc(lg.user)}</b> · <span class="font-bold text-brand-700">${esc(lg.action)}</span>${lg.detail ? ` <span class="text-slate-500">(${esc(lg.detail)})</span>` : ''}</p>
+                            <span class="text-[10px] text-slate-400">${esc(fmtDateTime(lg.t))}</span>
+                        </div>
+                        ${co ? `<button type="button" onclick="openCustDetail('${esc(co.id)}')" class="px-2 py-1 rounded-lg bg-brand-50 text-brand-700 border border-brand-200 text-[11px] font-bold cursor-pointer shrink-0">فتح ${esc(custNoLabel(co))}</button>` : ''}
+                    </div>`;
+                }).join('') : '';
+
+                tabBody = `<div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                    <section class="dcard lg:col-span-12 space-y-3">
+                        <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-file-export text-brand-600 me-1.5"></i>مركز التقارير الموحّد (Excel وطباعة A4)</h3>
+                        <div class="flex flex-wrap gap-2">
+                            ${canCustV ? btn("exportCustOrdersXlsx()", 'تصدير طلبيات العملاء Excel', 'fa-file-excel', BTN_PRIMARY + ' !py-2 !text-xs') : ''}
+                            ${canCustV ? btn("exportCustDeadlinesXlsx()", 'تقرير مواعيد الانتهاء Excel', 'fa-calendar-check', BTN_SECONDARY + ' !py-2 !text-xs') : ''}
+                            ${canComp ? btn("App.Reports.companies()", 'تقرير المصانع والخصومات Excel', 'fa-industry', BTN_SECONDARY + ' !py-2 !text-xs') : ''}
+                            ${canChkV ? btn("navigate('checks/reports')", 'تقارير الشيكات', 'fa-money-check-dollar', BTN_SECONDARY + ' !py-2 !text-xs') : ''}
+                            ${canOrd('reports') ? btn("navigate('orders/reports')", 'تقارير طلبيات المصانع', 'fa-truck-ramp-box', BTN_SECONDARY + ' !py-2 !text-xs') : ''}
+                            ${can('logs.export') ? btn("exportLogsXlsx()", 'تصدير سجل النشاط Excel', 'fa-clock-rotate-left', BTN_SECONDARY + ' !py-2 !text-xs') : ''}
+                            ${can('backup.manage') ? btn("navigate('settings/backup')", 'النسخ الاحتياطي', 'fa-database', BTN_SECONDARY + ' !py-2 !text-xs') : ''}
+                        </div>
+                    </section>
+                    ${heatHtml}
+                    ${canLogs ? `<section class="dcard lg:col-span-12 space-y-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="font-extrabold text-sm text-slate-900"><i class="fa-solid fa-clock-rotate-left text-slate-500 me-1.5"></i>آخر الحركات في النظام</h3>
+                            <a href="#/logs" class="text-xs font-extrabold text-brand-700 hover:underline">سجل النشاط الكامل ←</a>
+                        </div>
+                        <div class="divide-y divide-slate-100">${recentLogs || '<p class="text-xs text-slate-400 text-center py-6">لا توجد حركات مسجلة بعد</p>'}</div>
+                    </section>` : ''}
+                </div>`;
+            }
+
+            // ---- Assemble Full Executive Dashboard ----
+            const periodBtn = (k, lbl) => `<button type="button" onclick="setDashPeriod('${k}')" class="px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ${dashPeriod === k ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'}">${lbl}</button>`;
+            const tabsBar = [
+                ['exec', 'النظرة التنفيذية', 'fa-gauge-high'],
+                ['finance', 'التحصيل والالتزامات', 'fa-hand-holding-dollar'],
+                ['factories', 'المصانع واللستات', 'fa-industry'],
+                ['reports', 'التقارير والنشاط', 'fa-file-export']
+            ];
+
+            return `<div class="space-y-4">
+                <div class="dcard flex flex-wrap items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="text-[11px] font-extrabold text-brand-600">غرفة القيادة والمتابعة التنفيذية</p>
+                        <h1 class="text-lg sm:text-xl font-black text-slate-900 truncate">${greet}، ${esc(u?.name || '')}</h1>
+                        <p class="text-xs text-slate-500">${new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · اضغط <b>Ctrl+K</b> للبحث السريع</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <div class="inline-flex items-center gap-0.5 p-1 rounded-xl bg-slate-100 border border-slate-200">
+                            ${periodBtn('today', 'اليوم')}
+                            ${periodBtn('week', 'أسبوع')}
+                            ${periodBtn('month', 'الشهر')}
+                            ${periodBtn('all', 'الكل')}
+                        </div>
+                    </div>
+                </div>
+
+                ${quickActions ? `<div class="flex flex-wrap gap-2">${quickActions}</div>` : ''}
+
+                ${alertsStripHtml}
+
+                ${kpiCards.length ? `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">${kpiCards.join('')}</div>` : ''}
+
+                <div class="dtabs">
+                    ${tabsBar.map(([k, lbl, ic]) => `<button type="button" onclick="setDashTab('${k}')" class="dtab ${dashTab === k ? 'on' : ''}"><i class="fa-solid ${ic}"></i><span>${lbl}</span></button>`).join('')}
+                </div>
+
+                ${tabBody}
+            </div>`;
+        }
+
+        function viewDashboard() {
+            // Ensure lightweight live listeners for operational modules are awake when visiting Command Center
+            try { if (typeof debtStart === 'function') debtStart(); } catch (e) {}
+            try { if (typeof expStart === 'function') expStart(); } catch (e) {}
+            try { if (typeof cmpCanManage === 'function' && cmpCanManage() && typeof cmpStart === 'function') cmpStart(); } catch (e) {}
+            try { if (can('shipping.view') && typeof shipEnsureSubs === 'function') shipEnsureSubs(); } catch (e) {}
             return {
                 title: 'لوحة التحكم',
                 actions: '',
-                html: `
-                    <div class="page-enter">
-                    <div class="dash-head">
-                        <div>
-                            <p class="dash-eyebrow">نظرة عامة</p>
-                            <h1 class="dash-title">مرحباً، ${esc(u?.name || '')}</h1>
-                            <p class="dash-sub">${new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · اضغط <b>Ctrl+K</b> للبحث السريع في أي حاجة</p>
-                        </div>
-                        <div class="flex flex-wrap gap-2">${quick}</div>
-                    </div>
-
-                    ${morningHtml}
-
-                    <div class="kpi-grid stagger">
-                        ${kpi('المصانع / الشركات', s.companies, 'fa-industry', '#0284c7')}
-                        ${kpi('إجمالي اللستات', s.totalLists, 'fa-file-invoice-dollar', '#7c3aed', `${s.active} نشطة`)}
-                        ${kpi('قريبة الانتهاء', s.expiring, 'fa-hourglass-half', '#d97706', `خلال ${expiryDays()} يوم`)}
-                        ${kpi('منتهية', s.expired, 'fa-circle-xmark', '#e11d48')}
-                        ${can('orders.view') ? kpi('طلبيات جارية', activeOrders.length, 'fa-truck-fast', '#059669', `من ${orders.length} طلبية`) : ''}
-                        ${can('checks.view') ? kpi('شيكات مفتوحة', openChecks.length, 'fa-money-check-dollar', '#b45309', fmtMoney(sumAmt(openChecks))) : ''}
-                    </div>
-
-                    <div class="dash-grid mt-4">
-                        <section class="app-card span-4">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-chart-pie"></i>حالة اللستات</h3></div></div>
-                            <div class="flex items-center gap-5">
-                                <div class="w-32 h-32 shrink-0 rounded-full relative" style="background:${donut}">
-                                    <div class="absolute inset-4 bg-white rounded-full flex flex-col items-center justify-center">
-                                        <span class="text-2xl font-extrabold">${s.totalLists}</span>
-                                        <span class="text-[11px] text-slate-500">لستة</span>
-                                    </div>
-                                </div>
-                                <ul class="space-y-2 text-sm min-w-0">
-                                    <li class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm bg-emerald-500"></span> نشطة: <b>${s.activeOnly}</b></li>
-                                    <li class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm bg-amber-500"></span> قريبة الانتهاء: <b>${s.expiring}</b></li>
-                                    <li class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm bg-rose-500"></span> منتهية: <b>${s.expired}</b></li>
-                                </ul>
-                            </div>
-                        </section>
-
-                        <section class="app-card span-8">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-building"></i>اللستات لكل شركة</h3></div></div>
-                            <div class="space-y-3">${companyBars}</div>
-                        </section>
-
-                        ${can('orders.view') ? `<section class="app-card span-8">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-chart-column"></i>${canOrd('prices') ? 'قيمة الطلبيات — آخر ٦ شهور' : 'الطلبيات — آخر ٦ شهور'}</h3><p class="app-card-sub">حسب تاريخ الجدولة</p></div><a class="app-link" href="#/orders">كل الطلبيات</a></div>
-                            ${ordersChart}
-                        </section>` : ''}
-
-                        <section class="app-card ${can('orders.view') ? 'span-4' : 'span-12'}">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-lightbulb"></i>تنبيهات ذكية</h3></div></div>
-                            <div class="grid gap-2">${insightsHtml}</div>
-                        </section>
-                        ${radarHtml}
-
-                        <section class="app-card span-12">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-file-export"></i>مركز التقارير</h3><p class="app-card-sub">تقارير جاهزة بضغطة — Excel منسق باتجاه عربي وعناوين واضحة</p></div></div>
-                            <div class="flex flex-wrap gap-2">
-                                ${(can('lists.view') || can('companies.view')) ? `<button type="button" class="app-btn app-btn-primary" onclick="App.Reports.companies()"><i class="fa-solid fa-file-excel"></i> تقرير المصانع والخصومات</button>` : ''}
-                                ${can('checks.view') ? `<button type="button" class="app-btn" onclick="navigate('checks/reports')"><i class="fa-solid fa-money-check-dollar"></i> تقارير الشيكات</button>` : ''}
-                                ${canOrd('reports') ? `<button type="button" class="app-btn" onclick="navigate('orders/reports')"><i class="fa-solid fa-truck-ramp-box"></i> تقارير الطلبيات</button>` : ''}
-                                ${can('backup.manage') ? `<button type="button" class="app-btn" onclick="navigate('settings/backup')"><i class="fa-solid fa-database"></i> النسخ الاحتياطي</button>` : ''}
-                            </div>
-                        </section>
-
-                        <section class="app-card span-6">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-triangle-exclamation"></i>لستات قريبة الانتهاء</h3></div><span class="app-badge badge-amber">${s.expItems.length} لستة</span></div>
-                            <div class="divide-y divide-slate-100">${expRows}</div>
-                        </section>
-
-                        <section class="app-card span-6">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-percent"></i>متوسط الخصم الفعلي لكل شركة</h3></div></div>
-                            ${effBars || '<p class="text-sm text-slate-400 text-center py-6">لا توجد بيانات خصومات بعد</p>'}
-                        </section>
-
-                        ${heatHtml}
-
-                        ${can('logs.view') ? `
-                        <section class="app-card span-12">
-                            <div class="app-card-head"><div><h3 class="app-card-title"><i class="fa-solid fa-clock-rotate-left"></i>آخر النشاطات</h3></div><a href="#/logs" class="app-link">عرض الكل</a></div>
-                            <div class="timeline">${logRows}</div>
-                        </section>` : ''}
-                    </div>
-                    </div>
-                `
+                html: `<div id="dashRoot" class="page-enter">${dashInnerHtml()}</div>`
             };
         }
 
@@ -23398,5 +23703,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a77afb8f35412',t:'MTc5NTg4MDM4OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a77afb8f35412',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a9adecaab8137',t:'MTc5NTg4MTgzMA=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a9adecaab8137',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
