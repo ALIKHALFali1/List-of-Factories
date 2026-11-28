@@ -547,6 +547,63 @@
         html[data-theme="dark"] .text-violet-700 {color:rgb(221 214 254)!important}
         html[data-theme="dark"] .text-violet-800 {color:rgb(237 233 254)!important}
         html[data-theme="dark"] .text-violet-900 {color:rgb(245 243 255)!important}
+
+        /* Compact Customer Orders Table + Sticky Top Horizontal Navigator */
+        .cust-sticky-bar {
+            position: sticky;
+            top: 3.5rem;
+            z-index: 20;
+            background: rgba(248, 250, 252, 0.96);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid #cbd5e1;
+        }
+        @media (min-width: 640px) { .cust-sticky-bar { top: 4rem; } }
+        html[data-theme="dark"] .cust-sticky-bar {
+            background: rgba(15, 23, 42, 0.96);
+            border-bottom-color: #334155;
+        }
+        .cust-top-scroll {
+            overflow-x: auto;
+            overflow-y: hidden;
+            height: 14px;
+            scrollbar-width: thin;
+            scrollbar-color: #94a3b8 transparent;
+        }
+        .cust-top-scroll::-webkit-scrollbar { height: 10px; }
+        .cust-top-scroll::-webkit-scrollbar-track { background: rgba(148,163,184,.16); border-radius: 999px; }
+        .cust-top-scroll::-webkit-scrollbar-thumb { background: #64748b; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+        .cust-top-scroll::-webkit-scrollbar-thumb:hover { background: #334155; background-clip: content-box; }
+        .cust-tbl-scroll { overflow-x: auto; scroll-behavior: auto; cursor: grab; }
+        .cust-tbl-scroll.is-grabbing { cursor: grabbing; user-select: none; }
+        .cust-tbl-sm { font-size: 11px; line-height: 1.25; }
+        .cust-tbl-sm th, .cust-tbl-sm td { padding: 5px 6px !important; }
+        .cust-tbl-md { font-size: 12px; line-height: 1.3; }
+        .cust-tbl-md th, .cust-tbl-md td { padding: 7px 8px !important; }
+        .cust-tbl-lg { font-size: 13.5px; line-height: 1.4; }
+        .cust-tbl-lg th, .cust-tbl-lg td { padding: 10px 10px !important; }
+        .cust-sticky-act {
+            position: sticky;
+            left: 0;
+            background: #ffffff;
+            box-shadow: 6px 0 10px -8px rgba(15, 23, 42, 0.22);
+            z-index: 2;
+        }
+        thead .cust-sticky-act { background: #f8fafc; z-index: 3; }
+        tr:hover .cust-sticky-act { background: #f8fafc; }
+        html[data-theme="dark"] .cust-sticky-act { background: #0f172a; box-shadow: 6px 0 12px -6px rgba(0, 0, 0, 0.55); }
+        html[data-theme="dark"] thead .cust-sticky-act,
+        html[data-theme="dark"] tr:hover .cust-sticky-act { background: #1e293b; }
+        .cust-nav-btn {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 4px 9px; border-radius: 8px; font-size: 11px; font-weight: 800;
+            border: 1px solid #cbd5e1; background: #ffffff; color: #334155;
+            cursor: pointer; transition: all .15s ease; white-space: nowrap;
+        }
+        .cust-nav-btn:hover:not(:disabled) { border-color: #0284c7; color: #0369a1; background: #f0f9ff; }
+        .cust-nav-btn:active:not(:disabled) { transform: scale(.97); }
+        .cust-nav-btn:disabled { opacity: .4; cursor: not-allowed; }
+        html[data-theme="dark"] .cust-nav-btn { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+        html[data-theme="dark"] .cust-nav-btn:hover:not(:disabled) { border-color: #38bdf8; color: #7dd3fc; background: #0f172a; }
     </style>
 </head>
 <body class="text-slate-800 min-h-screen">
@@ -8340,40 +8397,197 @@
             </div>`;
         }
 
-        const custDeliveryBadge = c => `<span class="px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${CUST_DELIVERY_CLS[c.delivery] || ''}">${esc(c.delivery || '—')}</span>`;
+        const custDeliveryBadge = c => `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap ${CUST_DELIVERY_CLS[c.delivery] || ''}">${esc(c.delivery || '—')}</span>`;
 
-        function custDeliverBtnHtml(c) {
+        function custDeliverBtnHtml(c, compact = false) {
             if (!canCust('manage')) return '';
             if (c.delivery === 'ملغي' || c.delivery === 'مرتجع') return '';
             const id = esc(c.id);
             const rem = r2(Math.max(0, custRemaining(c)));
             const isDelivered = c.delivery === 'تم التسليم';
+            const hCls = compact ? 'h-7 px-2 text-[11px]' : 'h-8 px-2.5 text-xs';
+            const icCls = compact ? 'w-7 h-7 inline-flex items-center justify-center rounded-lg text-xs' : BTN_ICON;
             if (isDelivered && rem <= 0) {
                 const stamp = c.deliveredAt ? ` (${fmtDateTime(c.deliveredAt)}${c.deliveredBy ? ' — ' + c.deliveredBy : ''})` : '';
-                return `<span title="تم التسليم وإغلاق الفاتورة بالكامل${esc(stamp)}" aria-label="تم التسليم" class="${BTN_ICON} text-emerald-600 bg-emerald-50/80 border border-emerald-200/70 cursor-default"><i class="fa-solid fa-circle-check"></i></span>`;
+                return `<span title="تم التسليم وإغلاق الفاتورة بالكامل${esc(stamp)}" aria-label="تم التسليم" class="${icCls} text-emerald-600 bg-emerald-50/80 border border-emerald-200/70 cursor-default"><i class="fa-solid fa-circle-check"></i></span>`;
             }
             if (isDelivered && rem > 0) {
-                return `<button type="button" onclick="openCustDeliverModal('${id}')" title="تحصيل الباقي وإغلاق الفاتورة نهائياً (${esc(fmtMoney(rem))})" aria-label="تحصيل الباقي وإغلاق الفاتورة" class="inline-flex items-center gap-1 px-2 h-8 rounded-lg text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-hand-holding-dollar"></i><span>تحصيل الباقي</span></button>`;
+                return `<button type="button" onclick="openCustDeliverModal('${id}')" title="تحصيل الباقي وإغلاق الفاتورة نهائياً (${esc(fmtMoney(rem))})" aria-label="تحصيل الباقي وإغلاق الفاتورة" class="inline-flex items-center gap-1 ${hCls} rounded-lg font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-hand-holding-dollar"></i><span>تحصيل الباقي</span></button>`;
             }
             const tip = rem > 0
                 ? `تم التسليم وإغلاق الفاتورة (تحصيل الباقي ${fmtMoney(rem)} وإضافته للمدفوع)`
                 : 'تم التسليم وإغلاق الفاتورة';
-            return `<button type="button" onclick="openCustDeliverModal('${id}')" title="${esc(tip)}" aria-label="تم التسليم" class="inline-flex items-center gap-1 px-2.5 h-8 rounded-lg text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-check-double"></i><span>تم التسليم</span></button>`;
+            return `<button type="button" onclick="openCustDeliverModal('${id}')" title="${esc(tip)}" aria-label="تم التسليم" class="inline-flex items-center gap-1 ${hCls} rounded-lg font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-check-double"></i><span>تم التسليم</span></button>`;
         }
 
-        function custActionsHtml(c) {
+        function custActionsHtml(c, compact = false) {
             const id = esc(c.id);
             const unseen = custCmtUnseen(c);
             const pending = custCmtUnhandled(c);
-            return `<div class="flex items-center justify-center flex-wrap gap-1">
-                ${custDeliverBtnHtml(c)}
-                <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
-                ${canCustComments() ? `<button type="button" onclick="openCustComments('${id}')" title="تعليقات الفاتورة" aria-label="تعليقات الفاتورة" class="${BTN_ICON} relative ${pending ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'}"><i class="fa-solid fa-comments"></i>${unseen ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${unseen}</span>` : ''}</button>` : ''}
-                <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
-                ${canCust('whatsapp') && custPhonesOf(c).length ? `<button type="button" onclick="custWhatsApp('${id}')" title="إرسال الفاتورة واتساب للعميل" aria-label="واتساب للعميل" class="${BTN_ICON} text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
-                ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
-                ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${BTN_ICON} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+            const ic = compact ? 'w-7 h-7 inline-flex items-center justify-center rounded-lg text-xs transition-colors cursor-pointer' : BTN_ICON;
+            return `<div class="flex items-center justify-center ${compact ? 'flex-nowrap gap-0.5' : 'flex-wrap gap-1'}">
+                ${custDeliverBtnHtml(c, compact)}
+                <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${ic} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
+                ${canCustComments() ? `<button type="button" onclick="openCustComments('${id}')" title="تعليقات الفاتورة" aria-label="تعليقات الفاتورة" class="${ic} relative ${pending ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'}"><i class="fa-solid fa-comments"></i>${unseen ? `<span class="absolute -top-1 -left-1 min-w-[1rem] h-[1rem] px-0.5 rounded-full bg-rose-600 text-white text-[9px] font-black leading-[1rem] text-center">${unseen}</span>` : ''}</button>` : ''}
+                <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${ic} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
+                ${canCust('whatsapp') && custPhonesOf(c).length ? `<button type="button" onclick="custWhatsApp('${id}')" title="إرسال الفاتورة واتساب للعميل" aria-label="واتساب للعميل" class="${ic} text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"><i class="fa-brands fa-whatsapp"></i></button>` : ''}
+                ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل" aria-label="تعديل" class="${ic} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                ${canCust('delete') ? `<button type="button" onclick="deleteCustOrder('${id}')" title="حذف" aria-label="حذف" class="${ic} text-slate-500 hover:text-rose-600 hover:bg-rose-50"><i class="fa-solid fa-trash-can"></i></button>` : ''}
             </div>`;
+        }
+
+        // Compact table size + sticky top horizontal navigator (zero need to scroll down for horizontal scrollbar!)
+        let custTableDensity = (() => {
+            try {
+                const v = localStorage.getItem('custTableDensity');
+                return (v === 'sm' || v === 'md' || v === 'lg') ? v : 'md';
+            } catch (e) { return 'md'; }
+        })();
+        function setCustTableDensity(d) {
+            if (!['sm', 'md', 'lg'].includes(d)) return;
+            custTableDensity = d;
+            try { localStorage.setItem('custTableDensity', d); } catch (e) {}
+            updateCustBody();
+        }
+        let _custHoldTimer = null;
+        function custStopHoldScroll() {
+            if (_custHoldTimer) { clearInterval(_custHoldTimer); _custHoldTimer = null; }
+        }
+        function custScrollTable(scopeId, dir) {
+            const box = el('custScrollBox_' + scopeId);
+            if (!box) return;
+            const step = Math.max(220, Math.round(box.clientWidth * 0.45));
+            const max = Math.max(0, box.scrollWidth - box.clientWidth);
+            if (dir === 'right') box.scrollBy({ left: step, behavior: 'smooth' });
+            else if (dir === 'left') box.scrollBy({ left: -step, behavior: 'smooth' });
+            else if (dir === 'start') box.scrollTo({ left: 0, behavior: 'smooth' });
+            else if (dir === 'end') box.scrollTo({ left: -max, behavior: 'smooth' });
+        }
+        function custHoldScroll(scopeId, dir) {
+            custStopHoldScroll();
+            const box = el('custScrollBox_' + scopeId);
+            if (!box) return;
+            const delta = dir === 'right' ? 28 : -28;
+            _custHoldTimer = setInterval(() => { box.scrollLeft += delta; }, 16);
+        }
+        function custStickyNavHtml(scopeId, countLabel = '') {
+            const dBtn = (k, lbl) => `<button type="button" onclick="setCustTableDensity('${k}')" class="px-2 py-0.5 rounded-md text-[11px] font-extrabold transition-colors cursor-pointer ${custTableDensity === k ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'}">${lbl}</button>`;
+            return `<div class="cust-sticky-bar px-2.5 py-2 space-y-1.5 rounded-t-2xl" data-cust-nav="${scopeId}">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-1 flex-wrap">
+                        <button type="button" id="custBtnStart_${scopeId}" onclick="custScrollTable('${scopeId}','start')" class="cust-nav-btn" title="الانتقال لأول الجدول (يمين)"><i class="fa-solid fa-angles-right"></i><span class="hidden xl:inline">البداية</span></button>
+                        <button type="button" id="custBtnRight_${scopeId}" onclick="custScrollTable('${scopeId}','right')" onmousedown="custHoldScroll('${scopeId}','right')" onmouseup="custStopHoldScroll()" onmouseleave="custStopHoldScroll()" ontouchstart="custHoldScroll('${scopeId}','right')" ontouchend="custStopHoldScroll()" class="cust-nav-btn" title="تحريك الجدول يمين (اضغط مطولاً للتمرير السريع)"><i class="fa-solid fa-chevron-right"></i><span>يمين</span></button>
+                        <button type="button" id="custBtnLeft_${scopeId}" onclick="custScrollTable('${scopeId}','left')" onmousedown="custHoldScroll('${scopeId}','left')" onmouseup="custStopHoldScroll()" onmouseleave="custStopHoldScroll()" ontouchstart="custHoldScroll('${scopeId}','left')" ontouchend="custStopHoldScroll()" class="cust-nav-btn" title="تحريك الجدول يسار (اضغط مطولاً للتمرير السريع)"><span>يسار</span><i class="fa-solid fa-chevron-left"></i></button>
+                        <button type="button" id="custBtnEnd_${scopeId}" onclick="custScrollTable('${scopeId}','end')" class="cust-nav-btn" title="الانتقال لآخر الجدول (الأزرار والإجراءات)"><span class="hidden xl:inline">الإجراءات</span><i class="fa-solid fa-angles-left"></i></button>
+                        <span id="custScrollStatus_${scopeId}" class="text-[11px] font-bold text-slate-500 ms-1.5 hidden sm:inline">${esc(countLabel)}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-[10px] font-bold text-slate-400 hidden lg:inline"><i class="fa-solid fa-hand-pointer me-0.5"></i>اسحب الجدول أو Shift+عجلة</span>
+                        <div class="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-200/70 border border-slate-300/80" title="حجم الجدول">
+                            ${dBtn('sm', 'صغير')}
+                            ${dBtn('md', 'مضغوط')}
+                            ${dBtn('lg', 'عادي')}
+                        </div>
+                    </div>
+                </div>
+                <div id="custTopScroll_${scopeId}" dir="rtl" class="cust-top-scroll" title="شريط تمرير علوي متزامن مع الجدول"><div id="custTopTrack_${scopeId}" style="height:1px"></div></div>
+            </div>`;
+        }
+        let _custDragState = null;
+        window.addEventListener('mousemove', e => {
+            if (!_custDragState) return;
+            const dx = e.clientX - _custDragState.x;
+            if (!_custDragState.moved && Math.abs(dx) < 5) return;
+            _custDragState.moved = true;
+            _custDragState.box.classList.add('is-grabbing');
+            _custDragState.box.scrollLeft = _custDragState.sl - dx;
+        });
+        window.addEventListener('mouseup', () => {
+            if (!_custDragState) return;
+            _custDragState.box.classList.remove('is-grabbing');
+            _custDragState = null;
+        });
+        function custInitTableScroller(scopeId) {
+            const box = el('custScrollBox_' + scopeId);
+            const top = el('custTopScroll_' + scopeId);
+            const track = el('custTopTrack_' + scopeId);
+            if (!box || !top || !track) return;
+            if (box.dataset.scrollerBound === '1') {
+                if (typeof box._syncMetrics === 'function') box._syncMetrics();
+                return;
+            }
+            box.dataset.scrollerBound = '1';
+            let syncing = false;
+            const syncMetrics = () => {
+                const sw = box.scrollWidth;
+                const cw = box.clientWidth;
+                const overflow = sw - cw;
+                track.style.width = sw + 'px';
+                top.style.display = overflow > 2 ? '' : 'none';
+                const statusEl = el('custScrollStatus_' + scopeId);
+                const bRight = el('custBtnRight_' + scopeId);
+                const bLeft = el('custBtnLeft_' + scopeId);
+                const bStart = el('custBtnStart_' + scopeId);
+                const bEnd = el('custBtnEnd_' + scopeId);
+                if (overflow <= 2) {
+                    if (bRight) bRight.disabled = true;
+                    if (bLeft) bLeft.disabled = true;
+                    if (bStart) bStart.disabled = true;
+                    if (bEnd) bEnd.disabled = true;
+                    if (statusEl) statusEl.innerHTML = '<span class="text-emerald-600"><i class="fa-solid fa-check-circle me-0.5"></i>الجدول ظاهر بالكامل</span>';
+                } else {
+                    const sl = box.scrollLeft; // in modern RTL: 0 at right start, negative toward left end
+                    const atStart = Math.abs(sl) <= 2;
+                    const atEnd = Math.abs(sl) >= overflow - 2;
+                    if (bRight) bRight.disabled = atStart;
+                    if (bStart) bStart.disabled = atStart;
+                    if (bLeft) bLeft.disabled = atEnd;
+                    if (bEnd) bEnd.disabled = atEnd;
+                    const pct = Math.min(100, Math.max(0, Math.round((Math.abs(sl) / overflow) * 100)));
+                    if (statusEl) statusEl.textContent = `التحرك الأفقي: ${pct}%`;
+                }
+            };
+            box._syncMetrics = syncMetrics;
+            top.addEventListener('scroll', () => {
+                if (syncing) return;
+                syncing = true;
+                box.scrollLeft = top.scrollLeft;
+                syncMetrics();
+                syncing = false;
+            }, { passive: true });
+            box.addEventListener('scroll', () => {
+                if (syncing) return;
+                syncing = true;
+                top.scrollLeft = box.scrollLeft;
+                syncMetrics();
+                syncing = false;
+            }, { passive: true });
+            // Shift + Mouse Wheel scrolls horizontally smoothly
+            box.addEventListener('wheel', e => {
+                if (e.shiftKey && Math.abs(e.deltaY) > 0 && box.scrollWidth > box.clientWidth) {
+                    e.preventDefault();
+                    box.scrollLeft -= e.deltaY;
+                }
+            }, { passive: false });
+            // Smart click-and-drag horizontal panning on non-interactive cells (single global mousemove/mouseup)
+            box.addEventListener('mousedown', e => {
+                if (e.button !== 0) return;
+                if (e.target.closest('button, a, input, select, textarea, label')) return;
+                if (box.scrollWidth <= box.clientWidth) return;
+                _custDragState = { box, x: e.clientX, sl: box.scrollLeft, moved: false };
+            });
+            if (typeof ResizeObserver !== 'undefined') {
+                const ro = new ResizeObserver(syncMetrics);
+                ro.observe(box);
+                if (box.firstElementChild) ro.observe(box.firstElementChild);
+            }
+            syncMetrics();
+        }
+        function custInitAllScrollers() {
+            document.querySelectorAll('[data-cust-nav]').forEach(n => {
+                const id = n.getAttribute('data-cust-nav');
+                if (id) custInitTableScroller(id);
+            });
         }
 
         const _uiDebTimers = {};
@@ -8389,6 +8603,8 @@
             if (nowMob !== _custLastIsMobile) {
                 _custLastIsMobile = nowMob;
                 if (parseRoute().name === 'customers' && el('custBody')) updateCustBody();
+            } else {
+                custInitAllScrollers();
             }
         }, { passive: true });
         function custLoadMore(all = false) {
@@ -8423,31 +8639,51 @@
                     </div>`).join('')}
                 </div>${moreBar}`;
             }
-            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
-                        <th class="py-3 px-3 text-start">الرقم</th><th class="py-3 px-3 text-start">التاريخ</th><th class="py-3 px-3 text-start">العميل</th>
-                        <th class="py-3 px-3 text-start">المندوب</th><th class="py-3 px-3 text-start">الصنف</th><th class="py-3 px-3 text-start">الحالة</th>
-                        <th class="py-3 px-3 text-start">المبلغ</th><th class="py-3 px-3 text-start">المدفوع</th><th class="py-3 px-3 text-start">الباقي</th>
-                        <th class="py-3 px-3 text-start">مدة الطلبية</th><th class="py-3 px-3 text-start">التسليم</th><th class="py-3 px-3 text-start">الشحن والنقل</th><th class="py-3 px-3 text-start">طريقة الدفع</th>
-                        <th class="py-3 px-3 text-center">إجراءات</th></tr></thead>
-                    <tbody class="divide-y divide-slate-200">${slice.map(c => `<tr class="hover:bg-slate-50">
-                        <td class="py-3 px-3 font-mono font-bold">${custNoLabel(c)}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.date) || '—')}</td>
-                        <td class="py-3 px-3 font-semibold">${esc(c.customer)}</td>
-                        <td class="py-3 px-3">${esc(c.repName || '—')}</td>
-                        <td class="py-3 px-3">${esc(c.category || '—')}</td>
-                        <td class="py-3 px-3">${esc(c.completeness || '—')}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${fmtMoney(numOr0(c.amount))}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${fmtMoney(numOr0(c.paid))}</td>
-                        <td class="py-3 px-3 whitespace-nowrap font-bold ${custRemaining(c) > 0 ? 'text-rose-700' : ''}">${custRemaining(c) < 0 ? `<span class="text-emerald-700">رصيد ${fmtMoney(-custRemaining(c))}</span>` : fmtMoney(custRemaining(c))}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${esc(fmtDateAr(c.validUntil) || '—')}</td>
-                        <td class="py-3 px-3">${custDeliveryBadge(c)}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${c.transport === 'نقل' ? '<span class="text-sky-700 font-bold"><i class="fa-solid fa-truck"></i> نقل</span>' : '<span class="text-slate-400">بدون نقل</span>'}</td>
-                        <td class="py-3 px-3 whitespace-nowrap">${esc(c.payMethod || 'نقدي')}</td>
-                        <td class="py-3 px-3">${custActionsHtml(c)}</td>
-                    </tr>`).join('')}</tbody>
-                </table>
+            setTimeout(custInitAllScrollers, 0);
+            const densCls = 'cust-tbl-' + custTableDensity;
+            return `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg">
+                ${custStickyNavHtml('orders', `${fmtNumber(slice.length, 0)} فاتورة`)}
+                <div id="custScrollBox_orders" dir="rtl" class="cust-tbl-scroll rounded-b-2xl">
+                    <table class="w-full ${densCls}">
+                        <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                            <th class="text-start whitespace-nowrap">الرقم / التاريخ</th>
+                            <th class="text-start">العميل / الصنف</th>
+                            <th class="text-start whitespace-nowrap">المندوب</th>
+                            <th class="text-start whitespace-nowrap">المبلغ</th>
+                            <th class="text-start whitespace-nowrap">المدفوع</th>
+                            <th class="text-start whitespace-nowrap">الباقي</th>
+                            <th class="text-start whitespace-nowrap">المدة / النقل</th>
+                            <th class="text-start whitespace-nowrap">التسليم</th>
+                            <th class="text-center whitespace-nowrap cust-sticky-act">إجراءات</th>
+                        </tr></thead>
+                        <tbody class="divide-y divide-slate-200">${slice.map(c => {
+                            const rem = custRemaining(c);
+                            return `<tr class="hover:bg-slate-50/90">
+                                <td class="whitespace-nowrap">
+                                    <span class="font-mono font-extrabold text-slate-800 block">${custNoLabel(c)}</span>
+                                    <span class="text-[10px] text-slate-500 font-normal">${esc(fmtDateAr(c.date) || '—')}</span>
+                                </td>
+                                <td class="min-w-[130px] max-w-[190px]">
+                                    <span class="font-bold text-slate-900 block truncate" title="${esc(c.customer)}">${esc(c.customer)}</span>
+                                    <span class="text-[10px] text-slate-500 block truncate">${esc(c.category || '—')}${c.completeness ? ' · ' + esc(c.completeness) : ''}</span>
+                                </td>
+                                <td class="whitespace-nowrap max-w-[110px] truncate" title="${esc(c.repName || '')}">${esc(c.repName || '—')}</td>
+                                <td class="whitespace-nowrap font-semibold tabular-nums">${fmtMoney(numOr0(c.amount))}</td>
+                                <td class="whitespace-nowrap tabular-nums">
+                                    <span class="font-semibold text-emerald-700 block">${fmtMoney(numOr0(c.paid))}</span>
+                                    <span class="text-[10px] text-slate-500">${esc(c.payMethod || 'نقدي')}</span>
+                                </td>
+                                <td class="whitespace-nowrap font-bold tabular-nums ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${rem < 0 ? `<span class="text-emerald-700">رصيد ${fmtMoney(-rem)}</span>` : fmtMoney(rem)}</td>
+                                <td class="whitespace-nowrap">
+                                    <span class="block text-slate-700">${esc(fmtDateAr(c.validUntil) || '—')}</span>
+                                    <span class="text-[10px] ${c.transport === 'نقل' ? 'text-sky-700 font-bold' : 'text-slate-400'}">${c.transport === 'نقل' ? '<i class="fa-solid fa-truck"></i> نقل' : 'بدون نقل'}</span>
+                                </td>
+                                <td class="whitespace-nowrap">${custDeliveryBadge(c)}</td>
+                                <td class="cust-sticky-act whitespace-nowrap">${custActionsHtml(c, true)}</td>
+                            </tr>`;
+                        }).join('')}</tbody>
+                    </table>
+                </div>
             </div>${moreBar}`;
         }
 
@@ -8501,7 +8737,10 @@
 
         function updateCustBody() {
             const body = el('custBody');
-            if (body) body.innerHTML = custTabBody();
+            if (body) {
+                body.innerHTML = custTabBody();
+                requestAnimationFrame(custInitAllScrollers);
+            }
         }
 
         function custFilterBar() {
@@ -8942,39 +9181,42 @@
                     </article>`;
                 }).join('')}</div>`;
             } else {
-                listHtml = `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
-                            <th class="py-3 px-3 text-start">الرقم</th>
-                            <th class="py-3 px-3 text-start">العميل</th>
-                            <th class="py-3 px-3 text-start">المندوب</th>
-                            <th class="py-3 px-3 text-start">تاريخ الطلب</th>
-                            <th class="py-3 px-3 text-start">تاريخ الانتهاء</th>
-                            <th class="py-3 px-3 text-start min-w-[165px]">المتبقي / الحالة الزمنية</th>
-                            <th class="py-3 px-3 text-start">المتبقي المالي</th>
-                            <th class="py-3 px-3 text-start">التسليم</th>
-                            <th class="py-3 px-3 text-center">إجراءات</th>
-                        </tr></thead>
-                        <tbody class="divide-y divide-slate-200">${list.map(({ c, d }) => {
-                            const rem = Math.max(0, custRemaining(c));
-                            const rowBg = d.status === 'expired' ? 'bg-rose-50/40 hover:bg-rose-50/80' : d.status === 'today' ? 'bg-orange-50/40 hover:bg-orange-50/80' : 'hover:bg-slate-50';
-                            return `<tr class="${rowBg}">
-                                <td class="py-3 px-3 font-mono font-bold whitespace-nowrap">${custNoLabel(c)}</td>
-                                <td class="py-3 px-3 font-bold text-slate-800">${esc(c.customer || '—')}<span class="block text-[11px] font-normal text-slate-500">${esc(c.category || '—')}</span></td>
-                                <td class="py-3 px-3 whitespace-nowrap">${esc(c.repName || '—')}</td>
-                                <td class="py-3 px-3 whitespace-nowrap text-xs">${esc(fmtDateAr(c.date) || '—')}</td>
-                                <td class="py-3 px-3 whitespace-nowrap font-bold ${d.status === 'expired' ? 'text-rose-700' : d.status === 'today' ? 'text-orange-700' : 'text-slate-800'}">${esc(fmtDateAr(c.validUntil) || '—')}</td>
-                                <td class="py-3 px-3">
-                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold border ${d.cls}">${esc(d.label)}</span>
-                                    ${c.validUntil ? `<div class="w-full h-1.5 rounded-full bg-slate-200/80 overflow-hidden mt-1.5"><div class="h-full rounded-full ${d.barCls}" style="width:${d.progressPct}%"></div></div>` : ''}
-                                    ${d.payDue ? `<span class="block text-[10px] mt-1 ${d.payDaysLeft < 0 ? 'text-rose-700 font-bold' : 'text-slate-500'}">مهلة السداد: ${esc(fmtDateAr(d.payDue))}</span>` : ''}
-                                </td>
-                                <td class="py-3 px-3 whitespace-nowrap font-bold ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${fmtMoney(rem)}<span class="block text-[10px] font-normal text-slate-400">من ${fmtMoney(numOr0(c.amount))}</span></td>
-                                <td class="py-3 px-3 whitespace-nowrap">${custDeliveryBadge(c)}</td>
-                                <td class="py-3 px-3">${rowBtns(c, d)}</td>
-                            </tr>`;
-                        }).join('')}</tbody>
-                    </table>
+                setTimeout(custInitAllScrollers, 0);
+                const densCls = 'cust-tbl-' + custTableDensity;
+                listHtml = `<div class="bg-white rounded-2xl border-2 border-slate-300 shadow-lg">
+                    ${custStickyNavHtml('deadlines', `${fmtNumber(list.length, 0)} طلبية`)}
+                    <div id="custScrollBox_deadlines" dir="rtl" class="cust-tbl-scroll rounded-b-2xl">
+                        <table class="w-full ${densCls}">
+                            <thead class="bg-slate-50 text-slate-700 font-bold border-b-2 border-slate-300"><tr>
+                                <th class="text-start whitespace-nowrap">الرقم / الطلب</th>
+                                <th class="text-start">العميل / الصنف</th>
+                                <th class="text-start whitespace-nowrap">المندوب</th>
+                                <th class="text-start whitespace-nowrap">تاريخ الانتهاء</th>
+                                <th class="text-start min-w-[155px]">المتبقي / الحالة الزمنية</th>
+                                <th class="text-start whitespace-nowrap">المتبقي المالي</th>
+                                <th class="text-start whitespace-nowrap">التسليم</th>
+                                <th class="text-center whitespace-nowrap cust-sticky-act">إجراءات</th>
+                            </tr></thead>
+                            <tbody class="divide-y divide-slate-200">${list.map(({ c, d }) => {
+                                const rem = Math.max(0, custRemaining(c));
+                                const rowBg = d.status === 'expired' ? 'bg-rose-50/40 hover:bg-rose-50/80' : d.status === 'today' ? 'bg-orange-50/40 hover:bg-orange-50/80' : 'hover:bg-slate-50';
+                                return `<tr class="${rowBg}">
+                                    <td class="whitespace-nowrap"><span class="font-mono font-extrabold block">${custNoLabel(c)}</span><span class="text-[10px] text-slate-500">${esc(fmtDateAr(c.date) || '—')}</span></td>
+                                    <td class="min-w-[125px] max-w-[180px]"><span class="font-bold text-slate-800 block truncate">${esc(c.customer || '—')}</span><span class="block text-[10px] font-normal text-slate-500 truncate">${esc(c.category || '—')}</span></td>
+                                    <td class="whitespace-nowrap max-w-[105px] truncate">${esc(c.repName || '—')}</td>
+                                    <td class="whitespace-nowrap font-bold ${d.status === 'expired' ? 'text-rose-700' : d.status === 'today' ? 'text-orange-700' : 'text-slate-800'}">${esc(fmtDateAr(c.validUntil) || '—')}</td>
+                                    <td>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-extrabold border ${d.cls}">${esc(d.label)}</span>
+                                        ${c.validUntil ? `<div class="w-full h-1.5 rounded-full bg-slate-200/80 overflow-hidden mt-1"><div class="h-full rounded-full ${d.barCls}" style="width:${d.progressPct}%"></div></div>` : ''}
+                                        ${d.payDue ? `<span class="block text-[10px] mt-0.5 ${d.payDaysLeft < 0 ? 'text-rose-700 font-bold' : 'text-slate-500'}">مهلة السداد: ${esc(fmtDateAr(d.payDue))}</span>` : ''}
+                                    </td>
+                                    <td class="whitespace-nowrap font-bold tabular-nums ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${fmtMoney(rem)}<span class="block text-[10px] font-normal text-slate-400">من ${fmtMoney(numOr0(c.amount))}</span></td>
+                                    <td class="whitespace-nowrap">${custDeliveryBadge(c)}</td>
+                                    <td class="cust-sticky-act whitespace-nowrap">${rowBtns(c, d)}</td>
+                                </tr>`;
+                            }).join('')}</tbody>
+                        </table>
+                    </div>
                 </div>`;
             }
 
@@ -22734,5 +22976,5 @@
         };
 
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a1048da89e159',t:'MTc5NTg3NjE1Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a1048da89e159',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
