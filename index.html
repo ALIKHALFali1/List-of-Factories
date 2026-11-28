@@ -4511,6 +4511,7 @@
                 toast('تعذر تجهيز المستند للطباعة', 'error');
             }
         }
+        function openPrintView(html) { return printHtml(html); }
 
         // The check as an official layout: 18 x 8.5 cm, on A4 landscape.
         function checkPrintHtml(c) {
@@ -8959,17 +8960,20 @@
             const list = custSelectedOrdersList();
             if (!list.length) return toast('اختر فاتورة واحدة على الأقل', 'info');
             if (typeof XLSX === 'undefined') return toast('مكتبة Excel غير متاحة', 'error');
+            const ws = XLSX.utils.aoa_to_sheet([CUST_REPORT_HEAD, ...list.map(custExportRow)]);
+            ws['!cols'] = CUST_XLSX_COLS;
             const wb = XLSX.utils.book_new();
-            const ws = XLSX.utils.json_to_sheet(list.map(custExportRow));
             XLSX.utils.book_append_sheet(wb, ws, 'فواتير محددة');
+            wb.Workbook = { Views: [{ RTL: true }] };
             XLSX.writeFile(wb, `فواتير-عملاء-محددة-${todayISO()}.xlsx`);
+            log('تصدير فواتير عملاء محددة Excel', `${list.length} فاتورة`);
             toast(`تم تصدير ${list.length} فاتورة محددة إلى Excel`, 'success');
         }
 
         function custBulkPrint() {
             const list = custSelectedOrdersList();
             if (!list.length) return toast('اختر فاتورة واحدة على الأقل', 'info');
-            openPrintView(custPrintHtml(list, `كشف فواتير عملاء محددة (${list.length} فاتورة)`, `تاريخ الطباعة: ${fmtDateAr(todayISO())}`));
+            printHtml(custPrintHtml(list, `كشف فواتير عملاء محددة (${list.length} فاتورة)`, `تاريخ الطباعة: ${fmtDateAr(todayISO())}`));
         }
 
         function custTableHtml(rows) {
@@ -21801,7 +21805,7 @@
                 <table><thead><tr><th>الوقت</th><th>المستخدم</th><th>الإجراء</th><th>التفاصيل</th></tr></thead><tbody>
                 ${list.map(l => `<tr><td style="white-space:nowrap">${esc(fmtDateTime(l.t))}</td><td style="white-space:nowrap">${esc(l.user || '—')}</td><td><b>${esc(l.action)}</b></td><td>${esc(l.detail)}</td></tr>`).join('')}
                 </tbody></table></body></html>`;
-            openPrintView(html);
+            printHtml(html);
         }
 
         function viewLogs() {
@@ -24119,5 +24123,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61b03bc2a5c7154',t:'MTc5NTg4NjEyNQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61b03bc2a5c7154',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61b1f6e3ed5e27d',t:'MTc5NTg4NzI1OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61b1f6e3ed5e27d',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
