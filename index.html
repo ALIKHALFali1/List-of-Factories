@@ -844,6 +844,7 @@
             ] },
             { title: 'سجل النشاط والحركات', items: [
                 ['logs.view', 'عرض سجل نشاطي وحركاتي في النظام'],
+                ['logs.all', 'عرض سجل نشاط جميع المستخدمين (مدير النظام والمشرفون)'],
                 ['logs.custorders', 'سجل حركات فواتير طلبيات العملاء والرجوع السريع للفواتير المعدّلة'],
                 ['logs.export', 'طباعة وتصدير سجل النشاط (Excel / A4)'],
                 ['logs.clear', 'مسح سجل النشاط من الإعدادات']
@@ -2227,6 +2228,18 @@
             return !!meName && String(entry.user || '').trim() === meName;
         }
 
+        function canViewAllLogs(cacheRef = null) {
+            const meUid = (fbUser && fbUser.uid) || sessionUserId || '';
+            if (!meUid) return false;
+            const usersSrc = cacheRef ? cacheRef.users : (fbCache && fbCache.users);
+            const rolesSrc = cacheRef ? cacheRef.roles : (fbCache && fbCache.roles);
+            const meUser = (usersSrc && usersSrc[meUid]) || (appData && (appData.users || []).find(u => u.id === meUid));
+            if (!meUser || !meUser.active) return false;
+            const meRole = (rolesSrc && rolesSrc[meUser.roleId]) || (appData && appData.roles && appData.roles[meUser.roleId]);
+            if (meUser.roleId === 'admin' || meRole?.locked) return true;
+            return !!(meRole && Array.isArray(meRole.permissions) && meRole.permissions.includes('logs.all'));
+        }
+
         function log(action, detail = '') {
             const meUid = (fbUser && fbUser.uid) || sessionUserId || '';
             const entry = { id: uid('LOG-'), t: new Date().toISOString(), uid: meUid, user: currentUser()?.name || 'النظام', action, detail };
@@ -2268,7 +2281,7 @@
                 orders: buildOrdersFromCache(c),
                 custOrders: Object.values(c.custOrders || {}),
                 custReps: Object.values(c.custReps || {}),
-                logs: (c.logs || []).filter(logBelongsToMe)
+                logs: canViewAllLogs(c) ? (c.logs || []) : (c.logs || []).filter(logBelongsToMe)
             });
             fbBaseline = new Map();
             desiredDocs(appData).forEach((data, key) => {
@@ -2456,9 +2469,9 @@
             pendingOrderError = new Map();
         }
 
-        // the activity log is only readable by users with logs.view, so listen only for them
+        // the activity log is only readable by users with logs.view or logs.all, so listen only for them
         function syncLogsListener() {
-            const canSee = can('logs.view');
+            const canSee = can('logs.view') || canViewAllLogs();
             if (canSee && !fbLogsUnsub) {
                 fbLogsUnsub = fbDb.collection('logs').orderBy('t', 'desc').limit(LOG_LIMIT).onSnapshot(snap => {
                     if (!fbCache) return;
@@ -4616,6 +4629,7 @@
             if (name === 'debts') return can('debts.view') || can('debts.manage') || can('debts.delete');
             if (name === 'finance') return typeof finCanAccess === 'function' ? finCanAccess() : (isSystemAdmin() || can('finance.access'));
             if (name === 'announcements') return true;
+            if (name === 'logs') return can('logs.view') || canViewAllLogs();
             if (name === 'settings') return true;   // every signed-in user; each card checks its own permission
             const r = ROUTES[name];
             return !!r && can(r.perm);
@@ -9633,7 +9647,7 @@
             custTab = param === 'schedule' || param === 'reports' || param === 'deadlines' ? param : 'list';
             const tools = `<div class="flex flex-wrap gap-2 justify-end">
                 ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
-                ${(can('logs.custorders') || can('logs.view')) ? btn('openCustMyHistoryModal()', 'سجل حركاتي على الفواتير', 'fa-clock-rotate-left', BTN_SECONDARY + ' !border-amber-300 !text-amber-800 hover:!bg-amber-50') : ''}
+                ${(can('logs.custorders') || can('logs.view') || canViewAllLogs()) ? btn('openCustMyHistoryModal()', canViewAllLogs() ? 'سجل حركات الفواتير' : 'سجل حركاتي على الفواتير', 'fa-clock-rotate-left', BTN_SECONDARY + ' !border-amber-300 !text-amber-800 hover:!bg-amber-50') : ''}
                 ${canCust('manage') ? btn('openCustRepsModal()', 'إدارة المندوبين', 'fa-user-tie', BTN_SECONDARY) : ''}
                 ${canCust('view') ? btn('exportCustOrdersXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY) : ''}
                 ${canCust('manage') ? btn("el('custExcelFileInput').click()", 'استيراد Excel', 'fa-file-import', BTN_SECONDARY) : ''}
@@ -10150,7 +10164,9 @@
             return myNames.has(b);
         }
 
-        function custMyRecentInvoices(period = 'all', q = '') {
+        function custMyRecentInvoices(period = 'all', q = '', scope = 'auto') {
+            const allowAll = canViewAllLogs();
+            const showAll = allowAll && scope === 'all';
             const now = Date.now();
             const today = todayISO();
             const yest = addDays(today, -1);
@@ -10161,26 +10177,29 @@
             // 1) Collect directly from custOrders timestamps (recovers ALL past edits even before this update!)
             (appData.custOrders || []).forEach(c => {
                 const events = [];
-                if (c.deliveredAt && custOrderBelongsToMyActivity(c.deliveredBy)) {
+                if (c.deliveredAt && (showAll || custOrderBelongsToMyActivity(c.deliveredBy))) {
                     const settled = c.deliverySettlement && c.deliverySettlement.settled && c.deliverySettlement.settledAmount > 0;
                     events.push({
                         t: c.deliveredAt,
+                        by: c.deliveredBy || '—',
                         kind: settled ? 'تسليم وتحصيل الباقي' : 'تسليم وإغلاق',
                         badgeCls: settled ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200',
                         note: settled ? `تحصيل ${fmtMoney(c.deliverySettlement.settledAmount)} (${c.deliverySettlement.payMethod || c.payMethod || 'نقدي'})` : 'إغلاق الفاتورة'
                     });
                 }
-                if (c.updatedAt && custOrderBelongsToMyActivity(c.updatedBy)) {
+                if (c.updatedAt && (showAll || custOrderBelongsToMyActivity(c.updatedBy))) {
                     events.push({
                         t: c.updatedAt,
+                        by: c.updatedBy || '—',
                         kind: 'تعديل فاتورة',
                         badgeCls: 'bg-sky-100 text-sky-800 border-sky-200',
                         note: `المدفوع ${fmtMoney(numOr0(c.paid))} · الباقي ${fmtMoney(Math.max(0, custRemaining(c)))}`
                     });
                 }
-                if (c.createdAt && custOrderBelongsToMyActivity(c.createdBy)) {
+                if (c.createdAt && (showAll || custOrderBelongsToMyActivity(c.createdBy))) {
                     events.push({
                         t: c.createdAt,
+                        by: c.createdBy || '—',
                         kind: 'إضافة فاتورة',
                         badgeCls: 'bg-slate-100 text-slate-700 border-slate-200',
                         note: `الإجمالي ${fmtMoney(numOr0(c.amount))}`
@@ -10189,19 +10208,20 @@
                 if (!events.length) return;
                 events.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
                 const latest = events[0];
-                list.push({ c, t: latest.t, kind: latest.kind, badgeCls: latest.badgeCls, note: latest.note });
+                list.push({ c, t: latest.t, by: latest.by, kind: latest.kind, badgeCls: latest.badgeCls, note: latest.note });
             });
 
-            // 2) Also merge personal logs referencing customer orders (in case updatedBy changed later)
+            // 2) Also merge logs referencing customer orders
             const seenIds = new Set(list.map(x => x.c.id));
             (appData.logs || []).forEach(l => {
-                if (!logBelongsToMe(l)) return;
+                if (!showAll && !logBelongsToMe(l)) return;
                 const c = custFindOrderFromLog(l);
                 if (!c || seenIds.has(c.id)) return;
                 seenIds.add(c.id);
                 list.push({
                     c,
                     t: l.t || '',
+                    by: l.user || '—',
                     kind: l.action || 'حركة على الفاتورة',
                     badgeCls: /تسليم/.test(l.action || '') ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-indigo-100 text-indigo-800 border-indigo-200',
                     note: l.detail || ''
@@ -10214,7 +10234,7 @@
                 if (period === 'yesterday' && iso !== yest) return false;
                 if (period === 'week' && (!x.t || new Date(x.t).getTime() < weekAgo)) return false;
                 if (needle) {
-                    const hay = `${custNoLabel(x.c)} ${x.c.customer} ${x.c.repName} ${x.kind} ${x.note}`.toLowerCase();
+                    const hay = `${custNoLabel(x.c)} ${x.c.customer} ${x.c.repName} ${x.by} ${x.kind} ${x.note}`.toLowerCase();
                     if (!hay.includes(needle)) return false;
                 }
                 return true;
@@ -10223,26 +10243,34 @@
 
         let custHistTab = 'invoices';
         let custHistPeriod = 'all';
+        let custHistScope = 'all';
         function setCustHistTab(t) { custHistTab = t; renderCustMyHistory(); }
         function setCustHistPeriod(p) { custHistPeriod = p; renderCustMyHistory(); }
+        function setCustHistScope(s) { custHistScope = s; renderCustMyHistory(); }
 
         function openCustMyHistoryModal() {
-            if (!can('logs.custorders') && !can('logs.view')) return toast('ليس لديك صلاحية عرض سجل الحركات', 'error');
+            if (!can('logs.custorders') && !can('logs.view') && !canViewAllLogs()) return toast('ليس لديك صلاحية عرض سجل الحركات', 'error');
             custHistTab = 'invoices';
             custHistPeriod = 'all';
+            custHistScope = canViewAllLogs() ? 'all' : 'mine';
+            const allowAll = canViewAllLogs();
             openModal({
-                title: 'سجل حركاتي على الفواتير (الرجوع السريع)',
+                title: allowAll ? 'سجل حركات الفواتير (جميع المستخدمين / حركاتي)' : 'سجل حركاتي على الفواتير (الرجوع السريع)',
                 size: 'lg',
                 body: `<div class="space-y-3">
                     <div class="rounded-xl bg-amber-50/80 border border-amber-200 px-3 py-2 text-xs font-bold text-amber-900 flex items-center gap-2">
                         <i class="fa-solid fa-clock-rotate-left text-amber-600"></i>
-                        <span>يعرض هذا السجل الفواتير التي قمت بإضافتها أو تعديلها أو تسليمها مؤخراً — يمكنك فتح أي فاتورة أو إظهارها مباشرة في الجدول بنقرة واحدة.</span>
+                        <span>${allowAll ? 'بصفتك مدير النظام يمكنك متابعة حركات جميع المستخدمين أو تصفية حركاتك الشخصية والرجوع لأي فاتورة بنقرة واحدة.' : 'يعرض هذا السجل الفواتير التي قمت بإضافتها أو تعديلها أو تسليمها مؤخراً — يمكنك فتح أي فاتورة أو إظهارها مباشرة في الجدول بنقرة واحدة.'}</span>
                     </div>
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="inline-flex rounded-xl bg-slate-100 p-1 gap-1" id="custHistTabs">
-                            <button type="button" data-htab="invoices" onclick="setCustHistTab('invoices')" class="px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer">آخر الفواتير التي اشتغلت عليها</button>
+                            <button type="button" data-htab="invoices" onclick="setCustHistTab('invoices')" class="px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer">آخر الفواتير المعدّلة</button>
                             <button type="button" data-htab="logs" onclick="setCustHistTab('logs')" class="px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer">سجل العمليات التفصيلي</button>
                         </div>
+                        ${allowAll ? `<div class="inline-flex rounded-xl bg-slate-100 p-1 gap-1" id="custHistScopes">
+                            <button type="button" data-hscope="all" onclick="setCustHistScope('all')" class="px-2.5 py-1 rounded-lg text-[11px] font-extrabold cursor-pointer">جميع المستخدمين</button>
+                            <button type="button" data-hscope="mine" onclick="setCustHistScope('mine')" class="px-2.5 py-1 rounded-lg text-[11px] font-extrabold cursor-pointer">حركاتي أنا فقط</button>
+                        </div>` : ''}
                         <div class="flex flex-wrap gap-1" id="custHistPeriods">
                             ${[['all', 'الكل'], ['today', 'اليوم'], ['yesterday', 'أمس'], ['week', 'آخر 7 أيام']].map(([k, lbl]) =>
                                 `<button type="button" data-hper="${k}" onclick="setCustHistPeriod('${k}')" class="px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer">${lbl}</button>`
@@ -10251,7 +10279,7 @@
                     </div>
                     <div class="relative">
                         <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
-                        <input id="custHistSearch" type="search" oninput="renderCustMyHistory()" placeholder="بحث برقم الفاتورة أو اسم العميل أو نوع الحركة..." class="${INPUT_CLS} pr-9 !py-2 !text-xs">
+                        <input id="custHistSearch" type="search" oninput="renderCustMyHistory()" placeholder="بحث برقم الفاتورة أو اسم العميل أو المستخدم أو نوع الحركة..." class="${INPUT_CLS} pr-9 !py-2 !text-xs">
                     </div>
                     <div id="custHistBody" class="max-h-[58vh] overflow-y-auto space-y-2 pe-1"></div>
                 </div>`,
@@ -10262,9 +10290,15 @@
         function renderCustMyHistory() {
             const box = el('custHistBody');
             if (!box) return;
+            const allowAll = canViewAllLogs();
+            const activeScope = allowAll ? custHistScope : 'mine';
             document.querySelectorAll('#custHistTabs [data-htab]').forEach(b => {
                 const on = b.getAttribute('data-htab') === custHistTab;
                 b.className = `px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer ${on ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'}`;
+            });
+            document.querySelectorAll('#custHistScopes [data-hscope]').forEach(b => {
+                const on = b.getAttribute('data-hscope') === activeScope;
+                b.className = `px-2.5 py-1 rounded-lg text-[11px] font-extrabold cursor-pointer ${on ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'}`;
             });
             document.querySelectorAll('#custHistPeriods [data-hper]').forEach(b => {
                 const on = b.getAttribute('data-hper') === custHistPeriod;
@@ -10273,15 +10307,15 @@
             const q = (el('custHistSearch')?.value || '').trim().toLowerCase();
 
             if (custHistTab === 'invoices') {
-                const rows = custMyRecentInvoices(custHistPeriod, q).slice(0, 120);
+                const rows = custMyRecentInvoices(custHistPeriod, q, activeScope).slice(0, 150);
                 if (!rows.length) {
                     box.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm font-bold bg-slate-50 rounded-2xl border border-slate-200">
                         <i class="fa-solid fa-inbox text-2xl text-slate-300 mb-2 block"></i>
-                        لا توجد حركات مسجلة لك على الفواتير في هذه الفترة
+                        لا توجد حركات مسجلة على الفواتير في هذه الفترة
                     </div>`;
                     return;
                 }
-                box.innerHTML = rows.map(({ c, t, kind, badgeCls, note }) => {
+                box.innerHTML = rows.map(({ c, t, by, kind, badgeCls, note }) => {
                     const id = esc(c.id);
                     const rem = r2(Math.max(0, custRemaining(c)));
                     return `<div class="rounded-xl border border-slate-200 bg-white hover:border-brand-300 p-3 space-y-2 transition-colors">
@@ -10293,7 +10327,7 @@
                                     <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeCls}">${esc(kind)}</span>
                                     ${custDeliveryBadge(c)}
                                 </div>
-                                <p class="text-[11px] text-slate-500 mt-0.5"><i class="fa-regular fa-clock me-1"></i>${esc(fmtDateTime(t))}${c.repName ? ' · المندوب: ' + esc(c.repName) : ''}${note ? ' · ' + esc(note) : ''}</p>
+                                <p class="text-[11px] text-slate-500 mt-0.5"><i class="fa-regular fa-clock me-1"></i>${esc(fmtDateTime(t))}${by ? ' · بواسطة: <b class="text-slate-700">' + esc(by) + '</b>' : ''}${c.repName ? ' · المندوب: ' + esc(c.repName) : ''}${note ? ' · ' + esc(note) : ''}</p>
                             </div>
                             <div class="text-end text-xs shrink-0">
                                 <span class="text-slate-500">الإجمالي: <b>${fmtMoney(numOr0(c.amount))}</b></span> ·
@@ -10312,19 +10346,19 @@
                 return;
             }
 
-            // Tab 2: Detailed personal logs for Customer Orders
+            // Tab 2: Detailed logs for Customer Orders
             const today = todayISO(), yest = addDays(today, -1), weekAgo = Date.now() - 7 * 86400000;
             const logs = (appData.logs || []).filter(l => {
-                if (!logBelongsToMe(l)) return false;
+                if (activeScope !== 'all' && !logBelongsToMe(l)) return false;
                 const txt = `${l.action || ''} ${l.detail || ''}`;
                 if (!/(طلبية عميل|فاتورة عميل|طلبيات العملاء|تسليم وإغلاق|تراجع عن تسليم|مندوب)/.test(txt)) return false;
                 const iso = String(l.t || '').slice(0, 10);
                 if (custHistPeriod === 'today' && iso !== today) return false;
                 if (custHistPeriod === 'yesterday' && iso !== yest) return false;
                 if (custHistPeriod === 'week' && (!l.t || new Date(l.t).getTime() < weekAgo)) return false;
-                if (q && !`${l.action} ${l.detail}`.toLowerCase().includes(q)) return false;
+                if (q && !`${l.user} ${l.action} ${l.detail}`.toLowerCase().includes(q)) return false;
                 return true;
-            }).slice(0, 150);
+            }).slice(0, 200);
 
             if (!logs.length) {
                 box.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm font-bold bg-slate-50 rounded-2xl border border-slate-200">لا توجد سجلات مطابقة في هذه الفترة</div>`;
@@ -10336,6 +10370,7 @@
                     <div class="min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="font-extrabold text-slate-800">${esc(l.action)}</span>
+                            ${allowAll ? `<span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px] font-bold">${esc(l.user || '—')}</span>` : ''}
                             <span class="text-[11px] text-slate-400 font-mono">${esc(fmtDateTime(l.t))}</span>
                         </div>
                         <p class="text-slate-600 mt-0.5 break-words">${esc(l.detail || '—')}</p>
@@ -21064,14 +21099,22 @@
         // ---------- Logs ----------
         let logFilterCat = 'all';
         let logFilterPer = 'all';
+        let logFilterUser = '__all__';
         function setLogFilterCat(c) { logFilterCat = c; renderLogs(); }
         function setLogFilterPer(p) { logFilterPer = p; renderLogs(); }
+        function setLogFilterUser(u) { logFilterUser = u; renderLogs(); }
 
         function filteredMyLogs() {
+            const allowAll = canViewAllLogs();
             const q = (el('logSearch')?.value || '').trim().toLowerCase();
             const today = todayISO(), yest = addDays(today, -1), weekAgo = Date.now() - 7 * 86400000;
             return (appData.logs || []).filter(l => {
-                if (!logBelongsToMe(l)) return false;
+                if (!allowAll) {
+                    if (!logBelongsToMe(l)) return false;
+                } else {
+                    if (logFilterUser === '__mine__' && !logBelongsToMe(l)) return false;
+                    else if (logFilterUser !== '__all__' && logFilterUser !== '__mine__' && String(l.user || '').trim() !== logFilterUser) return false;
+                }
                 const txt = `${l.action || ''} ${l.detail || ''}`;
                 if (logFilterCat === 'cust' && !/(طلبية عميل|فاتورة عميل|طلبيات العملاء|تسليم وإغلاق|تراجع عن تسليم|مندوب)/.test(txt)) return false;
                 if (logFilterCat === 'deliver' && !/(تسليم|تحصيل|تراجع عن تسليم)/.test(txt)) return false;
@@ -21107,25 +21150,29 @@
         function printLogsReport() {
             if (!can('logs.export')) return toast('ليس لديك صلاحية طباعة سجل النشاط', 'error');
             const list = filteredMyLogs().slice(0, 300);
+            const allowAll = canViewAllLogs();
+            const scopeLbl = !allowAll ? (currentUser()?.name || '') : (logFilterUser === '__all__' ? 'جميع المستخدمين' : logFilterUser === '__mine__' ? (currentUser()?.name || '') : logFilterUser);
             const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>سجل النشاط</title>
                 <style>body{font-family:Tahoma,Arial,sans-serif;padding:18px;color:#0f172a}h1{font-size:16pt;margin:0 0 6px}table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-top:10px}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:right}th{background:#f1f5f9}</style>
-                </head><body><h1>سجل نشاطي وحركاتي</h1><div>المستخدم: <b>${esc(currentUser()?.name || '')}</b> · عدد الحركات: ${list.length} · التاريخ: ${esc(fmtDateAr(todayISO()))}</div>
-                <table><thead><tr><th>الوقت</th><th>الإجراء</th><th>التفاصيل</th></tr></thead><tbody>
-                ${list.map(l => `<tr><td style="white-space:nowrap">${esc(fmtDateTime(l.t))}</td><td><b>${esc(l.action)}</b></td><td>${esc(l.detail)}</td></tr>`).join('')}
+                </head><body><h1>سجل النشاط والحركات</h1><div>النطاق: <b>${esc(scopeLbl)}</b> · عدد الحركات: ${list.length} · التاريخ: ${esc(fmtDateAr(todayISO()))}</div>
+                <table><thead><tr><th>الوقت</th><th>المستخدم</th><th>الإجراء</th><th>التفاصيل</th></tr></thead><tbody>
+                ${list.map(l => `<tr><td style="white-space:nowrap">${esc(fmtDateTime(l.t))}</td><td style="white-space:nowrap">${esc(l.user || '—')}</td><td><b>${esc(l.action)}</b></td><td>${esc(l.detail)}</td></tr>`).join('')}
                 </tbody></table></body></html>`;
             openPrintView(html);
         }
 
         function viewLogs() {
-            const recentInv = (typeof custMyRecentInvoices === 'function' && canCust('view')) ? custMyRecentInvoices('all', '').slice(0, 8) : [];
+            const allowAll = canViewAllLogs();
+            const recentInv = (typeof custMyRecentInvoices === 'function' && canCust('view')) ? custMyRecentInvoices('all', '', allowAll ? 'all' : 'mine').slice(0, 8) : [];
+            const userNames = allowAll ? [...new Set((appData.logs || []).map(l => String(l.user || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar')) : [];
             const recentCard = recentInv.length ? `
                 <div class="bg-white p-4 rounded-2xl border-2 border-amber-200/80 shadow-sm space-y-2.5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
-                        <h3 class="font-extrabold text-sm text-slate-900 flex items-center gap-2"><i class="fa-solid fa-file-invoice text-amber-500"></i>آخر فواتير طلبيات العملاء التي اشتغلت عليها (${recentInv.length})</h3>
+                        <h3 class="font-extrabold text-sm text-slate-900 flex items-center gap-2"><i class="fa-solid fa-file-invoice text-amber-500"></i>${allowAll ? 'آخر فواتير طلبيات العملاء المعدّلة (جميع المستخدمين)' : 'آخر فواتير طلبيات العملاء التي اشتغلت عليها'} (${recentInv.length})</h3>
                         <button type="button" onclick="openCustMyHistoryModal()" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">عرض كل حركات الفواتير ←</button>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
-                        ${recentInv.map(({ c, t, kind, badgeCls }) => {
+                        ${recentInv.map(({ c, t, by, kind, badgeCls }) => {
                             const id = esc(c.id);
                             const rem = r2(Math.max(0, custRemaining(c)));
                             return `<div class="rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-white hover:border-brand-300 p-2.5 space-y-1.5 transition-colors">
@@ -21134,7 +21181,7 @@
                                     <span class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeCls}">${esc(kind)}</span>
                                 </div>
                                 <p class="font-bold text-xs text-slate-900 truncate" title="${esc(c.customer)}">${esc(c.customer || '—')}</p>
-                                <p class="text-[10px] text-slate-500">${esc(fmtDateTime(t))} · <b class="${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">الباقي ${fmtMoney(rem)}</b></p>
+                                <p class="text-[10px] text-slate-500">${esc(fmtDateTime(t))}${allowAll && by ? ' · <b class="text-slate-700">' + esc(by) + '</b>' : ''} · <b class="${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">الباقي ${fmtMoney(rem)}</b></p>
                                 <div class="flex items-center gap-1 pt-1 border-t border-slate-200/70">
                                     <button type="button" onclick="openCustDetail('${id}')" class="flex-1 py-1 rounded-lg bg-white border border-slate-200 hover:border-brand-400 text-[11px] font-bold text-slate-700 cursor-pointer">فتح</button>
                                     ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" class="px-2 py-1 rounded-lg bg-white border border-slate-200 hover:border-brand-400 text-[11px] font-bold text-slate-700 cursor-pointer">تعديل</button>` : ''}
@@ -21145,18 +21192,25 @@
                     </div>
                 </div>` : '';
             return {
-                title: 'سجل النشاط',
+                title: allowAll ? 'سجل النشاط (جميع المستخدمين)' : 'سجل النشاط',
                 actions: '',
                 html: `<div class="space-y-4">
                     ${recentCard}
                     <div class="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 space-y-3">
                         <div class="flex flex-wrap items-center justify-between gap-2">
-                            <div class="relative w-full sm:w-96">
-                                <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
-                                <input type="search" id="logSearch" oninput="uiDebounce('logQ', renderLogs, 140)" placeholder="بحث برقم الفاتورة أو العميل أو الإجراء..." class="${INPUT_CLS} pr-9">
+                            <div class="flex flex-wrap items-center gap-2 flex-1 min-w-[240px]">
+                                <div class="relative w-full sm:w-80">
+                                    <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                                    <input type="search" id="logSearch" oninput="uiDebounce('logQ', renderLogs, 140)" placeholder="بحث برقم الفاتورة أو العميل أو المستخدم أو الإجراء..." class="${INPUT_CLS} pr-9">
+                                </div>
+                                ${allowAll ? `<select id="logUserSel" onchange="setLogFilterUser(this.value)" class="px-3 py-2 rounded-xl border border-slate-300 text-xs font-extrabold bg-white text-slate-800">
+                                    <option value="__all__" ${logFilterUser === '__all__' ? 'selected' : ''}>جميع المستخدمين</option>
+                                    <option value="__mine__" ${logFilterUser === '__mine__' ? 'selected' : ''}>حركاتي أنا فقط</option>
+                                    ${userNames.map(nm => `<option value="${esc(nm)}" ${logFilterUser === nm ? 'selected' : ''}>${esc(nm)}</option>`).join('')}
+                                </select>` : ''}
                             </div>
                             <div class="flex flex-wrap items-center gap-1.5">
-                                ${canCust('view') ? btn('openCustMyHistoryModal()', 'حركات فواتيري', 'fa-file-invoice', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
+                                ${canCust('view') ? btn('openCustMyHistoryModal()', allowAll ? 'حركات الفواتير' : 'حركات فواتيري', 'fa-file-invoice', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
                                 ${can('logs.export') ? btn('exportLogsXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
                                 ${can('logs.export') ? btn('printLogsReport()', 'طباعة', 'fa-print', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
                             </div>
@@ -21724,9 +21778,10 @@
 
         async function clearLogs() {
             if (!can('logs.clear') && !can('settings.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
-            if (!confirm('مسح كل سجل النشاط؟')) return;
+            const allMode = canViewAllLogs();
+            if (!confirm(allMode ? 'مسح سجل النشاط بالكامل؟' : 'مسح سجل نشاطك الشخصي؟')) return;
             try {
-                await deleteAllLogs(true);
+                await deleteAllLogs(!allMode);
             } catch (err) {
                 console.error(err);
                 toast('تعذر مسح السجل من السيرفر', 'error');
@@ -23343,5 +23398,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a3cb948eee1b0',t:'MTc5NTg3Nzk3Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a3cb948eee1b0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a77afb8f35412',t:'MTc5NTg4MDM4OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a77afb8f35412',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
