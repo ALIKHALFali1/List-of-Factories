@@ -837,11 +837,16 @@
                 ['expenses.delete', 'المصروفات: حذف أذونات الصرف (حذف آمن بسجل تدقيق — الإذن المصروف للمدير العام فقط)'],
                 ['complaints.file', 'الشكاوي والتقييم: تقديم شكوى وعرض شكاويّ وتقييماتي'],
                 ['complaints.manage', 'إدارة الشكاوي (مراجعة ورد وحسم) وتقييم الموظفين'],
-                ['logs.view', 'عرض سجل النشاط'],
                 ['users.manage', 'إدارة المستخدمين والأدوار'],
                 ['settings.manage', 'تعديل الإعدادات وإعادة الضبط'],
                 ['backup.manage', 'النسخ الاحتياطي والاستعادة'],
                 ['home.personal', 'المظهر والشاشة الرئيسية (على الجهاز ده بس)']
+            ] },
+            { title: 'سجل النشاط والحركات', items: [
+                ['logs.view', 'عرض سجل نشاطي وحركاتي في النظام'],
+                ['logs.custorders', 'سجل حركات فواتير طلبيات العملاء والرجوع السريع للفواتير المعدّلة'],
+                ['logs.export', 'طباعة وتصدير سجل النشاط (Excel / A4)'],
+                ['logs.clear', 'مسح سجل النشاط من الإعدادات']
             ] },
             { title: 'الشحن والنقل', items: [
                 ['shipping.view', 'عرض جدول الشحن وشاشة العرض'],
@@ -8412,7 +8417,7 @@
                 return `<span title="تم التسليم وإغلاق الفاتورة بالكامل${esc(stamp)}" aria-label="تم التسليم" class="${icCls} text-emerald-600 bg-emerald-50/80 border border-emerald-200/70 cursor-default"><i class="fa-solid fa-circle-check"></i></span>`;
             }
             if (isDelivered && rem > 0) {
-                return `<button type="button" onclick="openCustDeliverModal('${id}')" title="تحصيل الباقي وإغلاق الفاتورة نهائياً (${esc(fmtMoney(rem))})" aria-label="تحصيل الباقي وإغلاق الفاتورة" class="inline-flex items-center gap-1 ${hCls} rounded-lg font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-hand-holding-dollar"></i><span>تحصيل الباقي</span></button>`;
+                return `<button type="button" onclick="openCustDeliverModal('${id}')" title="تحصيل الباقي وإغلاق الفاتورة نهائياً (${esc(fmtMoney(rem))})" aria-label="تحصيل الباقي وإغلاق الفاتورة" class="inline-flex items-center gap-1 ${hCls} rounded-lg font-extrabold bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-hand-holding-dollar"></i><span>تحصيل الباقي</span></button>`;
             }
             const tip = rem > 0
                 ? `تم التسليم وإغلاق الفاتورة (تحصيل الباقي ${fmtMoney(rem)} وإضافته للمدفوع)`
@@ -9628,6 +9633,7 @@
             custTab = param === 'schedule' || param === 'reports' || param === 'deadlines' ? param : 'list';
             const tools = `<div class="flex flex-wrap gap-2 justify-end">
                 ${canCust('manage') ? btn('openCustModal()', 'طلبية عميل جديدة', 'fa-plus') : ''}
+                ${(can('logs.custorders') || can('logs.view')) ? btn('openCustMyHistoryModal()', 'سجل حركاتي على الفواتير', 'fa-clock-rotate-left', BTN_SECONDARY + ' !border-amber-300 !text-amber-800 hover:!bg-amber-50') : ''}
                 ${canCust('manage') ? btn('openCustRepsModal()', 'إدارة المندوبين', 'fa-user-tie', BTN_SECONDARY) : ''}
                 ${canCust('view') ? btn('exportCustOrdersXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY) : ''}
                 ${canCust('manage') ? btn("el('custExcelFileInput').click()", 'استيراد Excel', 'fa-file-import', BTN_SECONDARY) : ''}
@@ -9948,10 +9954,11 @@
             if (wasDeliv && rem <= 0) return toast('هذه الفاتورة تم تسليمها وسدادها بالكامل بالفعل', 'info');
 
             const payOpts = CUST_PAYMETHODS.map(m => `<option value="${esc(m)}" ${(c.payMethod || 'نقدي') === m ? 'selected' : ''}>${esc(m)}</option>`).join('');
+            const isCollectOnly = wasDeliv && rem > 0;
             const body = `<div class="space-y-4">
-                <div class="rounded-2xl border-2 border-emerald-200 bg-gradient-to-l from-emerald-50/90 to-white p-3.5 flex flex-wrap items-center justify-between gap-2">
+                <div class="rounded-2xl border-2 ${isCollectOnly ? 'border-amber-300 bg-gradient-to-l from-amber-50/90 to-white' : 'border-emerald-200 bg-gradient-to-l from-emerald-50/90 to-white'} p-3.5 flex flex-wrap items-center justify-between gap-2">
                     <div class="flex items-center gap-3 min-w-0">
-                        <div class="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <div class="w-11 h-11 rounded-2xl ${isCollectOnly ? 'bg-amber-500' : 'bg-emerald-600'} text-white flex items-center justify-center shrink-0 shadow-sm">
                             <i class="fa-solid ${rem > 0 ? 'fa-hand-holding-dollar' : 'fa-check-double'} text-lg"></i>
                         </div>
                         <div class="min-w-0">
@@ -10100,6 +10107,246 @@
                 }
             }, 6500);
             return true;
+        }
+
+        // ---- سجل حركاتي على فواتير طلبيات العملاء والرجوع السريع ----
+        function custFindOrderFromLog(entry) {
+            if (!entry || !appData || !Array.isArray(appData.custOrders)) return null;
+            if (entry.targetCol === 'custOrders' && entry.targetId) {
+                const byId = appData.custOrders.find(x => x.id === entry.targetId);
+                if (byId) return byId;
+            }
+            const txt = `${entry.action || ''} ${entry.detail || ''}`;
+            if (!/(طلبية عميل|فاتورة عميل|طلبيات العملاء|تسليم وإغلاق|تراجع عن تسليم)/.test(txt)) return null;
+            const m = String(entry.detail || '').match(/#(\d+)/);
+            if (!m) return null;
+            const num = Number(m[1]);
+            return appData.custOrders.find(x => Number(x.no) === num) || null;
+        }
+
+        function custJumpToOrder(no) {
+            closeModal();
+            custFilter.q = '#' + String(no);
+            custFilter.delivery = 'all';
+            custFilter.rep = '';
+            custFilter.category = '';
+            custFilter.from = '';
+            custFilter.to = '';
+            custFilter.cmtPending = false;
+            if (parseRoute().name !== 'customers') {
+                location.hash = '#/customers';
+            } else {
+                custTab = 'list';
+                render();
+            }
+            toast(`تم تحديد الفاتورة #${no} في الجدول`, 'info');
+        }
+
+        function custOrderBelongsToMyActivity(byName) {
+            const b = String(byName || '').trim();
+            if (!b) return false;
+            const u = currentUser();
+            const myNames = new Set([u?.name, orderUserName()].map(x => String(x || '').trim()).filter(Boolean));
+            return myNames.has(b);
+        }
+
+        function custMyRecentInvoices(period = 'all', q = '') {
+            const now = Date.now();
+            const today = todayISO();
+            const yest = addDays(today, -1);
+            const weekAgo = now - 7 * 86400000;
+            const needle = String(q || '').trim().toLowerCase();
+            const list = [];
+
+            // 1) Collect directly from custOrders timestamps (recovers ALL past edits even before this update!)
+            (appData.custOrders || []).forEach(c => {
+                const events = [];
+                if (c.deliveredAt && custOrderBelongsToMyActivity(c.deliveredBy)) {
+                    const settled = c.deliverySettlement && c.deliverySettlement.settled && c.deliverySettlement.settledAmount > 0;
+                    events.push({
+                        t: c.deliveredAt,
+                        kind: settled ? 'تسليم وتحصيل الباقي' : 'تسليم وإغلاق',
+                        badgeCls: settled ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                        note: settled ? `تحصيل ${fmtMoney(c.deliverySettlement.settledAmount)} (${c.deliverySettlement.payMethod || c.payMethod || 'نقدي'})` : 'إغلاق الفاتورة'
+                    });
+                }
+                if (c.updatedAt && custOrderBelongsToMyActivity(c.updatedBy)) {
+                    events.push({
+                        t: c.updatedAt,
+                        kind: 'تعديل فاتورة',
+                        badgeCls: 'bg-sky-100 text-sky-800 border-sky-200',
+                        note: `المدفوع ${fmtMoney(numOr0(c.paid))} · الباقي ${fmtMoney(Math.max(0, custRemaining(c)))}`
+                    });
+                }
+                if (c.createdAt && custOrderBelongsToMyActivity(c.createdBy)) {
+                    events.push({
+                        t: c.createdAt,
+                        kind: 'إضافة فاتورة',
+                        badgeCls: 'bg-slate-100 text-slate-700 border-slate-200',
+                        note: `الإجمالي ${fmtMoney(numOr0(c.amount))}`
+                    });
+                }
+                if (!events.length) return;
+                events.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
+                const latest = events[0];
+                list.push({ c, t: latest.t, kind: latest.kind, badgeCls: latest.badgeCls, note: latest.note });
+            });
+
+            // 2) Also merge personal logs referencing customer orders (in case updatedBy changed later)
+            const seenIds = new Set(list.map(x => x.c.id));
+            (appData.logs || []).forEach(l => {
+                if (!logBelongsToMe(l)) return;
+                const c = custFindOrderFromLog(l);
+                if (!c || seenIds.has(c.id)) return;
+                seenIds.add(c.id);
+                list.push({
+                    c,
+                    t: l.t || '',
+                    kind: l.action || 'حركة على الفاتورة',
+                    badgeCls: /تسليم/.test(l.action || '') ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-indigo-100 text-indigo-800 border-indigo-200',
+                    note: l.detail || ''
+                });
+            });
+
+            return list.filter(x => {
+                const iso = String(x.t || '').slice(0, 10);
+                if (period === 'today' && iso !== today) return false;
+                if (period === 'yesterday' && iso !== yest) return false;
+                if (period === 'week' && (!x.t || new Date(x.t).getTime() < weekAgo)) return false;
+                if (needle) {
+                    const hay = `${custNoLabel(x.c)} ${x.c.customer} ${x.c.repName} ${x.kind} ${x.note}`.toLowerCase();
+                    if (!hay.includes(needle)) return false;
+                }
+                return true;
+            }).sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
+        }
+
+        let custHistTab = 'invoices';
+        let custHistPeriod = 'all';
+        function setCustHistTab(t) { custHistTab = t; renderCustMyHistory(); }
+        function setCustHistPeriod(p) { custHistPeriod = p; renderCustMyHistory(); }
+
+        function openCustMyHistoryModal() {
+            if (!can('logs.custorders') && !can('logs.view')) return toast('ليس لديك صلاحية عرض سجل الحركات', 'error');
+            custHistTab = 'invoices';
+            custHistPeriod = 'all';
+            openModal({
+                title: 'سجل حركاتي على الفواتير (الرجوع السريع)',
+                size: 'lg',
+                body: `<div class="space-y-3">
+                    <div class="rounded-xl bg-amber-50/80 border border-amber-200 px-3 py-2 text-xs font-bold text-amber-900 flex items-center gap-2">
+                        <i class="fa-solid fa-clock-rotate-left text-amber-600"></i>
+                        <span>يعرض هذا السجل الفواتير التي قمت بإضافتها أو تعديلها أو تسليمها مؤخراً — يمكنك فتح أي فاتورة أو إظهارها مباشرة في الجدول بنقرة واحدة.</span>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="inline-flex rounded-xl bg-slate-100 p-1 gap-1" id="custHistTabs">
+                            <button type="button" data-htab="invoices" onclick="setCustHistTab('invoices')" class="px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer">آخر الفواتير التي اشتغلت عليها</button>
+                            <button type="button" data-htab="logs" onclick="setCustHistTab('logs')" class="px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer">سجل العمليات التفصيلي</button>
+                        </div>
+                        <div class="flex flex-wrap gap-1" id="custHistPeriods">
+                            ${[['all', 'الكل'], ['today', 'اليوم'], ['yesterday', 'أمس'], ['week', 'آخر 7 أيام']].map(([k, lbl]) =>
+                                `<button type="button" data-hper="${k}" onclick="setCustHistPeriod('${k}')" class="px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer">${lbl}</button>`
+                            ).join('')}
+                        </div>
+                    </div>
+                    <div class="relative">
+                        <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+                        <input id="custHistSearch" type="search" oninput="renderCustMyHistory()" placeholder="بحث برقم الفاتورة أو اسم العميل أو نوع الحركة..." class="${INPUT_CLS} pr-9 !py-2 !text-xs">
+                    </div>
+                    <div id="custHistBody" class="max-h-[58vh] overflow-y-auto space-y-2 pe-1"></div>
+                </div>`,
+                onOpen: renderCustMyHistory
+            });
+        }
+
+        function renderCustMyHistory() {
+            const box = el('custHistBody');
+            if (!box) return;
+            document.querySelectorAll('#custHistTabs [data-htab]').forEach(b => {
+                const on = b.getAttribute('data-htab') === custHistTab;
+                b.className = `px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer ${on ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'}`;
+            });
+            document.querySelectorAll('#custHistPeriods [data-hper]').forEach(b => {
+                const on = b.getAttribute('data-hper') === custHistPeriod;
+                b.className = `px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer ${on ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`;
+            });
+            const q = (el('custHistSearch')?.value || '').trim().toLowerCase();
+
+            if (custHistTab === 'invoices') {
+                const rows = custMyRecentInvoices(custHistPeriod, q).slice(0, 120);
+                if (!rows.length) {
+                    box.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm font-bold bg-slate-50 rounded-2xl border border-slate-200">
+                        <i class="fa-solid fa-inbox text-2xl text-slate-300 mb-2 block"></i>
+                        لا توجد حركات مسجلة لك على الفواتير في هذه الفترة
+                    </div>`;
+                    return;
+                }
+                box.innerHTML = rows.map(({ c, t, kind, badgeCls, note }) => {
+                    const id = esc(c.id);
+                    const rem = r2(Math.max(0, custRemaining(c)));
+                    return `<div class="rounded-xl border border-slate-200 bg-white hover:border-brand-300 p-3 space-y-2 transition-colors">
+                        <div class="flex flex-wrap items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-1.5">
+                                    <span class="font-mono font-black text-sm text-brand-700">${esc(custNoLabel(c))}</span>
+                                    <b class="text-sm text-slate-900 truncate">${esc(c.customer || '—')}</b>
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeCls}">${esc(kind)}</span>
+                                    ${custDeliveryBadge(c)}
+                                </div>
+                                <p class="text-[11px] text-slate-500 mt-0.5"><i class="fa-regular fa-clock me-1"></i>${esc(fmtDateTime(t))}${c.repName ? ' · المندوب: ' + esc(c.repName) : ''}${note ? ' · ' + esc(note) : ''}</p>
+                            </div>
+                            <div class="text-end text-xs shrink-0">
+                                <span class="text-slate-500">الإجمالي: <b>${fmtMoney(numOr0(c.amount))}</b></span> ·
+                                <span class="text-emerald-700">المدفوع: <b>${fmtMoney(numOr0(c.paid))}</b></span> ·
+                                <span class="${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">الباقي: <b>${fmtMoney(rem)}</b></span>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center justify-end gap-1.5 pt-1.5 border-t border-slate-100">
+                            ${custDeliverBtnHtml(c, true)}
+                            <button type="button" onclick="openCustDetail('${id}')" class="px-2.5 h-7 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-700 cursor-pointer"><i class="fa-solid fa-eye me-1"></i>عرض</button>
+                            ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" class="px-2.5 h-7 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-700 cursor-pointer"><i class="fa-solid fa-pen-to-square me-1"></i>تعديل</button>` : ''}
+                            <button type="button" onclick="custJumpToOrder(${Number(c.no) || 0})" class="px-2.5 h-7 rounded-lg text-[11px] font-bold bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 cursor-pointer"><i class="fa-solid fa-crosshairs me-1"></i>إظهار بالجدول</button>
+                        </div>
+                    </div>`;
+                }).join('');
+                return;
+            }
+
+            // Tab 2: Detailed personal logs for Customer Orders
+            const today = todayISO(), yest = addDays(today, -1), weekAgo = Date.now() - 7 * 86400000;
+            const logs = (appData.logs || []).filter(l => {
+                if (!logBelongsToMe(l)) return false;
+                const txt = `${l.action || ''} ${l.detail || ''}`;
+                if (!/(طلبية عميل|فاتورة عميل|طلبيات العملاء|تسليم وإغلاق|تراجع عن تسليم|مندوب)/.test(txt)) return false;
+                const iso = String(l.t || '').slice(0, 10);
+                if (custHistPeriod === 'today' && iso !== today) return false;
+                if (custHistPeriod === 'yesterday' && iso !== yest) return false;
+                if (custHistPeriod === 'week' && (!l.t || new Date(l.t).getTime() < weekAgo)) return false;
+                if (q && !`${l.action} ${l.detail}`.toLowerCase().includes(q)) return false;
+                return true;
+            }).slice(0, 150);
+
+            if (!logs.length) {
+                box.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm font-bold bg-slate-50 rounded-2xl border border-slate-200">لا توجد سجلات مطابقة في هذه الفترة</div>`;
+                return;
+            }
+            box.innerHTML = logs.map(l => {
+                const c = custFindOrderFromLog(l);
+                return `<div class="rounded-xl border border-slate-200 bg-white p-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-extrabold text-slate-800">${esc(l.action)}</span>
+                            <span class="text-[11px] text-slate-400 font-mono">${esc(fmtDateTime(l.t))}</span>
+                        </div>
+                        <p class="text-slate-600 mt-0.5 break-words">${esc(l.detail || '—')}</p>
+                    </div>
+                    ${c ? `<div class="flex items-center gap-1 shrink-0">
+                        <button type="button" onclick="openCustDetail('${esc(c.id)}')" class="px-2 h-7 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-700 cursor-pointer"><i class="fa-solid fa-eye me-1"></i>فتح</button>
+                        ${canCust('manage') ? `<button type="button" onclick="openCustModal('${esc(c.id)}')" class="px-2 h-7 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-700 cursor-pointer"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                        <button type="button" onclick="custJumpToOrder(${Number(c.no) || 0})" class="px-2 h-7 rounded-lg text-[11px] font-bold bg-brand-50 text-brand-700 border border-brand-200 cursor-pointer" title="إظهار في الجدول"><i class="fa-solid fa-crosshairs"></i></button>
+                    </div>` : ''}
+                </div>`;
+            }).join('');
         }
 
         // ---- sales reps ----
@@ -10343,8 +10590,9 @@
             const cid = esc(c.id);
             const remPos = r2(Math.max(0, custRemaining(c)));
             const showDeliver = canCust('manage') && c.delivery !== 'ملغي' && c.delivery !== 'مرتجع' && (c.delivery !== 'تم التسليم' || remPos > 0);
+            const isCollectBtn = c.delivery === 'تم التسليم' && remPos > 0;
             const actions = `<div class="flex flex-wrap gap-2 pt-3 border-t border-slate-100 mt-2">
-                ${showDeliver ? `<button type="button" onclick="openCustDeliverModal('${cid}')" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold flex items-center gap-1.5 shadow-sm cursor-pointer"><i class="fa-solid ${remPos > 0 ? 'fa-hand-holding-dollar' : 'fa-check-double'}"></i> ${c.delivery === 'تم التسليم' ? `تحصيل الباقي (${fmtMoney(remPos)})` : (remPos > 0 ? `تم التسليم وتحصيل الباقي (${fmtMoney(remPos)})` : 'تم التسليم وإغلاق الفاتورة')}</button>` : ''}
+                ${showDeliver ? `<button type="button" onclick="openCustDeliverModal('${cid}')" class="px-4 py-2 rounded-xl ${isCollectBtn ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-600 hover:bg-emerald-700'} text-white text-sm font-extrabold flex items-center gap-1.5 shadow-sm cursor-pointer"><i class="fa-solid ${remPos > 0 ? 'fa-hand-holding-dollar' : 'fa-check-double'}"></i> ${isCollectBtn ? `تحصيل الباقي (${fmtMoney(remPos)})` : (remPos > 0 ? `تم التسليم وتحصيل الباقي (${fmtMoney(remPos)})` : 'تم التسليم وإغلاق الفاتورة')}</button>` : ''}
                 <button type="button" onclick="printCustOrder('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-print"></i> طباعة</button>
                 ${canCustComments() ? `<button type="button" onclick="openCustComments('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-comments"></i> تعليقات الفاتورة</button>` : ''}
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
@@ -20814,25 +21062,127 @@
         }
 
         // ---------- Logs ----------
+        let logFilterCat = 'all';
+        let logFilterPer = 'all';
+        function setLogFilterCat(c) { logFilterCat = c; renderLogs(); }
+        function setLogFilterPer(p) { logFilterPer = p; renderLogs(); }
+
+        function filteredMyLogs() {
+            const q = (el('logSearch')?.value || '').trim().toLowerCase();
+            const today = todayISO(), yest = addDays(today, -1), weekAgo = Date.now() - 7 * 86400000;
+            return (appData.logs || []).filter(l => {
+                if (!logBelongsToMe(l)) return false;
+                const txt = `${l.action || ''} ${l.detail || ''}`;
+                if (logFilterCat === 'cust' && !/(طلبية عميل|فاتورة عميل|طلبيات العملاء|تسليم وإغلاق|تراجع عن تسليم|مندوب)/.test(txt)) return false;
+                if (logFilterCat === 'deliver' && !/(تسليم|تحصيل|تراجع عن تسليم)/.test(txt)) return false;
+                if (logFilterCat === 'fin' && !/(شيك|مستفيد|خزينة|مالية|مصروف|مديونية)/.test(txt)) return false;
+                const iso = String(l.t || '').slice(0, 10);
+                if (logFilterPer === 'today' && iso !== today) return false;
+                if (logFilterPer === 'yesterday' && iso !== yest) return false;
+                if (logFilterPer === 'week' && (!l.t || new Date(l.t).getTime() < weekAgo)) return false;
+                if (q && !`${l.user} ${l.action} ${l.detail}`.toLowerCase().includes(q)) return false;
+                return true;
+            });
+        }
+
+        function exportLogsXlsx() {
+            if (!can('logs.export')) return toast('ليس لديك صلاحية تصدير سجل النشاط', 'error');
+            const list = filteredMyLogs();
+            if (!list.length) return toast('لا توجد سجلات لتصديرها', 'info');
+            if (typeof XLSX === 'undefined') return toast('مكتبة Excel غير متاحة حالياً', 'error');
+            const rows = list.map(l => ({
+                'الوقت': fmtDateTime(l.t),
+                'المستخدم': l.user || '',
+                'الإجراء': l.action || '',
+                'التفاصيل': l.detail || ''
+            }));
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.json_to_sheet(rows);
+            ws['!cols'] = [{ wch: 22 }, { wch: 20 }, { wch: 28 }, { wch: 55 }];
+            XLSX.utils.book_append_sheet(wb, ws, 'سجل النشاط');
+            XLSX.writeFile(wb, `activity-logs-${todayISO()}.xlsx`);
+            toast(`تم تصدير ${list.length} حركة إلى Excel`, 'success');
+        }
+
+        function printLogsReport() {
+            if (!can('logs.export')) return toast('ليس لديك صلاحية طباعة سجل النشاط', 'error');
+            const list = filteredMyLogs().slice(0, 300);
+            const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>سجل النشاط</title>
+                <style>body{font-family:Tahoma,Arial,sans-serif;padding:18px;color:#0f172a}h1{font-size:16pt;margin:0 0 6px}table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-top:10px}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:right}th{background:#f1f5f9}</style>
+                </head><body><h1>سجل نشاطي وحركاتي</h1><div>المستخدم: <b>${esc(currentUser()?.name || '')}</b> · عدد الحركات: ${list.length} · التاريخ: ${esc(fmtDateAr(todayISO()))}</div>
+                <table><thead><tr><th>الوقت</th><th>الإجراء</th><th>التفاصيل</th></tr></thead><tbody>
+                ${list.map(l => `<tr><td style="white-space:nowrap">${esc(fmtDateTime(l.t))}</td><td><b>${esc(l.action)}</b></td><td>${esc(l.detail)}</td></tr>`).join('')}
+                </tbody></table></body></html>`;
+            openPrintView(html);
+        }
+
         function viewLogs() {
+            const recentInv = (typeof custMyRecentInvoices === 'function' && canCust('view')) ? custMyRecentInvoices('all', '').slice(0, 8) : [];
+            const recentCard = recentInv.length ? `
+                <div class="bg-white p-4 rounded-2xl border-2 border-amber-200/80 shadow-sm space-y-2.5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="font-extrabold text-sm text-slate-900 flex items-center gap-2"><i class="fa-solid fa-file-invoice text-amber-500"></i>آخر فواتير طلبيات العملاء التي اشتغلت عليها (${recentInv.length})</h3>
+                        <button type="button" onclick="openCustMyHistoryModal()" class="text-xs font-extrabold text-brand-700 hover:underline cursor-pointer">عرض كل حركات الفواتير ←</button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
+                        ${recentInv.map(({ c, t, kind, badgeCls }) => {
+                            const id = esc(c.id);
+                            const rem = r2(Math.max(0, custRemaining(c)));
+                            return `<div class="rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-white hover:border-brand-300 p-2.5 space-y-1.5 transition-colors">
+                                <div class="flex items-center justify-between gap-1.5">
+                                    <span class="font-mono font-black text-xs text-brand-700">${esc(custNoLabel(c))}</span>
+                                    <span class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeCls}">${esc(kind)}</span>
+                                </div>
+                                <p class="font-bold text-xs text-slate-900 truncate" title="${esc(c.customer)}">${esc(c.customer || '—')}</p>
+                                <p class="text-[10px] text-slate-500">${esc(fmtDateTime(t))} · <b class="${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">الباقي ${fmtMoney(rem)}</b></p>
+                                <div class="flex items-center gap-1 pt-1 border-t border-slate-200/70">
+                                    <button type="button" onclick="openCustDetail('${id}')" class="flex-1 py-1 rounded-lg bg-white border border-slate-200 hover:border-brand-400 text-[11px] font-bold text-slate-700 cursor-pointer">فتح</button>
+                                    ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" class="px-2 py-1 rounded-lg bg-white border border-slate-200 hover:border-brand-400 text-[11px] font-bold text-slate-700 cursor-pointer">تعديل</button>` : ''}
+                                    <button type="button" onclick="custJumpToOrder(${Number(c.no) || 0})" class="px-2 py-1 rounded-lg bg-brand-50 border border-brand-200 text-[11px] font-bold text-brand-700 cursor-pointer" title="إظهار في جدول الفواتير"><i class="fa-solid fa-crosshairs"></i></button>
+                                </div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </div>` : '';
             return {
                 title: 'سجل النشاط',
                 actions: '',
-                html: `
-                    <div class="bg-white p-3 sm:p-4 rounded-xl border border-slate-200">
-                        <div class="relative w-full sm:w-96">
-                            <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
-                            <input type="search" id="logSearch" oninput="uiDebounce('logQ', renderLogs, 140)" placeholder="بحث بالمستخدم أو الإجراء..." class="${INPUT_CLS} pr-9">
+                html: `<div class="space-y-4">
+                    ${recentCard}
+                    <div class="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div class="relative w-full sm:w-96">
+                                <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                                <input type="search" id="logSearch" oninput="uiDebounce('logQ', renderLogs, 140)" placeholder="بحث برقم الفاتورة أو العميل أو الإجراء..." class="${INPUT_CLS} pr-9">
+                            </div>
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                ${canCust('view') ? btn('openCustMyHistoryModal()', 'حركات فواتيري', 'fa-file-invoice', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
+                                ${can('logs.export') ? btn('exportLogsXlsx()', 'تصدير Excel', 'fa-file-excel', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
+                                ${can('logs.export') ? btn('printLogsReport()', 'طباعة', 'fa-print', BTN_SECONDARY + ' !py-1.5 !text-xs') : ''}
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                            <div class="flex flex-wrap gap-1" id="logCatPills">
+                                ${[['all', 'الكل'], ['cust', 'طلبيات العملاء والفواتير'], ['deliver', 'التسليم والتحصيل'], ['fin', 'الشيكات والمالية']].map(([k, lbl]) =>
+                                    `<button type="button" data-lcat="${k}" onclick="setLogFilterCat('${k}')" class="px-2.5 py-1 rounded-lg text-xs font-extrabold cursor-pointer">${lbl}</button>`
+                                ).join('')}
+                            </div>
+                            <div class="flex flex-wrap gap-1" id="logPerPills">
+                                ${[['all', 'كل الأوقات'], ['today', 'اليوم'], ['yesterday', 'أمس'], ['week', 'آخر 7 أيام']].map(([k, lbl]) =>
+                                    `<button type="button" data-lper="${k}" onclick="setLogFilterPer('${k}')" class="px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer">${lbl}</button>`
+                                ).join('')}
+                            </div>
                         </div>
                     </div>
                     <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                         <div class="overflow-x-auto"><table class="w-full text-right text-sm">
                             <thead class="bg-slate-50 text-slate-600 text-xs font-bold border-b border-slate-200">
-                                <tr><th class="py-3 px-4 whitespace-nowrap">الوقت</th><th class="py-3 px-4">المستخدم</th><th class="py-3 px-4">الإجراء</th><th class="py-3 px-4">التفاصيل</th></tr>
+                                <tr><th class="py-3 px-4 whitespace-nowrap">الوقت</th><th class="py-3 px-4">المستخدم</th><th class="py-3 px-4">الإجراء</th><th class="py-3 px-4">التفاصيل</th><th class="py-3 px-4 text-center whitespace-nowrap">رجوع سريع</th></tr>
                             </thead>
                             <tbody id="logBody" class="divide-y divide-slate-100"></tbody>
                         </table></div>
-                    </div>`,
+                    </div>
+                </div>`,
                 after: renderLogs
             };
         }
@@ -20840,14 +21190,31 @@
         function renderLogs() {
             const body = el('logBody');
             if (!body) return;
-            const q = (el('logSearch')?.value || '').trim().toLowerCase();
-            const list = appData.logs.filter(l => logBelongsToMe(l) && (!q || `${l.user} ${l.action} ${l.detail}`.toLowerCase().includes(q))).slice(0, 300);
-            body.innerHTML = list.map(l => `<tr class="hover:bg-slate-50">
-                <td class="py-3 px-4 text-xs text-slate-500 whitespace-nowrap">${fmtDateTime(l.t)}</td>
-                <td class="py-3 px-4 font-semibold whitespace-nowrap">${esc(l.user)}</td>
-                <td class="py-3 px-4">${esc(l.action)}</td>
-                <td class="py-3 px-4 text-slate-500">${esc(l.detail)}</td></tr>`).join('')
-                || '<tr><td colspan="4" class="py-8 text-center text-slate-400">لا توجد نتائج</td></tr>';
+            document.querySelectorAll('#logCatPills [data-lcat]').forEach(b => {
+                const on = b.getAttribute('data-lcat') === logFilterCat;
+                b.className = `px-2.5 py-1 rounded-lg text-xs font-extrabold cursor-pointer ${on ? 'bg-brand-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
+            });
+            document.querySelectorAll('#logPerPills [data-lper]').forEach(b => {
+                const on = b.getAttribute('data-lper') === logFilterPer;
+                b.className = `px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer ${on ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`;
+            });
+            const list = filteredMyLogs().slice(0, 300);
+            body.innerHTML = list.map(l => {
+                const c = canCust('view') ? custFindOrderFromLog(l) : null;
+                const jumpHtml = c ? `<div class="flex items-center justify-center gap-1">
+                    <button type="button" onclick="openCustDetail('${esc(c.id)}')" class="px-2 py-1 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-700 cursor-pointer whitespace-nowrap"><i class="fa-solid fa-eye me-1"></i>فتح</button>
+                    ${canCust('manage') ? `<button type="button" onclick="openCustModal('${esc(c.id)}')" class="px-2 py-1 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-700 cursor-pointer" title="تعديل الفاتورة"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
+                    <button type="button" onclick="custJumpToOrder(${Number(c.no) || 0})" class="px-2 py-1 rounded-lg text-[11px] font-bold bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 cursor-pointer" title="إظهار الفاتورة في الجدول"><i class="fa-solid fa-crosshairs"></i></button>
+                </div>` : '<span class="text-slate-300">—</span>';
+                return `<tr class="hover:bg-slate-50">
+                    <td class="py-2.5 px-4 text-xs text-slate-500 whitespace-nowrap">${fmtDateTime(l.t)}</td>
+                    <td class="py-2.5 px-4 font-semibold whitespace-nowrap text-xs">${esc(l.user)}</td>
+                    <td class="py-2.5 px-4 font-bold text-xs">${esc(l.action)}</td>
+                    <td class="py-2.5 px-4 text-slate-600 text-xs">${esc(l.detail)}</td>
+                    <td class="py-2.5 px-4 text-center whitespace-nowrap">${jumpHtml}</td>
+                </tr>`;
+            }).join('')
+                || '<tr><td colspan="5" class="py-8 text-center text-slate-400">لا توجد نتائج</td></tr>';
         }
 
         // ---------- Settings ----------
@@ -21356,7 +21723,7 @@
 
 
         async function clearLogs() {
-            if (!can('settings.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
+            if (!can('logs.clear') && !can('settings.manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return; }
             if (!confirm('مسح كل سجل النشاط؟')) return;
             try {
                 await deleteAllLogs(true);
@@ -22976,5 +23343,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a1048da89e159',t:'MTc5NTg3NjE1Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a1048da89e159',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a61a3cb948eee1b0',t:'MTc5NTg3Nzk3Mw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a61a3cb948eee1b0',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
