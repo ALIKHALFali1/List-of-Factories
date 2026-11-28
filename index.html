@@ -8342,11 +8342,31 @@
 
         const custDeliveryBadge = c => `<span class="px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${CUST_DELIVERY_CLS[c.delivery] || ''}">${esc(c.delivery || '—')}</span>`;
 
+        function custDeliverBtnHtml(c) {
+            if (!canCust('manage')) return '';
+            if (c.delivery === 'ملغي' || c.delivery === 'مرتجع') return '';
+            const id = esc(c.id);
+            const rem = r2(Math.max(0, custRemaining(c)));
+            const isDelivered = c.delivery === 'تم التسليم';
+            if (isDelivered && rem <= 0) {
+                const stamp = c.deliveredAt ? ` (${fmtDateTime(c.deliveredAt)}${c.deliveredBy ? ' — ' + c.deliveredBy : ''})` : '';
+                return `<span title="تم التسليم وإغلاق الفاتورة بالكامل${esc(stamp)}" aria-label="تم التسليم" class="${BTN_ICON} text-emerald-600 bg-emerald-50/80 border border-emerald-200/70 cursor-default"><i class="fa-solid fa-circle-check"></i></span>`;
+            }
+            if (isDelivered && rem > 0) {
+                return `<button type="button" onclick="openCustDeliverModal('${id}')" title="تحصيل الباقي وإغلاق الفاتورة نهائياً (${esc(fmtMoney(rem))})" aria-label="تحصيل الباقي وإغلاق الفاتورة" class="inline-flex items-center gap-1 px-2 h-8 rounded-lg text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-hand-holding-dollar"></i><span>تحصيل الباقي</span></button>`;
+            }
+            const tip = rem > 0
+                ? `تم التسليم وإغلاق الفاتورة (تحصيل الباقي ${fmtMoney(rem)} وإضافته للمدفوع)`
+                : 'تم التسليم وإغلاق الفاتورة';
+            return `<button type="button" onclick="openCustDeliverModal('${id}')" title="${esc(tip)}" aria-label="تم التسليم" class="inline-flex items-center gap-1 px-2.5 h-8 rounded-lg text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer whitespace-nowrap"><i class="fa-solid fa-check-double"></i><span>تم التسليم</span></button>`;
+        }
+
         function custActionsHtml(c) {
             const id = esc(c.id);
             const unseen = custCmtUnseen(c);
             const pending = custCmtUnhandled(c);
-            return `<div class="flex items-center justify-center gap-1">
+            return `<div class="flex items-center justify-center flex-wrap gap-1">
+                ${custDeliverBtnHtml(c)}
                 <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" aria-label="عرض التفاصيل" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
                 ${canCustComments() ? `<button type="button" onclick="openCustComments('${id}')" title="تعليقات الفاتورة" aria-label="تعليقات الفاتورة" class="${BTN_ICON} relative ${pending ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'}"><i class="fa-solid fa-comments"></i>${unseen ? `<span class="absolute -top-1 -left-1 min-w-[1.05rem] h-[1.05rem] px-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-[1.05rem] text-center">${unseen}</span>` : ''}</button>` : ''}
                 <button type="button" onclick="printCustOrder('${id}')" title="طباعة" aria-label="طباعة" class="${BTN_ICON} text-slate-500 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-print"></i></button>
@@ -8882,7 +8902,8 @@
 
             const rowBtns = (c, d) => {
                 const id = esc(c.id);
-                return `<div class="flex items-center justify-center gap-1">
+                return `<div class="flex items-center justify-center flex-wrap gap-1">
+                    ${custDeliverBtnHtml(c)}
                     <button type="button" onclick="openCustDetail('${id}')" title="عرض التفاصيل" class="${BTN_ICON} text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-eye"></i></button>
                     ${canCust('manage') ? `<button type="button" onclick="openCustModal('${id}')" title="تعديل / تمديد الموعد" class="${BTN_ICON} text-slate-600 hover:text-brand-600 hover:bg-brand-50"><i class="fa-solid fa-calendar-plus"></i></button>` : ''}
                     ${canCust('manage') && (d.status === 'expired' || d.status === 'today' || d.status === 'soon') ? `<button type="button" onclick="custSendExpiryAlertOne('${id}')" title="إرسال رسالة تنبيه فورية للمندوب والإدارة" class="${BTN_ICON} text-rose-600 hover:text-rose-700 hover:bg-rose-50"><i class="fa-solid fa-bell"></i></button>` : ''}
@@ -9635,6 +9656,210 @@
             }, () => {});
         }
 
+        function custDeliverTogglePreview() {
+            const cb = el('custDeliverSettleCb');
+            const prevBox = el('custDeliverPreview');
+            const payWrap = el('custDeliverPayWrap');
+            const subBtn = document.querySelector('#modalForm button[type="submit"]');
+            if (!cb || !prevBox) return;
+            const checked = cb.checked;
+            const amount = numOr0(cb.dataset.amount);
+            const paid = numOr0(cb.dataset.paid);
+            const rem = numOr0(cb.dataset.rem);
+            const wasDeliv = cb.dataset.wasDeliv === '1';
+            const newPaid = checked ? r2(paid + rem) : paid;
+            const newRem = checked ? 0 : rem;
+            if (payWrap) payWrap.style.display = checked ? '' : 'none';
+            prevBox.innerHTML = `<div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <div class="rounded-xl p-2.5 border ${checked ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}">
+                    <span class="block text-[11px] font-bold text-slate-500">المدفوع بعد التنفيذ</span>
+                    <b class="block text-sm font-black ${checked ? 'text-emerald-700' : 'text-slate-700'} mt-0.5 whitespace-nowrap">${fmtMoney(newPaid)}</b>
+                    ${checked ? `<span class="text-[10px] font-extrabold text-emerald-600">+${fmtMoney(rem)} محصّل الآن</span>` : `<span class="text-[10px] text-slate-400">بدون تغيير</span>`}
+                </div>
+                <div class="rounded-xl p-2.5 border ${checked ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}">
+                    <span class="block text-[11px] font-bold text-slate-500">الباقي بعد التنفيذ</span>
+                    <b class="block text-sm font-black ${checked ? 'text-emerald-700' : 'text-rose-700'} mt-0.5 whitespace-nowrap">${fmtMoney(newRem)}</b>
+                    ${checked ? `<span class="text-[10px] font-extrabold text-emerald-600">✓ تم تصفير الباقي</span>` : `<span class="text-[10px] font-bold text-rose-600">سيبقى مفتوحاً للتحصيل</span>`}
+                </div>
+                <div class="rounded-xl p-2.5 border bg-emerald-50 border-emerald-200">
+                    <span class="block text-[11px] font-bold text-slate-500">حالة الفاتورة</span>
+                    <b class="block text-sm font-black text-emerald-700 mt-0.5">تم التسليم ✓</b>
+                    <span class="text-[10px] font-bold text-emerald-600">${checked ? 'مغلقة ومسدد كامل قيمتها' : 'تم التسليم (باقي مفتوح)'}</span>
+                </div>
+            </div>`;
+            if (subBtn) {
+                subBtn.textContent = checked
+                    ? (wasDeliv ? 'تحصيل الباقي وإغلاق الفاتورة' : 'تحصيل الباقي وتأكيد التسليم')
+                    : 'تأكيد التسليم فقط (بدون تحصيل الباقي)';
+            }
+        }
+
+        function openCustDeliverModal(id) {
+            if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c) return toast('الفاتورة مش موجودة', 'error');
+            const amount = r2(numOr0(c.amount));
+            const paid = r2(numOr0(c.paid));
+            const rawRem = custRemaining(c);
+            const rem = r2(Math.max(0, rawRem));
+            const wasDeliv = c.delivery === 'تم التسليم';
+            if (wasDeliv && rem <= 0) return toast('هذه الفاتورة تم تسليمها وسدادها بالكامل بالفعل', 'info');
+
+            const payOpts = CUST_PAYMETHODS.map(m => `<option value="${esc(m)}" ${(c.payMethod || 'نقدي') === m ? 'selected' : ''}>${esc(m)}</option>`).join('');
+            const body = `<div class="space-y-4">
+                <div class="rounded-2xl border-2 border-emerald-200 bg-gradient-to-l from-emerald-50/90 to-white p-3.5 flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                            <i class="fa-solid ${rem > 0 ? 'fa-hand-holding-dollar' : 'fa-check-double'} text-lg"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <p class="font-black text-slate-900 text-base truncate">${esc(c.customer || '—')}</p>
+                            <p class="text-xs text-slate-600 font-mono">فاتورة ${esc(custNoLabel(c))} · ${esc(fmtDateAr(c.date) || '—')}${c.repName ? ' · المندوب: ' + esc(c.repName) : ''}</p>
+                        </div>
+                    </div>
+                    ${custDeliveryBadge(c)}
+                </div>
+
+                <div class="grid grid-cols-3 gap-2 text-center">
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-2.5">
+                        <span class="block text-[11px] font-bold text-slate-500">إجمالي الفاتورة</span>
+                        <b class="block text-sm font-black text-slate-900 mt-0.5 whitespace-nowrap">${fmtMoney(amount)}</b>
+                    </div>
+                    <div class="rounded-xl bg-sky-50 border border-sky-200 p-2.5">
+                        <span class="block text-[11px] font-bold text-sky-700">المدفوع حالياً</span>
+                        <b class="block text-sm font-black text-sky-800 mt-0.5 whitespace-nowrap">${fmtMoney(paid)}</b>
+                    </div>
+                    <div class="rounded-xl ${rem > 0 ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'} border p-2.5">
+                        <span class="block text-[11px] font-bold ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'}">${rawRem < 0 ? 'رصيد زائد للعميل' : 'الباقي الحالي'}</span>
+                        <b class="block text-sm font-black ${rem > 0 ? 'text-rose-700' : 'text-emerald-700'} mt-0.5 whitespace-nowrap">${rawRem < 0 ? fmtMoney(-rawRem) : fmtMoney(rem)}</b>
+                    </div>
+                </div>
+
+                ${rem > 0 ? `
+                    <div class="rounded-2xl border-2 border-emerald-300 bg-emerald-50/50 p-3.5 space-y-3">
+                        <label class="flex items-start gap-2.5 cursor-pointer select-none">
+                            <input id="custDeliverSettleCb" name="settleBalance" type="checkbox" value="1" checked
+                                data-amount="${amount}" data-paid="${paid}" data-rem="${rem}" data-was-deliv="${wasDeliv ? '1' : '0'}"
+                                onchange="custDeliverTogglePreview()"
+                                class="mt-0.5 w-4 h-4 accent-emerald-600 rounded cursor-pointer shrink-0">
+                            <span class="text-sm font-extrabold text-emerald-900 leading-snug">
+                                تحصيل باقي الفاتورة بالكامل (<span class="underline">${fmtMoney(rem)}</span>) وخصمه من الباقي وإضافته إلى المدفوع
+                            </span>
+                        </label>
+                        <div id="custDeliverPreview"></div>
+                        <div id="custDeliverPayWrap" class="pt-1">
+                            ${field('طريقة تحصيل الباقي', `<select name="payMethod" class="${INPUT_CLS}">${payOpts}</select>`)}
+                        </div>
+                    </div>
+                ` : `
+                    <div class="rounded-2xl border-2 border-emerald-300 bg-emerald-50/70 p-3.5 flex items-center gap-3">
+                        <i class="fa-solid fa-circle-check text-2xl text-emerald-600 shrink-0"></i>
+                        <div class="text-sm">
+                            <p class="font-extrabold text-emerald-900">الفاتورة مسددة بالكامل — لا يوجد أي مبلغ متبقٍ</p>
+                            <p class="text-xs text-emerald-700 mt-0.5">سيتم تحويل حالة الفاتورة إلى <b>«تم التسليم»</b> وإغلاقها رسمياً.</p>
+                        </div>
+                    </div>
+                `}
+
+                ${field('ملاحظة التسليم (اختياري)', `<input name="deliverNote" type="text" placeholder="مثال: استلمها العميل بنفسه / اسم السائق أو رقم الإيصال" class="${INPUT_CLS}">`)}
+            </div>`;
+
+            openModal({
+                title: wasDeliv ? `تحصيل باقي الفاتورة ${custNoLabel(c)}` : `تسليم وإغلاق الفاتورة ${custNoLabel(c)}`,
+                size: 'lg',
+                submitText: rem > 0 ? (wasDeliv ? 'تحصيل الباقي وإغلاق الفاتورة' : 'تحصيل الباقي وتأكيد التسليم') : 'تأكيد التسليم وإغلاق الفاتورة',
+                body,
+                onOpen: () => { if (rem > 0) custDeliverTogglePreview(); },
+                onSubmit: fd => confirmCustDeliver(c.id, fd)
+            });
+        }
+
+        function confirmCustDeliver(id, fd) {
+            if (!canCust('manage')) { toast('ليس لديك صلاحية لهذا الإجراء', 'error'); return false; }
+            const c = appData.custOrders.find(x => x.id === id);
+            if (!c) { toast('الفاتورة مش موجودة', 'error'); return false; }
+
+            const prev = {
+                delivery: c.delivery,
+                paid: c.paid,
+                payMethod: c.payMethod,
+                notes: c.notes,
+                deliveredAt: c.deliveredAt || '',
+                deliveredBy: c.deliveredBy || '',
+                deliverySettlement: c.deliverySettlement ? { ...c.deliverySettlement } : null,
+                updatedAt: c.updatedAt || '',
+                updatedBy: c.updatedBy || ''
+            };
+
+            const rem = r2(Math.max(0, custRemaining(c)));
+            const doSettle = rem > 0 && fd.get('settleBalance') === '1';
+            const chosenPay = CUST_PAYMETHODS.includes(String(fd.get('payMethod') || ''))
+                ? String(fd.get('payMethod'))
+                : (c.payMethod || 'نقدي');
+            const noteText = String(fd.get('deliverNote') || '').trim();
+            const nowIso = new Date().toISOString();
+            const actor = orderUserName();
+
+            c.delivery = 'تم التسليم';
+            if (doSettle) {
+                c.paid = r2(numOr0(c.paid) + rem);
+                c.payMethod = chosenPay;
+            }
+            c.deliveredAt = nowIso;
+            c.deliveredBy = actor;
+            c.updatedAt = nowIso;
+            c.updatedBy = actor;
+            c.deliverySettlement = {
+                settled: doSettle,
+                settledAmount: doSettle ? rem : 0,
+                prevPaid: r2(numOr0(prev.paid)),
+                newPaid: r2(numOr0(c.paid)),
+                prevRemaining: rem,
+                newRemaining: r2(Math.max(0, custRemaining(c))),
+                payMethod: doSettle ? chosenPay : (c.payMethod || 'نقدي'),
+                note: noteText,
+                at: nowIso,
+                by: actor
+            };
+            if (noteText) {
+                const line = `تسليم (${fmtDateAr(todayISO())}): ${noteText}`;
+                c.notes = c.notes ? `${c.notes}\n${line}` : line;
+            }
+
+            const logDetail = doSettle
+                ? `${custNoLabel(c)} — ${c.customer} | تم التسليم وتحصيل الباقي ${fmtMoney(rem)} (${chosenPay}) — المدفوع الآن ${fmtMoney(c.paid)} والباقي 0`
+                : `${custNoLabel(c)} — ${c.customer} | تم التسليم وإغلاق الفاتورة${rem > 0 ? ' (الباقي ' + fmtMoney(rem) + ' لم يُحصّل بعد)' : ' (مسددة بالكامل)'}`;
+            log('تسليم وإغلاق فاتورة عميل', logDetail);
+
+            saveState();
+            render();
+
+            const msg = doSettle
+                ? `تم التسليم وإغلاق الفاتورة ${custNoLabel(c)} — تم تحصيل الباقي (${fmtMoney(rem)}) وإضافته للمدفوع، والباقي الآن 0.00 ج.م`
+                : `تم تسليم وإغلاق الفاتورة ${custNoLabel(c)} بنجاح`;
+            toast(msg, 'success', {
+                label: 'تراجع',
+                onClick: () => {
+                    const cur = appData.custOrders.find(x => x.id === id);
+                    if (!cur) return;
+                    cur.delivery = prev.delivery;
+                    cur.paid = prev.paid;
+                    cur.payMethod = prev.payMethod;
+                    cur.notes = prev.notes;
+                    cur.deliveredAt = prev.deliveredAt;
+                    cur.deliveredBy = prev.deliveredBy;
+                    cur.deliverySettlement = prev.deliverySettlement;
+                    cur.updatedAt = prev.updatedAt;
+                    cur.updatedBy = prev.updatedBy;
+                    log('تراجع عن تسليم فاتورة عميل', `${custNoLabel(cur)} — ${cur.customer}`);
+                    saveState();
+                    render();
+                    toast(`تم التراجع وإعادة الفاتورة ${custNoLabel(cur)} إلى حالتها السابقة`, 'info');
+                }
+            }, 6500);
+            return true;
+        }
+
         // ---- sales reps ----
         function openCustRepsModal() {
             if (!canCust('manage')) return toast('ليس لديك صلاحية لهذا الإجراء', 'error');
@@ -9812,6 +10037,7 @@
                     </div>
                 </div>
                 ${credit !== 0 ? `<div style="font-size:10pt;margin-bottom:10px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc"><b>رصيد حساب العميل الإجمالي:</b> ${esc(custCreditText(credit))}</div>` : ''}
+                ${c.delivery === 'تم التسليم' && c.deliveredAt ? `<div style="font-size:10pt;margin-bottom:10px;padding:7px 11px;border:1.5px solid #10b981;border-radius:8px;background:#ecfdf5;color:#065f46"><b>✓ تم التسليم وإغلاق الفاتورة:</b> ${esc(fmtDateTime(c.deliveredAt))}${c.deliveredBy ? ' — بواسطة ' + esc(c.deliveredBy) : ''}${c.deliverySettlement && c.deliverySettlement.settled && c.deliverySettlement.settledAmount > 0 ? ` · تم تحصيل الباقي عند التسليم: <b>${fmtMoney(c.deliverySettlement.settledAmount)}</b> (${esc(c.deliverySettlement.payMethod || c.payMethod || 'نقدي')})` : ''}</div>` : ''}
                 ${c.notes ? `<div class="inv-note"><b>ملاحظات:</b> <span style="white-space:pre-wrap">${esc(c.notes)}</span></div>` : ''}
                 <div class="sign">
                     <div>توقيع المستلم</div>
@@ -9857,6 +10083,8 @@
                 ${rem > 0 && custBalanceDueDate(c) ? row('آخر موعد لسداد الباقي', `<b class="text-rose-700">${esc(fmtDateAr(custBalanceDueDate(c)))}</b> <span class="text-xs text-slate-500">(7 أيام من تاريخ حجز الفاتورة)</span>`) : ''}
                 ${row('مدة الطلبية', esc(fmtDateAr(c.validUntil) || '—'))}
                 ${row('حالة التسليم', custDeliveryBadge(c))}
+                ${c.deliveredAt ? row('تأكيد التسليم والإغلاق', `<span class="font-bold text-emerald-700"><i class="fa-solid fa-circle-check me-1"></i>${stamp(c.deliveredBy, c.deliveredAt)}</span>`) : ''}
+                ${c.deliverySettlement && c.deliverySettlement.settled && c.deliverySettlement.settledAmount > 0 ? row('التسوية المالية عند التسليم', `<span class="font-bold text-emerald-700">تم تحصيل الباقي ${fmtMoney(c.deliverySettlement.settledAmount)} (${esc(c.deliverySettlement.payMethod || c.payMethod || 'نقدي')}) وإضافته للمدفوع</span>`) : ''}
                 ${row('الشحن والنقل', c.transport === 'نقل' ? '<b class="text-sky-700">نقل 🚚</b>' : 'بدون نقل')}
                 ${row('طريقة الدفع', esc(c.payMethod || 'نقدي'))}
                 ${/^\d{4}-/.test(c.booking || '') ? row('موعد الحجز (قديم)', esc(fmtDateAr(c.booking) || '—')) : ''}
@@ -9871,7 +10099,10 @@
             const c = appData.custOrders.find(x => x.id === id);
             if (!c) return toast('الطلبية مش موجودة', 'error');
             const cid = esc(c.id);
-            const actions = `<div class="flex flex-wrap gap-2 pt-2">
+            const remPos = r2(Math.max(0, custRemaining(c)));
+            const showDeliver = canCust('manage') && c.delivery !== 'ملغي' && c.delivery !== 'مرتجع' && (c.delivery !== 'تم التسليم' || remPos > 0);
+            const actions = `<div class="flex flex-wrap gap-2 pt-3 border-t border-slate-100 mt-2">
+                ${showDeliver ? `<button type="button" onclick="openCustDeliverModal('${cid}')" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold flex items-center gap-1.5 shadow-sm cursor-pointer"><i class="fa-solid ${remPos > 0 ? 'fa-hand-holding-dollar' : 'fa-check-double'}"></i> ${c.delivery === 'تم التسليم' ? `تحصيل الباقي (${fmtMoney(remPos)})` : (remPos > 0 ? `تم التسليم وتحصيل الباقي (${fmtMoney(remPos)})` : 'تم التسليم وإغلاق الفاتورة')}</button>` : ''}
                 <button type="button" onclick="printCustOrder('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-print"></i> طباعة</button>
                 ${canCustComments() ? `<button type="button" onclick="openCustComments('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-comments"></i> تعليقات الفاتورة</button>` : ''}
                 ${canCust('manage') ? `<button type="button" onclick="openCustModal('${cid}')" class="${BTN_SECONDARY}"><i class="fa-solid fa-pen-to-square"></i> تعديل</button>` : ''}
@@ -22503,5 +22734,5 @@
         };
 
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a60e76bd4bd5ee74',t:'MTc5NTc1NDUyMQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a60e76bd4bd5ee74',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
